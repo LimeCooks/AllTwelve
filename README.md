@@ -26,6 +26,7 @@ pnpm build
 `pnpm lint` runs the project-wide linter. Some existing shared UI components have outstanding lint findings.
 
 The Playbook/Install audit, fixes, validation coverage, and remaining boundaries are documented in [docs/playbook-install-audit.md](docs/playbook-install-audit.md).
+The drawing workflow, field measurements, formation packages, opponent looks, and shortcuts are documented in [docs/play-designer.md](docs/play-designer.md).
 
 ## Repository
 
