@@ -407,6 +407,7 @@ test('defensive/scout formations, custom packages, opponent snapshots and modern
     400,
   );
   const scene = designer.normalizeDrawing(play);
+  assert.equal(new Set(designer.startingPlayers('Defence').map((p) => p.colour)).size, 3);
   const p = scene.players.find((item) => item.label === 'S');
   p.colour = '#ef665c';
   scene.routes = [
@@ -462,6 +463,14 @@ test('defensive/scout formations, custom packages, opponent snapshots and modern
     true,
   );
   const shifted = designer.shiftScene(scene, 75);
+  const attached = designer.normalizeDrawing({ ...scene, zones: [{ ...scene.zones[0], routeId: scene.routes[0].id }] });
+  assert.equal(attached.zones[0].x + attached.zones[0].width / 2, scene.routes[0].endX);
+  assert.equal(attached.zones[0].y + attached.zones[0].height / 2, scene.routes[0].endY);
+  const extended = structuredClone(attached);
+  extended.routes[0].points.push({ x: scene.routes[0].endX + 20, y: scene.routes[0].endY - 30 });
+  const extendedDrawing = designer.normalizeDrawing(extended);
+  assert.equal(extendedDrawing.zones[0].x, attached.zones[0].x + 20);
+  assert.equal(extendedDrawing.zones[0].y, attached.zones[0].y - 30);
   const delta = 200;
   assert.equal(shifted.players[0].y - scene.players[0].y, delta);
   assert.equal(

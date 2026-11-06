@@ -28,14 +28,6 @@ import { PlayDesigner } from '@/components/play-designer';
 import { PlayField } from '@/components/play-field';
 import { type Library, type Side } from '@/lib/play-designer';
 
-const tabs = [
-  'Playbook',
-  'Install',
-  'Learn',
-  'Printouts',
-  'Leaderboard',
-  'Formations',
-];
 type Review = { athleteId: string; name: string; acknowledged: boolean };
 type Pack = { id: string; name: string; publishedAt: string | null };
 export function PlaybookWorkspace({
@@ -130,6 +122,11 @@ export function PlaybookWorkspace({
       setLoading(false);
     }
   }, []);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(''), 3500);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   useEffect(() => {
     void Promise.resolve().then(() => refresh());
   }, [refresh]);
@@ -334,24 +331,6 @@ export function PlaybookWorkspace({
 
   return (
     <section className="module-surface pd-workspace">
-      <nav className="pd-section-tabs" aria-label="Playbook workspace">
-        {tabs.map((tab) => (
-          <button
-            aria-current={view === tab ? 'page' : undefined}
-            className={view === tab ? 'active' : ''}
-            key={tab}
-            onClick={() => {
-              setEditor(null);
-              setViewerId('');
-              setQuery('');
-              onNavigate(tab);
-            }}
-            type="button"
-          >
-            {tab}
-          </button>
-        ))}
-      </nav>
       {error ? (
         <div className="pd-error" role="alert">
           {error}

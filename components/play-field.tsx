@@ -170,6 +170,20 @@ export function PlayField({
                 <text className="pd-number" x="655" y={y - 6}>
                   {label}
                 </text>
+                {yard > 0 && yard < 110 && yard !== 55
+                  ? [65, 655].map((x) => (
+                      <path
+                        key={x}
+                        className="pd-direction-arrow"
+                        fill="#8193a2"
+                        d={
+                          yard < 55
+                            ? `M${x - 3} ${y - 22} L${x + 3} ${y - 22} L${x} ${y - 27} Z`
+                            : `M${x - 3} ${y + 4} L${x + 3} ${y + 4} L${x} ${y + 9} Z`
+                        }
+                      />
+                    ))
+                  : null}
               </>
             ) : null}
           </g>
@@ -224,16 +238,38 @@ export function PlayField({
             />
           )}
           {selected === `zone:${z.id}` ? (
-            <rect
-              x={z.x - 3}
-              y={z.y - 3}
-              width={z.width + 6}
-              height={z.height + 6}
-              fill="none"
-              stroke="#f4f7fa"
-              strokeDasharray="3 3"
-              strokeWidth="1"
-            />
+            <g>
+              <rect
+                x={z.x - 3}
+                y={z.y - 3}
+                width={z.width + 6}
+                height={z.height + 6}
+                fill="none"
+                stroke="#f4f7fa"
+                strokeDasharray="3 3"
+                strokeWidth="1"
+              />
+              {[
+                { x: z.x + z.width, y: z.y + z.height / 2 },
+                { x: z.x + z.width / 2, y: z.y + z.height },
+              ].map((p, index) => (
+                <rect
+                  key={index}
+                  data-kind="resize"
+                  data-id={z.id}
+                  data-index={index}
+                  x={p.x - (index === 0 ? 3 : 9)}
+                  y={p.y - (index === 0 ? 9 : 3)}
+                  width={index === 0 ? 6 : 18}
+                  height={index === 0 ? 18 : 6}
+                  rx="2"
+                  fill="#f4f7fa"
+                  stroke={z.colour}
+                  strokeWidth="1"
+                  style={{ cursor: index === 0 ? 'ew-resize' : 'ns-resize' }}
+                />
+              ))}
+            </g>
           ) : null}
         </g>
       ))}

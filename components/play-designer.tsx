@@ -185,7 +185,7 @@ export function PlayDesigner({
     remember();
     setDraft((value) => ({ ...value, ...changes }));
   };
-  const sceneEdit = (scene: Scene) => edit({ scene });
+  const sceneEdit = (scene: Scene) => edit({ scene: normalizeDrawing(scene) });
   const finish = () => {
     setRouteId('');
     setAnchorId('');
@@ -338,12 +338,18 @@ export function PlayDesigner({
     const hit = (event.target as Element).closest('[data-kind]');
     const hitKind = hit?.getAttribute('data-kind') ?? '',
       hitId = hit?.getAttribute('data-id') ?? '';
-    if (tool === 'Select') {
+    const directRoute = tool === 'Select' && !hitKind && Boolean(player);
+    if (tool === 'Select' && !directRoute) {
       if (!hitKind) {
         setSelected('');
         return;
       }
-      const targetKind = hitKind === 'vertex' ? 'route' : hitKind;
+      const targetKind =
+        hitKind === 'vertex'
+          ? 'route'
+          : hitKind === 'resize'
+            ? 'zone'
+            : hitKind;
       setSelected(`${targetKind}:${hitId}`);
       const chosen = [
         ...draft.scene.players,
@@ -365,8 +371,9 @@ export function PlayDesigner({
       event.preventDefault();
       return;
     }
-    if (tool === 'Route') {
-      if ((hitKind === 'player' || hitKind === 'opponent') && !routeId) {
+    if (tool === 'Route' || directRoute) {
+      if (hitKind === 'player' || hitKind === 'opponent') {
+        setRouteId('');
         setAnchorId(hitId);
         setSelected(`${hitKind}:${hitId}`);
         return;
@@ -374,7 +381,11 @@ export function PlayDesigner({
       const anchor = [
         ...draft.scene.players,
         ...draft.scene.opponentPlayers,
-      ].find((item) => item.id === anchorId);
+      ].find((item) => item.id === (directRoute ? id : anchorId));
+      if (directRoute) {
+        setTool('Route');
+        setAnchorId(id);
+      }
       if (!routeId && !anchor) {
         setError('Select a player, then choose Draw route.');
         return;
@@ -463,11 +474,40 @@ export function PlayDesigner({
         r.startY = target.y;
         if (r.points?.length) r.points[0] = { x: target.x, y: target.y };
       }
+    } else if (action.type === 'resize') {
+      const z = next.zones.find((item) => item.id === action.id);
+      if (z) {
+        const angle = (-(z.rotation ?? 0) * Math.PI) / 180;
+        const localX = dx * Math.cos(angle) - dy * Math.sin(angle);
+        const localY = dx * Math.sin(angle) + dy * Math.cos(angle);
+        const width = Math.max(
+          10,
+          Math.min(600, z.width + (action.index === 0 ? localX * 2 : 0)),
+        );
+        const height = Math.max(
+          10,
+          Math.min(600, z.height + (action.index === 1 ? localY * 2 : 0)),
+        );
+        z.x -= (width - z.width) / 2;
+        z.y -= (height - z.height) / 2;
+        z.width = width;
+        z.height = height;
+      }
     } else if (action.type === 'zone') {
       const z = next.zones.find((item) => item.id === action.id);
       if (z) {
         z.x = Math.min(685 - z.width, Math.max(35, z.x + dx));
         z.y += dy;
+        const attached = next.routes.find((r) => r.id === z.routeId);
+        if (attached) {
+          attached.endX = z.x + z.width / 2;
+          attached.endY = z.y + z.height / 2;
+          if (attached.points?.length)
+            attached.points[attached.points.length - 1] = {
+              x: attached.endX,
+              y: attached.endY,
+            };
+        }
       }
     } else if (action.type === 'label') {
       const l = next.labels.find((item) => item.id === action.id);
@@ -484,6 +524,10 @@ export function PlayDesigner({
         const end = r.points.at(-1)!;
         r.endX = end.x;
         r.endY = end.y;
+        for (const z of next.zones.filter((z) => z.routeId === r.id)) {
+          z.x = end.x - z.width / 2;
+          z.y = end.y - z.height / 2;
+        }
       }
     }
     setDraft((value) => ({ ...value, scene: next }));
@@ -892,6 +936,48 @@ export function PlayDesigner({
                     Extend
                   </Button>
                 ) : null}
+                {route ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      const existing = draft.scene.zones.find(
+                        (z) => z.routeId === route.id,
+                      );
+                      if (existing) {
+                        setSelected(`zone:${existing.id}`);
+                        finish();
+                        return;
+                      }
+                      const end = route.points?.at(-1) ?? {
+                        x: route.endX,
+                        y: route.endY,
+                      };
+                      const zoneId = crypto.randomUUID();
+                      sceneEdit({
+                        ...draft.scene,
+                        zones: [
+                          ...draft.scene.zones,
+                          {
+                            id: zoneId,
+                            routeId: route.id,
+                            x: end.x - 50,
+                            y: end.y - 30,
+                            width: 100,
+                            height: 60,
+                            colour: route.colour,
+                            shape: 'ellipse',
+                            opacity: 0.25,
+                          },
+                        ],
+                      });
+                      finish();
+                      setSelected(`zone:${zoneId}`);
+                    }}
+                  >
+                    Coverage at end
+                  </Button>
+                ) : null}
                 <button
                   aria-label="Clear selection"
                   onClick={() => {
@@ -1033,51 +1119,10 @@ export function PlayDesigner({
                   ) : null}
                   {zone ? (
                     <>
-                      <div className="pd-property-row">
-                        <label htmlFor="pd-control-5">
-                          Width (yards)
-                          <Input
-                            id="pd-control-5"
-                            aria-label="Zone width in yards"
-                            type="number"
-                            min="1"
-                            max="60"
-                            value={zone.width / 10}
-                            onChange={(event) => {
-                              const width = Math.max(
-                                10,
-                                Math.min(600, Number(event.target.value) * 10),
-                              );
-                              changeZone({
-                                width,
-                                x: Math.min(zone.x, 685 - width),
-                              });
-                            }}
-                          />
-                        </label>
-                        <label htmlFor="pd-control-6">
-                          Depth (yards)
-                          <Input
-                            id="pd-control-6"
-                            aria-label="Zone depth in yards"
-                            type="number"
-                            min="1"
-                            max="60"
-                            value={zone.height / 10}
-                            onChange={(event) =>
-                              changeZone({
-                                height: Math.max(
-                                  10,
-                                  Math.min(
-                                    600,
-                                    Number(event.target.value) * 10,
-                                  ),
-                                ),
-                              })
-                            }
-                          />
-                        </label>
-                      </div>
+                      <p>
+                        Drag the white bars on the coverage shape to resize its
+                        width and depth.
+                      </p>
                       <div className="pd-property-row">
                         <label htmlFor="pd-control-7">
                           Shape

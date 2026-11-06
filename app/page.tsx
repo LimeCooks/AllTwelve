@@ -17,6 +17,9 @@ import {
   ArrowLeft,
   Bell,
   BookOpen,
+  GraduationCap,
+  Printer,
+  Trophy,
   CalendarDays,
   Camera,
   Check,
@@ -670,7 +673,6 @@ export default function Home() {
             ))}
           <details className="pd-nav-section">
             <summary>
-              <BookOpen size={18} />
               <span>Playbook</span>
               <ChevronDown size={14} />
             </summary>
@@ -696,6 +698,12 @@ export default function Home() {
                     <Shirt size={16} />
                   ) : view === 'Install' ? (
                     <ClipboardList size={16} />
+                  ) : view === 'Learn' ? (
+                    <GraduationCap size={16} />
+                  ) : view === 'Printouts' ? (
+                    <Printer size={16} />
+                  ) : view === 'Leaderboard' ? (
+                    <Trophy size={16} />
                   ) : (
                     <BookOpen size={16} />
                   )}

@@ -21,6 +21,7 @@ export type Route = {
   ending?: 'arrow' | 'bar' | 'none';
 };
 export type Zone = Point & {
+  routeId?: string;
   id: string;
   width: number;
   height: number;
@@ -134,7 +135,14 @@ export function startingPlayers(side: string, spot = 55): Player[] {
     x,
     y: los + depth * YARD,
     kind,
-    colour: side === 'Defence' ? '#52c5b5' : '#e5e9ef',
+    colour:
+      side === 'Defence'
+        ? kind === 'line'
+          ? '#e5e9ef'
+          : ['S', 'MA', 'MI', 'W'].includes(label)
+            ? '#ef665c'
+            : '#52c5b5'
+        : '#e5e9ef',
     symbol:
       side === 'Defence' ? 'triangle' : kind === 'line' ? 'square' : 'circle',
   });
@@ -203,6 +211,18 @@ export function normalizeDrawing(drawing: Drawing): Scene {
     zones: (drawing.zones ?? []).map((z) => ({
       ...z,
       ...point(z),
+      ...(z.routeId && drawing.routes?.find((r) => r.id === z.routeId)
+        ? (() => {
+            const r = drawing.routes!.find((r) => r.id === z.routeId)!;
+            const end = r.points?.at(-1) ?? { x: r.endX, y: r.endY };
+            return {
+              x: end.x - z.width / 2,
+              y:
+                y(end.y) -
+                (modern ? z.height : (z.height * YARD) / (510 / 110)) / 2,
+            };
+          })()
+        : {}),
       height: modern ? z.height : (z.height * YARD) / (510 / 110),
       shape: z.shape ?? 'ellipse',
     })),
