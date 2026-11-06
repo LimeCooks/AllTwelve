@@ -1,4 +1,5 @@
 import { getDatabase, TEAM_ID } from '@/db/client';
+import { validatePlayDiagram } from '@/lib/validate-play';
 
 type PlayRow = {
   id: string;
@@ -13,6 +14,7 @@ type PlayRow = {
   diagram_json: string;
   notes: string;
   updated_at: string;
+  locked: number;
 };
 
 type AssignmentRow = {
@@ -67,7 +69,8 @@ async function payload(database: D1Database) {
     ).bind(TEAM_ID).all<Record<string, string | number>>(),
     database.prepare(
       `SELECT p.id, p.playbook_id, p.formation_id, f.name AS formation, p.name, p.unit,
-        p.category, p.family, p.concept, p.diagram_json, p.notes, p.updated_at
+        p.category, p.family, p.concept, p.diagram_json, p.notes, p.updated_at,
+        EXISTS(SELECT 1 FROM install_items i JOIN install_packages k ON k.id = i.package_id WHERE i.play_id = p.id AND k.published_at IS NOT NULL) AS locked
        FROM plays p LEFT JOIN formations f ON f.id = p.formation_id
        WHERE p.team_id = ? ORDER BY p.created_at`,
     ).bind(TEAM_ID).all<PlayRow>(),
@@ -100,6 +103,7 @@ async function payload(database: D1Database) {
         routes: diagram.routes, players: diagram.players, zones: diagram.zones, labels: diagram.labels,
         fieldPosition: diagram.fieldPosition, showOpponent: diagram.showOpponent,
         notes: row.notes,
+        locked: Boolean(row.locked),
         assignments: (assignments[row.id] ?? []).map((item) => ({
           id: item.id, position: item.position, title: item.title, detail: item.detail, sortOrder: item.sort_order,
         })),
@@ -122,6 +126,18 @@ export async function POST(request: Request) {
     const body = await request.json() as Record<string, unknown>;
     const database = await getDatabase();
     const now = new Date().toISOString();
+    if (body.kind === 'duplicate') {
+      const sourceId = text(body.id);
+      const source = await database.prepare('SELECT id, name FROM plays WHERE id = ? AND team_id = ?').bind(sourceId, TEAM_ID).first<{ id: string; name: string }>();
+      if (!source) throw new Error('Play not found.');
+      const id = crypto.randomUUID();
+      const sourceAssignments = await database.prepare('SELECT position, title, detail, sort_order FROM play_assignments WHERE play_id = ?').bind(sourceId).all<{ position: string; title: string; detail: string; sort_order: number }>();
+      await database.batch([
+        database.prepare(`INSERT INTO plays (id, team_id, playbook_id, formation_id, name, unit, category, family, concept, diagram_json, notes, created_at, updated_at) SELECT ?, team_id, playbook_id, formation_id, ?, unit, category, family, concept, diagram_json, notes, ?, ? FROM plays WHERE id = ? AND team_id = ?`).bind(id, `${source.name} — copy`, now, now, sourceId, TEAM_ID),
+        ...sourceAssignments.results.map((assignment) => database.prepare('INSERT INTO play_assignments (id, play_id, position, title, detail, sort_order) VALUES (?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), id, assignment.position, assignment.title, assignment.detail, assignment.sort_order)),
+      ]);
+      return Response.json({ ...(await payload(database)), createdId: id }, { status: 201 });
+    }
     if (body.kind === 'book') {
       const name = text(body.name);
       if (!name) throw new Error('Playbook name is required.');
@@ -143,10 +159,12 @@ export async function POST(request: Request) {
       const id = crypto.randomUUID();
       const book = await database.prepare('SELECT id, side FROM playbooks WHERE id = ? AND team_id = ?').bind(playbookId, TEAM_ID).first<{ id: string; side: string }>();
       if (!book) throw new Error('Playbook not found.');
+      const formation = formationId ? await database.prepare('SELECT id, layout_json FROM formations WHERE id = ? AND team_id = ?').bind(formationId, TEAM_ID).first<{ id: string; layout_json: string }>() : null;
+      if (formationId && !formation) throw new Error('Formation not found.');
       await database.prepare(
         `INSERT INTO plays (id, team_id, playbook_id, formation_id, name, unit, category, family, concept, diagram_json, notes, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)`,
-      ).bind(id, TEAM_ID, playbookId, formationId, name, book.side, category, family, concept, JSON.stringify({ routes: [], players: [], zones: [], labels: [], fieldPosition: 55, showOpponent: false }), now, now).run();
+      ).bind(id, TEAM_ID, playbookId, formationId, name, book.side, category, family, concept, JSON.stringify({ routes: [], players: formation ? parseDiagram(formation.layout_json).players : [], zones: [], labels: [], fieldPosition: 55, showOpponent: false }), now, now).run();
       return Response.json({ ...(await payload(database)), createdId: id }, { status: 201 });
     }
     if (body.kind === 'formation') {
@@ -174,6 +192,8 @@ export async function PUT(request: Request) {
       const id = text(body.id);
       const name = text(body.name);
       if (!id || !name) throw new Error('Formation id and name are required.');
+      validatePlayDiagram({ players: body.players });
+      if (await database.prepare('SELECT i.id FROM install_items i JOIN install_packages k ON k.id = i.package_id JOIN plays p ON p.id = i.play_id WHERE p.formation_id = ? AND k.team_id = ? AND k.published_at IS NOT NULL LIMIT 1').bind(id, TEAM_ID).first()) throw new Error('This formation is used in a published install. Create a new formation to revise it.');
       await database.prepare(
         `UPDATE formations SET name = ?, personnel = ?, layout_json = ? WHERE id = ? AND team_id = ?`,
       ).bind(name, text(body.personnel, 'Custom personnel'), JSON.stringify({ field: 'canadian', players: Array.isArray(body.players) ? body.players : [] }), id, TEAM_ID).run();
@@ -183,6 +203,9 @@ export async function PUT(request: Request) {
       const id = text(body.id);
       const name = text(body.name);
       if (!id || !name || !validSide(body.side)) throw new Error('Valid playbook details are required.');
+      const book = await database.prepare('SELECT side FROM playbooks WHERE id = ? AND team_id = ?').bind(id, TEAM_ID).first<{ side: string }>();
+      if (!book) throw new Error('Playbook not found.');
+      if (book.side !== body.side && await database.prepare('SELECT id FROM plays WHERE playbook_id = ? LIMIT 1').bind(id).first()) throw new Error('A playbook with saved plays cannot change units. Create another playbook for that unit.');
       await database.prepare('UPDATE playbooks SET name = ?, side = ?, archived = ?, updated_at = ? WHERE id = ? AND team_id = ?')
         .bind(name, body.side, body.archived ? 1 : 0, new Date().toISOString(), id, TEAM_ID).run();
       return Response.json(await payload(database));
@@ -195,6 +218,10 @@ export async function PUT(request: Request) {
     const family = validFamily(body.family) ? body.family : 'Unassigned';
     const concept = text(body.concept);
     if (!name || !concept) throw new Error('Play name and concept are required.');
+    validatePlayDiagram(body);
+    if (formationId && !await database.prepare('SELECT id FROM formations WHERE id = ? AND team_id = ?').bind(formationId, TEAM_ID).first()) throw new Error('Formation not found.');
+    const published = await database.prepare('SELECT i.id FROM install_items i JOIN install_packages k ON k.id = i.package_id WHERE i.play_id = ? AND k.team_id = ? AND k.published_at IS NOT NULL LIMIT 1').bind(id, TEAM_ID).first();
+    if (published) return Response.json({ error: 'This play belongs to a published install and is locked. Duplicate it to create a revised version.' }, { status: 409 });
     const diagram = {
       routes: Array.isArray(body.routes) ? body.routes : [],
       players: Array.isArray(body.players) ? body.players : [],
@@ -206,20 +233,17 @@ export async function PUT(request: Request) {
     const assignmentInput = Array.isArray(body.assignments) ? body.assignments as Record<string, unknown>[] : [];
     const existing = await database.prepare('SELECT id FROM plays WHERE id = ? AND team_id = ?').bind(id, TEAM_ID).first();
     if (!existing) return Response.json({ error: 'Play not found.' }, { status: 404 });
-    await database.prepare(
-      `UPDATE plays SET formation_id = ?, name = ?, category = ?, family = ?, concept = ?, diagram_json = ?, notes = ?, updated_at = ?
-       WHERE id = ? AND team_id = ?`,
-    ).bind(formationId, name, category, family, concept, JSON.stringify(diagram), text(body.notes), new Date().toISOString(), id, TEAM_ID).run();
-    await database.prepare('DELETE FROM play_assignments WHERE play_id = ?').bind(id).run();
     const assignments = assignmentInput.map((item, index) => ({
-      id: text(item.id) || crypto.randomUUID(), position: text(item.position, `P${index + 1}`).toUpperCase(),
+      id: crypto.randomUUID(), position: text(item.position, `P${index + 1}`).toUpperCase(),
       title: text(item.title, 'New assignment'), detail: text(item.detail), sortOrder: index,
     }));
-    if (assignments.length) {
-      await database.batch(assignments.map((assignment) => database.prepare(
+    await database.batch([
+      database.prepare(`UPDATE plays SET formation_id = ?, name = ?, category = ?, family = ?, concept = ?, diagram_json = ?, notes = ?, updated_at = ? WHERE id = ? AND team_id = ?`).bind(formationId, name, category, family, concept, JSON.stringify(diagram), text(body.notes), new Date().toISOString(), id, TEAM_ID),
+      database.prepare('DELETE FROM play_assignments WHERE play_id = ?').bind(id),
+      ...assignments.map((assignment) => database.prepare(
         `INSERT INTO play_assignments (id, play_id, position, title, detail, sort_order) VALUES (?, ?, ?, ?, ?, ?)`,
-      ).bind(assignment.id, id, assignment.position, assignment.title, assignment.detail, assignment.sortOrder)));
-    }
+      ).bind(assignment.id, id, assignment.position, assignment.title, assignment.detail, assignment.sortOrder)),
+    ]);
     return Response.json(await payload(database));
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to save play.' }, { status: 400 });
@@ -238,6 +262,8 @@ export async function DELETE(request: Request) {
       if ((used?.count ?? 0) > 0) return Response.json({ error: 'Move or delete this formation’s plays first.' }, { status: 409 });
       await database.prepare('DELETE FROM formations WHERE id = ? AND team_id = ?').bind(id, TEAM_ID).run();
     } else if (kind === 'play') {
+      const installed = await database.prepare('SELECT i.id FROM install_items i JOIN install_packages k ON k.id = i.package_id WHERE i.play_id = ? AND k.team_id = ? LIMIT 1').bind(id, TEAM_ID).first();
+      if (installed) return Response.json({ error: 'Remove this play from draft installs first. Plays in published installs must be retained.' }, { status: 409 });
       await database.prepare('DELETE FROM plays WHERE id = ? AND team_id = ?').bind(id, TEAM_ID).run();
     } else {
       const used = await database.prepare('SELECT COUNT(*) AS count FROM plays WHERE playbook_id = ?').bind(id).first<{ count: number }>();

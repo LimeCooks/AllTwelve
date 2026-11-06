@@ -19,10 +19,13 @@ The app uses React and Vinext with Cloudflare D1 and R2 bindings. Local database
 
 ```sh
 pnpm typecheck
+pnpm test
 pnpm build
 ```
 
 `pnpm lint` runs the project-wide linter. Some existing shared UI components have outstanding lint findings.
+
+The Playbook/Install audit, fixes, validation coverage, and remaining boundaries are documented in [docs/playbook-install-audit.md](docs/playbook-install-audit.md).
 
 ## Repository
 

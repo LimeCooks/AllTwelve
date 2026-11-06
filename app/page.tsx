@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SyntheticEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SyntheticEvent } from 'react';
 import NextImage from 'next/image';
 import {
   AlertCircle,
@@ -69,6 +69,7 @@ import {
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
+import { InstallWorkspace, type InstallPackage } from '@/components/install-workspace';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -189,7 +190,14 @@ function MediaUploadControl({ assetKey, accept = 'image/*', label, onUploaded, o
 }
 
 export default function Home() {
-  const [activeView, setActiveView] = useState('Home');
+  const [activeView, setActiveViewUnsafe] = useState('Home');
+  const [pendingView, setPendingView] = useState('');
+  const editingPlayRef = useRef(false);
+  const onPlayEditingChange = useCallback((editing: boolean) => { editingPlayRef.current = editing; }, []);
+  const setActiveView = useCallback((view: string) => {
+    if (editingPlayRef.current) setPendingView(view);
+    else setActiveViewUnsafe(view);
+  }, []);
   const [isDark, setIsDark] = useState(true);
   const [userRole, setUserRole] = useState<'Coach' | 'Player'>('Coach');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -278,6 +286,7 @@ export default function Home() {
   };
 
   const changeRole = (role: 'Coach' | 'Player') => {
+    if (editingPlayRef.current) { setProfileMenuOpen(false); notify('Save or cancel the current play before switching roles.', 'info'); return; }
     setUserRole(role);
     setActiveView('Home');
     setProfileMenuOpen(false);
@@ -529,7 +538,7 @@ export default function Home() {
           </aside>
           </>) : (<PlayerDashboard assetRevision={assetRevision} onNavigate={setActiveView} />)
           ) : (
-            <ModuleView assetRevision={assetRevision} focusMode={toolFocus && focusableTools.has(activeView)} onAssetsChanged={() => setAssetRevision(Date.now())} onNavigate={setActiveView} onNotify={notify} onTeamSettingsChange={setTeamSettings} onToggleFocus={() => setToolFocus((focused) => !focused)} teamSettings={teamSettings} userRole={userRole} view={activeView} />
+            <ModuleView onPlayEditingChange={onPlayEditingChange} assetRevision={assetRevision} focusMode={toolFocus && focusableTools.has(activeView)} onAssetsChanged={() => setAssetRevision(Date.now())} onNavigate={setActiveView} onNotify={notify} onTeamSettingsChange={setTeamSettings} onToggleFocus={() => setToolFocus((focused) => !focused)} teamSettings={teamSettings} userRole={userRole} view={activeView} />
           )}
         </div>
       </section>
@@ -544,6 +553,7 @@ export default function Home() {
         <div className="app-loading-card"><LoaderCircle aria-hidden="true" /><span><strong>Loading saved data</strong><small>Waiting for the local workspace to respond…</small></span></div>
       </div> : null}
       <Toaster />
+      <Dialog open={Boolean(pendingView)} onOpenChange={(open) => { if (!open) setPendingView(''); }}><DialogContent className="athlete-dialog"><DialogHeader><DialogTitle>Leave the play editor?</DialogTitle><DialogDescription>Your unsaved changes will be discarded. Save the play first to keep them.</DialogDescription></DialogHeader><DialogFooter><Button onClick={() => setPendingView('')} variant="outline">Keep editing</Button><Button onClick={() => { editingPlayRef.current = false; setActiveViewUnsafe(pendingView); setPendingView(''); }} variant="destructive">Discard and leave</Button></DialogFooter></DialogContent></Dialog>
     </main>
   );
 }
@@ -594,6 +604,7 @@ function PlayerDashboard({ assetRevision, onNavigate }: { assetRevision: number;
 }
 
 type ModuleProps = {
+  onPlayEditingChange: (editing: boolean) => void;
   view: string;
   userRole: 'Coach' | 'Player';
   focusMode: boolean;
@@ -606,15 +617,15 @@ type ModuleProps = {
   onTeamSettingsChange: (settings: TeamSettings) => void;
 };
 
-function ModuleView({ view, userRole, focusMode, onToggleFocus, onNavigate, onNotify, assetRevision, onAssetsChanged, teamSettings, onTeamSettingsChange }: ModuleProps) {
+function ModuleView({ view, userRole, focusMode, onToggleFocus, onNavigate, onNotify, assetRevision, onAssetsChanged, teamSettings, onTeamSettingsChange, onPlayEditingChange }: ModuleProps) {
   if (userRole === 'Player' && !playerAllowedViews.has(view)) return <PlayerDashboard assetRevision={assetRevision} onNavigate={onNavigate} />;
   if (view === 'Film Room') return <FilmRoomView assetRevision={assetRevision} focusMode={focusMode} onAssetsChanged={onAssetsChanged} onNavigate={onNavigate} onNotify={onNotify} onToggleFocus={onToggleFocus} />;
-  if (view === 'Playbook') return <PlaybookView focusMode={focusMode} onNavigate={onNavigate} onNotify={onNotify} onToggleFocus={onToggleFocus} />;
+  if (view === 'Playbook') return <PlaybookView onEditingChange={onPlayEditingChange} focusMode={focusMode} onNavigate={onNavigate} onNotify={onNotify} onToggleFocus={onToggleFocus} />;
   if (view === 'Sideline') return <SidelineView assetRevision={assetRevision} focusMode={focusMode} onNavigate={onNavigate} onNotify={onNotify} onToggleFocus={onToggleFocus} teamSettings={teamSettings} />;
   if (view === 'Athletes') return <AthletesView assetRevision={assetRevision} onAssetsChanged={onAssetsChanged} onNotify={onNotify} />;
   if (view === 'Depth Charts') return <DepthChartsView onNotify={onNotify} />;
   if (view === 'Messages') return <MessagesView onNavigate={onNavigate} onNotify={onNotify} teamSettings={teamSettings} />;
-  if (view === 'Install') return <InstallView onNavigate={onNavigate} onNotify={onNotify} />;
+  if (view === 'Install') return <InstallWorkspace<StudioPlay> onNavigate={onNavigate} playerView={userRole === 'Player'} renderDiagram={(play) => <StudioPlayDiagram play={play} />} />;
   if (view === 'Reports') return <ReportsView onNavigate={onNavigate} onNotify={onNotify} />;
   if (view === 'Gameplanning') return <GameplanningView onNavigate={onNavigate} onNotify={onNotify} />;
   if (view === 'Calendar') return <CalendarView onNavigate={onNavigate} onNotify={onNotify} teamSettings={teamSettings} />;
@@ -867,6 +878,7 @@ type StudioPlay = {
   labels?: DiagramLabel[];
   assignments?: PlayAssignment[];
   notes?: string;
+  locked?: boolean;
   fieldPosition?: number;
   showOpponent?: boolean;
 };
@@ -1014,7 +1026,7 @@ function StudioPlayDiagram({ play, label = true }: { play: StudioPlay; label?: b
       <line className="pb-los" x1="35" x2="685" y1={lineOfScrimmageY} y2={lineOfScrimmageY} />
       {label ? <text className="pb-los-label" x="18" y={lineOfScrimmageY + 3}>{fieldPosition === 55 ? 'C' : 'LOS'}</text> : null}
       {play.showOpponent ? opponentPlayers.map((player) => <g className={`pb-opponent pb-player-${player.kind}`} key={player.id}><circle cx={player.x} cy={player.y} r={player.kind === 'line' || player.kind === 'back' ? 7.5 : 8.5} style={{ fill: player.colour }} /><text x={player.x} y={player.y + 2}>{player.label}</text></g>) : null}
-      {(play.players?.length ? play.players : defaultDiagramPlayers).map((player) => <g className={`pb-player-${player.kind}`} key={player.id}><circle cx={player.x} cy={player.y} r={player.kind === 'line' || player.kind === 'back' ? 7.5 : 8.5} style={{ fill: player.colour }} /><text x={player.x} y={player.y + 2}>{player.label}</text></g>)}
+      {(play.players ?? []).map((player) => <g className={`pb-player-${player.kind}`} key={player.id}><circle cx={player.x} cy={player.y} r={player.kind === 'line' || player.kind === 'back' ? 7.5 : 8.5} style={{ fill: player.colour }} /><text x={player.x} y={player.y + 2}>{player.label}</text></g>)}
       {(play.routes ?? []).map((route) => {
         const points = route.points?.length ? route.points : [{ x: route.startX, y: route.startY }, { x: route.endX, y: route.endY }];
         const path = route.lineStyle === 'curve'
@@ -1044,11 +1056,13 @@ function PlayAssignmentsEditor({ assignments, editing, onChange }: { assignments
   </>;
 }
 
-function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focusMode: boolean; onNavigate: (view: string) => void; onNotify: Notify; onToggleFocus: () => void }) {
+function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus, onEditingChange }: { focusMode: boolean; onNavigate: (view: string) => void; onNotify: Notify; onToggleFocus: () => void; onEditingChange: (editing: boolean) => void }) {
   const [screen, setScreen] = useState<'library' | 'browser' | 'formations' | 'viewer' | 'editor'>('library');
   const [books, setBooks] = useState<StudioBook[]>(initialStudioBooks);
   const [formations, setFormations] = useState<StudioFormation[]>(studioFormations);
   const [plays, setPlays] = useState<StudioPlay[]>(studioPlays);
+  const [playbookLoading, setPlaybookLoading] = useState(true);
+  const [playbookError, setPlaybookError] = useState('');
   const [bookTab, setBookTab] = useState<'Active' | 'Archived'>('Active');
   const [activeBookId, setActiveBookId] = useState('');
   const [navMode, setNavMode] = useState<'Formations' | 'Categories'>('Formations');
@@ -1068,13 +1082,14 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
   const dragElementRef = useRef<{ kind: 'player' | 'zone' | 'label' | 'route'; id: string } | null>(null);
   const suppressCanvasClickRef = useRef(false);
   const [saved, setSaved] = useState(false);
-  const [isAnimating, setIsAnimating] = useState(false);
+  const [playSaving, setPlaySaving] = useState(false);
+  const [discardAction, setDiscardAction] = useState<(() => void) | null>(null);
+  const [deleteAction, setDeleteAction] = useState<'play' | 'book' | 'formation' | null>(null);
   const [detailsCollapsed, setDetailsCollapsed] = useState(false);
   const [createBookOpen, setCreateBookOpen] = useState(false);
   const [bookSettingsOpen, setBookSettingsOpen] = useState(false);
   const [formationDialogOpen, setFormationDialogOpen] = useState(false);
   const [editingFormation, setEditingFormation] = useState<StudioFormation | null>(null);
-  const [importMessage, setImportMessage] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [draftName, setDraftName] = useState('');
   const [draftFormation, setDraftFormation] = useState('');
@@ -1087,7 +1102,8 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
   const [lineStyle, setLineStyle] = useState<DiagramRoute['lineStyle']>('solid');
   const [activeRouteId, setActiveRouteId] = useState('');
   const [routeAnchorPlayerId, setRouteAnchorPlayerId] = useState('');
-  const [installPackageName, setInstallPackageName] = useState('');
+  const [installPackages, setInstallPackages] = useState<InstallPackage[]>([]);
+  const [installPackageId, setInstallPackageId] = useState('');
   const [installedPlayIds, setInstalledPlayIds] = useState<string[]>([]);
   const activeBook = books.find((book) => book.id === activeBookId) ?? books[0];
   const currentPlay = plays.find((play) => play.id === selectedPlayId) ?? plays[0];
@@ -1108,9 +1124,17 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
   useEffect(() => {
     loadPlaybookData()
       .then((saved) => { setBooks(saved.books); setFormations(saved.formations); setPlays(saved.plays); })
-      .catch(() => onNotify('Saved playbooks could not be loaded.', 'warning'));
-    fetch('/api/install').then(async (response) => await response.json() as { package?: { name?: string } | null; items?: { playId?: string | null }[] }).then((data) => { setInstallPackageName(data.package?.name ?? ''); setInstalledPlayIds((data.items ?? []).flatMap((item) => item.playId ? [item.playId] : [])); }).catch(() => { setInstallPackageName(''); setInstalledPlayIds([]); });
+      .catch(() => setPlaybookError('Saved playbooks could not be loaded. Reopen Playbook to retry.'))
+      .finally(() => setPlaybookLoading(false));
+    fetch('/api/install').then(async (response) => { if (!response.ok) throw new Error('Unable to load installs.'); return await response.json() as { packages: InstallPackage[] }; }).then((data) => setInstallPackages(data.packages)).catch(() => onNotify('Install choices could not be loaded. Open Installs to retry.', 'warning'));
   }, [onNotify]);
+
+  useEffect(() => {
+    if (!installPackageId) return;
+    let active = true;
+    fetch(`/api/install?packageId=${encodeURIComponent(installPackageId)}`).then(async (response) => { if (!response.ok) throw new Error('Unable to load install.'); return await response.json() as { items: { playId: string | null }[] }; }).then((data) => { if (active) setInstalledPlayIds(data.items.flatMap((item) => item.playId ? [item.playId] : [])); }).catch(() => { if (active) { setInstalledPlayIds([]); onNotify('This install could not be loaded.', 'warning'); } });
+    return () => { active = false; };
+  }, [installPackageId, onNotify]);
 
   const prepareDraft = (play: StudioPlay) => {
     setDraftName(play.name);
@@ -1151,16 +1175,43 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
   };
 
   const cancelEditing = () => {
-    prepareDraft(currentPlay);
-    setTool('Select');
-    setScreen('viewer');
+    setDiscardAction(() => () => { prepareDraft(currentPlay); setTool('Select'); setScreen('viewer'); });
+  };
+
+  useEffect(() => {
+    onEditingChange(screen === 'editor');
+    return () => onEditingChange(false);
+  }, [screen, onEditingChange]);
+
+  useEffect(() => {
+    if (screen !== 'editor') return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [screen]);
+
+  const duplicatePlay = async () => {
+    if (playSaving) return;
+    setPlaySaving(true);
+    try {
+      const response = await fetch('/api/playbooks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'duplicate', id: currentPlay.id }) });
+      const data = await response.json() as PlaybookPayload & { error?: string };
+      if (!response.ok) throw new Error(data.error || 'Unable to duplicate play.');
+      const copy = data.plays.find((play) => play.id === data.createdId);
+      if (!copy) throw new Error('The copy could not be opened.');
+      setBooks(data.books); setFormations(data.formations); setPlays(data.plays); setSelectedPlayId(copy.id); prepareDraft(copy); setScreen('editor');
+    } catch (error) { onNotify(error instanceof Error ? error.message : 'Unable to duplicate play.', 'error'); }
+    finally { setPlaySaving(false); }
   };
 
   const saveAndCloseEditing = async () => {
+    if (playSaving) return;
+    setPlaySaving(true);
     try {
+      if (!draftName.trim() || !draftConcept.trim()) throw new Error('Enter a play name and concept before saving.');
       const formation = formations.find((item) => item.name === draftFormation);
       const response = await fetch('/api/playbooks', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
-        ...currentPlay, name: draftName.trim() || currentPlay.name, formationId: formation?.id ?? currentPlay.formationId,
+        ...currentPlay, name: draftName.trim() || currentPlay.name, formationId: formation?.id ?? null,
         formation: draftFormation, family: draftFamily, concept: draftConcept.trim() || currentPlay.concept, notes: draftNotes,
         routes: draftRoutes, players: draftPlayers, zones: draftZones, labels: draftLabels, assignments: draftAssignments,
         fieldPosition: draftFieldPosition, showOpponent: draftShowOpponent,
@@ -1172,7 +1223,7 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
       onNotify(`${draftName.trim() || currentPlay.name} saved.`);
     } catch (error) {
       onNotify(error instanceof Error ? error.message : 'Unable to save play.', 'warning');
-    }
+    } finally { setPlaySaving(false); }
   };
 
   const createPlaybook = async (event: SyntheticEvent<HTMLFormElement>) => {
@@ -1225,35 +1276,33 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
   };
 
   const deleteFormation = async () => {
-    if (!editingFormation || !window.confirm(`Delete ${editingFormation.name}? This cannot be undone.`)) return;
+    if (!editingFormation) return;
     try {
       const response = await fetch('/api/playbooks', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'formation', id: editingFormation.id }) });
       const data = await response.json() as PlaybookPayload & { error?: string };
       if (!response.ok) throw new Error(data.error ?? 'Unable to delete formation.');
       setBooks(data.books); setFormations(data.formations); setPlays(data.plays); setFormationDialogOpen(false); setEditingFormation(null);
-      onNotify(`${editingFormation.name} deleted.`, 'info');
+      setDeleteAction(null); onNotify(`${editingFormation.name} deleted.`, 'info');
     } catch (error) { onNotify(error instanceof Error ? error.message : 'Unable to delete formation.', 'warning'); }
   };
 
   const deleteBook = async () => {
-    if (!window.confirm(`Delete ${activeBook.name}? This cannot be undone.`)) return;
     try {
       const response = await fetch('/api/playbooks', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'book', id: activeBook.id }) });
       const data = await response.json() as PlaybookPayload & { error?: string };
       if (!response.ok) throw new Error(data.error ?? 'Unable to delete playbook.');
       setBooks(data.books); setFormations(data.formations); setPlays(data.plays); setBookSettingsOpen(false); setActiveBookId(data.books[0]?.id ?? 'offence'); setScreen('library');
-      onNotify(`${activeBook.name} deleted.`, 'info');
+      setDeleteAction(null); onNotify(`${activeBook.name} deleted.`, 'info');
     } catch (error) { onNotify(error instanceof Error ? error.message : 'Unable to delete playbook.', 'warning'); }
   };
 
   const deleteCurrentPlay = async () => {
-    if (!window.confirm(`Delete ${currentPlay.name}? This cannot be undone.`)) return;
     try {
       const response = await fetch('/api/playbooks', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'play', id: currentPlay.id }) });
       const data = await response.json() as PlaybookPayload & { error?: string };
       if (!response.ok) throw new Error(data.error ?? 'Unable to delete play.');
       setBooks(data.books); setFormations(data.formations); setPlays(data.plays); setSelectedPlayId(data.plays[0]?.id ?? ''); setScreen('browser');
-      onNotify(`${currentPlay.name} deleted.`, 'info');
+      setDeleteAction(null); onNotify(`${currentPlay.name} deleted.`, 'info');
     } catch (error) { onNotify(error instanceof Error ? error.message : 'Unable to delete play.', 'warning'); }
   };
 
@@ -1277,9 +1326,11 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
   };
 
   const nextPlay = (direction: number) => {
-    const currentIndex = plays.findIndex((play) => play.id === currentPlay.id);
-    const nextIndex = (currentIndex + direction + plays.length) % plays.length;
-    const next = plays[nextIndex];
+    const bookPlays = plays.filter((play) => play.playbookId === activeBookId);
+    if (!bookPlays.length) return;
+    const currentIndex = bookPlays.findIndex((play) => play.id === currentPlay.id);
+    const nextIndex = (currentIndex + direction + bookPlays.length) % bookPlays.length;
+    const next = bookPlays[nextIndex];
     setSelectedPlayId(next.id);
     prepareDraft(next);
   };
@@ -1363,10 +1414,9 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
 
   const addCurrentPlayToInstall = async () => {
     try {
-      const response = await fetch('/api/install', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ playId: currentPlay.id }) });
+      const response = await fetch('/api/install', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ playId: currentPlay.id, packageId: installPackageId }) });
       const data = await response.json() as { package?: { name?: string } | null; items?: { playId?: string | null }[]; error?: string };
       if (!response.ok) throw new Error(data.error ?? 'Unable to add this play to install.');
-      setInstallPackageName(data.package?.name || installPackageName || 'Current install');
       setInstalledPlayIds((data.items ?? []).flatMap((item) => item.playId ? [item.playId] : []));
       onNotify(`${currentPlay.name} added to ${data.package?.name ?? 'the current install'}.`);
     } catch (error) { onNotify(error instanceof Error ? error.message : 'Unable to add this play to install.', 'warning'); }
@@ -1375,11 +1425,10 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
   const handleCanvas = (event: MouseEvent<HTMLButtonElement>) => {
     if (screen !== 'editor') return;
     if (suppressCanvasClickRef.current) { suppressCanvasClickRef.current = false; return; }
-    const diagram = event.currentTarget.querySelector<SVGSVGElement>('.pb-diagram');
-    if (!diagram) return;
-    const bounds = diagram.getBoundingClientRect();
-    const x = Math.max(45, Math.min(675, (event.clientX - bounds.left) / bounds.width * 720));
-    const y = snapDiagramY(Math.max(CANADIAN_FIELD_TOP, Math.min(CANADIAN_FIELD_BOTTOM, (event.clientY - bounds.top) / bounds.height * 600)));
+    const point = canvasPoint(event.currentTarget, event.clientX, event.clientY);
+    if (!point) return;
+    const x = point.x;
+    const y = snapDiagramY(point.y);
     if (tool === 'Route') {
       const clickedPlayer = draftPlayers.find((player) => Math.hypot(player.x - x, player.y - y) < 22);
       if (!activeRouteId && clickedPlayer) { setRouteAnchorPlayerId(clickedPlayer.id); setSelectedElement(`player:${clickedPlayer.id}`); return; }
@@ -1409,10 +1458,14 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
   const canvasPoint = (element: HTMLButtonElement, clientX: number, clientY: number) => {
     const diagram = element.querySelector<SVGSVGElement>('.pb-diagram');
     if (!diagram) return null;
-    const bounds = diagram.getBoundingClientRect();
+    const matrix = diagram.getScreenCTM();
+    if (!matrix) return null;
+    const svgPoint = diagram.createSVGPoint();
+    svgPoint.x = clientX; svgPoint.y = clientY;
+    const local = svgPoint.matrixTransform(matrix.inverse());
     return {
-      x: Math.max(35, Math.min(685, (clientX - bounds.left) / bounds.width * 720)),
-      y: Math.max(CANADIAN_FIELD_TOP, Math.min(CANADIAN_FIELD_BOTTOM, (clientY - bounds.top) / bounds.height * 600)),
+      x: Math.max(35, Math.min(685, local.x)),
+      y: Math.max(CANADIAN_FIELD_TOP, Math.min(CANADIAN_FIELD_BOTTOM, local.y)),
     };
   };
 
@@ -1423,7 +1476,7 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
     const player = draftPlayers.find((item) => Math.hypot(item.x - point.x, item.y - point.y) < 22);
     const label = draftLabels.find((item) => Math.hypot(item.x - point.x, item.y - point.y) < 32);
     const zone = [...draftZones].reverse().find((item) => point.x >= item.x && point.x <= item.x + item.width && point.y >= item.y && point.y <= item.y + item.height);
-    const target = route ? { kind: 'route' as const, id: route.id } : player ? { kind: 'player' as const, id: player.id } : label ? { kind: 'label' as const, id: label.id } : zone ? { kind: 'zone' as const, id: zone.id } : null;
+    const target = player ? { kind: 'player' as const, id: player.id } : route ? { kind: 'route' as const, id: route.id } : label ? { kind: 'label' as const, id: label.id } : zone ? { kind: 'zone' as const, id: zone.id } : null;
     setSelectedElement(target ? `${target.kind}:${target.id}` : '');
     if (route) { setPaletteColour(route.colour); setLineStyle(route.lineStyle); }
     else if (player?.colour) setPaletteColour(player.colour);
@@ -1469,12 +1522,14 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
     const visibleBooks = books.filter((book) => book.archived === (bookTab === 'Archived'));
     return (
       <section className="module-surface playbook-surface pb-redesign">
+        <Dialog open={deleteAction !== null} onOpenChange={(open) => { if (!open) setDeleteAction(null); }}><DialogContent className="athlete-dialog"><DialogHeader><DialogTitle>Delete {deleteAction}?</DialogTitle><DialogDescription>This permanently removes the selected record. Plays used in installs cannot be deleted.</DialogDescription></DialogHeader><DialogFooter><Button onClick={() => setDeleteAction(null)} variant="outline">Cancel</Button><Button variant="destructive" onClick={() => void (deleteAction === 'book' ? deleteBook() : deleteAction === 'formation' ? deleteFormation() : deleteCurrentPlay())}>Delete</Button></DialogFooter></DialogContent></Dialog>
         <div className="pb-hub">
-          <header className="pb-hub-header"><div><p className="eyebrow">Design · Teach · Install</p><h1>Playbooks</h1><span>Create a team system or build an opponent-specific collection from real saved plays.</span></div><div className="pb-header-actions"><FocusModeButton focused={focusMode} onToggle={onToggleFocus} /><Button variant="outline" onClick={() => { setImportMessage('Import a ChalkTalk JSON backup by dropping it here in the next build.'); onNotify('Playbook import is queued for local file selection.', 'info'); }}><Upload /> Import</Button><Button onClick={() => setCreateBookOpen(true)}><Plus /> New playbook</Button></div></header>
-          {importMessage ? <div className="pb-inline-message"><CheckCircle2 /> {importMessage}<button aria-label="Dismiss import message" onClick={() => setImportMessage('')} type="button"><X /></button></div> : null}
+          {playbookLoading ? <p className="channel-empty">Loading playbooks…</p> : null}
+          {playbookError ? <p className="install-feedback error" role="alert">{playbookError}</p> : null}
+          <header className="pb-hub-header"><div><h1>Playbooks</h1><span>Team systems and scout collections.</span></div><div className="pb-header-actions"><FocusModeButton focused={focusMode} onToggle={onToggleFocus} /><Button onClick={() => setCreateBookOpen(true)}><Plus /> New playbook</Button></div></header>
           <div className="pb-book-tabs"><button className={bookTab === 'Active' ? 'active' : ''} onClick={() => setBookTab('Active')} type="button">Team &amp; scout <span>{books.filter((book) => !book.archived).length}</span></button><button className={bookTab === 'Archived' ? 'active' : ''} onClick={() => setBookTab('Archived')} type="button">Archived <span>{books.filter((book) => book.archived).length}</span></button></div>
           <div className="pb-book-list">
-            {visibleBooks.map((book, index) => <button className="pb-book-row" key={book.id} onClick={() => openBook(book)} type="button"><span className={`pb-book-index side-${book.side.toLowerCase().replace(' ','-')}`}>{book.side === 'Scout' ? 'SC' : String(index + 1).padStart(2, '0')}</span><span className="pb-book-copy"><strong>{book.name}</strong><small>{book.side === 'Scout' ? 'Opponent library' : 'Team system'} · {book.plays} plays · {book.formations} formations</small></span><span className="pb-book-updated">{book.updated}</span><span className="pb-book-actions"><i title="Print"><Download /></i><i title="Share"><Users /></i><i title="Details"><Eye /></i><ChevronRight /></span></button>)}
+            {visibleBooks.map((book, index) => <button className="pb-book-row" key={book.id} onClick={() => openBook(book)} type="button"><span className={`pb-book-index side-${book.side.toLowerCase().replace(' ','-')}`}>{book.side === 'Scout' ? 'SC' : String(index + 1).padStart(2, '0')}</span><span className="pb-book-copy"><strong>{book.name}</strong><small>{book.side === 'Scout' ? 'Opponent library' : 'Team system'} · {book.plays} plays · {book.formations} formations</small></span><span className="pb-book-updated">{new Date(book.updated).toLocaleDateString()}</span><span className="pb-book-actions"><ChevronRight /></span></button>)}
             {visibleBooks.length === 0 ? <div className="pb-empty"><BookOpen /><strong>{bookTab === 'Archived' ? 'No archived playbooks' : 'No playbooks yet'}</strong><span>{bookTab === 'Archived' ? 'Archived collections will stay available here.' : 'Create the first real team or scout playbook.'}</span>{bookTab === 'Active' ? <Button onClick={() => setCreateBookOpen(true)}><Plus /> New playbook</Button> : null}</div> : null}
           </div>
         </div>
@@ -1487,35 +1542,38 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
     return (
       <section className="module-surface playbook-surface pb-redesign">
         <div className="pb-browser-shell">
-          <header className="pb-context-bar"><button className="pb-back" onClick={() => setScreen(screen === 'formations' ? 'browser' : 'library')} type="button"><ArrowLeft /></button><div><span>{activeBook.side} playbook</span><strong>{screen === 'formations' ? 'Formations' : activeBook.name}</strong></div><div className="pb-context-actions"><FocusModeButton focused={focusMode} onToggle={onToggleFocus} /><button onClick={() => onNotify(`${activeBook.plays} plays across ${activeBook.formations} formations.`, 'info')} title="Playbook details" type="button"><Eye /></button><button onClick={() => setBookSettingsOpen(true)} title="Playbook settings" type="button"><Settings /></button><button onClick={() => { downloadText(`${activeBook.id}-playbook.json`, JSON.stringify({ book: activeBook, plays: plays.filter((play) => (play.playbookId ?? activeBook.id) === activeBook.id) }, null, 2), 'application/json'); onNotify('Playbook backup downloaded.'); }} title="Download playbook" type="button"><Download /></button><Button size="sm" onClick={beginNewPlay}><Plus /> New play</Button></div></header>
-          {screen === 'formations' ? <main className="pb-formations-main"><div className="pb-section-heading"><div><p className="eyebrow">Formation library</p><h2>Every alignment at a glance</h2><span>Create and edit saved Canadian-football alignments.</span></div><div className="toolbar-search"><Search /><Input aria-label="Search formations" placeholder="Search formations…" /></div></div><div className="pb-formation-grid"><button className="pb-new-tile" onClick={() => { setEditingFormation(null); setFormationDialogOpen(true); }} type="button"><Plus /><strong>New formation</strong><span>Start with your team’s alignment</span></button>{formations.map((item) => { const sample = plays.find((play) => play.formation === item.name) ?? { id: `formation-preview-${item.id}`, name: item.name, formation: item.name, category: 'Formation', family: 'Pass' as const, concept: item.personnel, variant: item.variant ?? 0, players: item.players }; return <button className="pb-formation-card" key={item.name} onClick={() => { setEditingFormation(item); setFormationDialogOpen(true); }} type="button"><span className="pb-card-number">{String(formations.indexOf(item) + 1).padStart(2, '0')}</span><span className="pb-card-menu"><Pencil /></span><div className="pb-card-diagram"><StudioPlayDiagram label={false} play={sample} /></div><footer><strong>{item.name}</strong><span>{item.personnel} · {item.count} plays</span></footer></button>; })}</div></main> : <div className="pb-browser-body">
+        <Dialog open={deleteAction !== null} onOpenChange={(open) => { if (!open) setDeleteAction(null); }}><DialogContent className="athlete-dialog"><DialogHeader><DialogTitle>Delete {deleteAction}?</DialogTitle><DialogDescription>This permanently removes the selected record. Plays used in installs cannot be deleted.</DialogDescription></DialogHeader><DialogFooter><Button onClick={() => setDeleteAction(null)} variant="outline">Cancel</Button><Button variant="destructive" onClick={() => void (deleteAction === 'book' ? deleteBook() : deleteAction === 'formation' ? deleteFormation() : deleteCurrentPlay())}>Delete</Button></DialogFooter></DialogContent></Dialog>
+          <header className="pb-context-bar"><button className="pb-back" onClick={() => setScreen(screen === 'formations' ? 'browser' : 'library')} type="button"><ArrowLeft /></button><div><span>{activeBook.side} playbook</span><strong>{screen === 'formations' ? 'Formations' : activeBook.name}</strong></div><div className="pb-context-actions"><FocusModeButton focused={focusMode} onToggle={onToggleFocus} /><button onClick={() => setBookSettingsOpen(true)} title="Playbook settings" type="button"><Settings /></button><button onClick={() => { downloadText(`${activeBook.id}-playbook.json`, JSON.stringify({ book: activeBook, plays: plays.filter((play) => (play.playbookId ?? activeBook.id) === activeBook.id) }, null, 2), 'application/json'); onNotify('Playbook backup downloaded.'); }} title="Download playbook" type="button"><Download /></button><Button size="sm" onClick={beginNewPlay}><Plus /> New play</Button></div></header>
+          {screen === 'formations' ? <main className="pb-formations-main"><div className="pb-section-heading"><div><p className="eyebrow">Formation library</p><h2>Every alignment at a glance</h2><span>Create and edit saved Canadian-football alignments.</span></div><div className="toolbar-search"><Search /><Input aria-label="Search formations" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search formations…" /></div></div><div className="pb-formation-grid"><button className="pb-new-tile" onClick={() => { setEditingFormation(null); setFormationDialogOpen(true); }} type="button"><Plus /><strong>New formation</strong><span>Start with your team’s alignment</span></button>{formations.filter((item) => `${item.name} ${item.personnel}`.toLowerCase().includes(query.toLowerCase())).map((item) => { const sample = plays.find((play) => play.formation === item.name) ?? { id: `formation-preview-${item.id}`, name: item.name, formation: item.name, category: 'Formation', family: 'Pass' as const, concept: item.personnel, variant: item.variant ?? 0, players: item.players }; return <button className="pb-formation-card" key={item.name} onClick={() => { setEditingFormation(item); setFormationDialogOpen(true); }} type="button"><span className="pb-card-number">{String(formations.indexOf(item) + 1).padStart(2, '0')}</span><span className="pb-card-menu"><Pencil /></span><div className="pb-card-diagram"><StudioPlayDiagram label={false} play={sample} /></div><footer><strong>{item.name}</strong><span>{item.personnel} · {item.count} plays</span></footer></button>; })}</div></main> : <div className="pb-browser-body">
             <aside className="pb-filter-rail"><div className="pb-active-book-summary"><span className={`pb-book-index side-${activeBook.side.toLowerCase().replace(' ','-')}`}>{activeBook.side === 'Scout' ? 'SC' : activeBook.side.slice(0,1)}</span><div><strong>{activeBook.name}</strong><small>{activeBook.side === 'Scout' ? 'Opponent library' : 'Team system'}</small></div></div><div className="pb-filter-tabs"><button className={navMode === 'Formations' ? 'active' : ''} onClick={() => setNavMode('Formations')} type="button">Formations</button><button className={navMode === 'Categories' ? 'active' : ''} onClick={() => setNavMode('Categories')} type="button">Categories</button></div><div className="pb-filter-list">{navMode === 'Formations' ? <><button className={selectedFormation === 'All formations' ? 'active' : ''} onClick={() => setSelectedFormation('All formations')} type="button"><span>All formations</span><b>{filteredPlays.length}</b></button>{formations.map((item) => <button className={selectedFormation === item.name ? 'active' : ''} key={item.name} onClick={() => setSelectedFormation(item.name)} type="button"><span>{item.name}</span><b>{item.count}</b></button>)}</> : studioCategories.map((item) => <button className={selectedCategory === item.name ? 'active' : ''} key={item.name} onClick={() => setSelectedCategory(item.name)} type="button"><span>{item.name}</span><b>{item.count}</b></button>)}</div><button className="pb-manage-filter" onClick={() => setScreen('formations')} type="button"><Pencil /> Manage formations</button></aside>
             <main className="pb-play-browser"><div className="pb-browser-toolbar"><div><p className="eyebrow">{navMode === 'Formations' ? selectedFormation : selectedCategory}</p><h2>{filteredPlays.length} plays</h2></div><div className="toolbar-search"><Search /><Input aria-label="Search this playbook" onChange={(event) => setQuery(event.target.value)} placeholder="Search plays, concepts…" value={query} /></div><div className="pb-view-buttons"><button className={viewMode === 'grid' ? 'active' : ''} aria-label="Grid view" onClick={() => setViewMode('grid')} type="button"><LayoutDashboard /></button><button className={viewMode === 'list' ? 'active' : ''} aria-label="List view" onClick={() => setViewMode('list')} type="button"><ListFilter /></button></div></div><div className={`pb-play-grid ${viewMode === 'list' ? 'list-view' : ''}`}><button className="pb-new-tile" onClick={beginNewPlay} type="button"><Plus /><strong>New {activeBook.side.toLowerCase()} play</strong><span>{navMode === 'Formations' && selectedFormation !== 'All formations' ? selectedFormation : 'Choose formation in editor'}</span></button>{filteredPlays.map((play, index) => <button className="pb-play-card" key={play.id} onClick={() => openPlay(play)} type="button"><span className="pb-card-number">{String(index + 1).padStart(2, '0')}</span><span className="pb-card-menu"><MoreHorizontal /></span><div className="pb-card-diagram"><StudioPlayDiagram label={false} play={play} /></div><footer><span>{play.formation} · {play.family}</span><strong>{play.name}</strong><small>{play.concept}</small></footer></button>)}</div>{filteredPlays.length === 0 ? <div className="pb-empty"><Search /><strong>No plays match this view</strong><span>Try another formation, category, or search.</span></div> : null}</main>
           </div>}
         </div>
-        <Dialog onOpenChange={setBookSettingsOpen} open={bookSettingsOpen}><DialogContent className="athlete-dialog sm:max-w-[520px]"><form onSubmit={saveBookSettings}><DialogHeader><DialogTitle>Playbook settings</DialogTitle><DialogDescription>Rename this collection, change its system, or move it to the archive.</DialogDescription></DialogHeader><div className="athlete-form-grid"><label className="full" htmlFor="edit-playbook-name">Name<Input defaultValue={activeBook.name} id="edit-playbook-name" name="bookName" required /></label><label className="full" htmlFor="edit-playbook-side">System<NativeSelect defaultValue={activeBook.side} id="edit-playbook-side" name="bookSide"><NativeSelectOption value="Offence">Offence</NativeSelectOption><NativeSelectOption value="Defence">Defence</NativeSelectOption><NativeSelectOption value="Special teams">Special teams</NativeSelectOption><NativeSelectOption value="Scout">Scout plays</NativeSelectOption></NativeSelect></label><label className="full form-checkbox" htmlFor="edit-playbook-archived"><input defaultChecked={activeBook.archived} id="edit-playbook-archived" name="bookArchived" type="checkbox" /> Archive this playbook</label></div><DialogFooter><Button onClick={deleteBook} type="button" variant="destructive"><Trash2 /> Delete</Button><Button type="submit">Save settings <Check /></Button></DialogFooter></form></DialogContent></Dialog>
-        <Dialog onOpenChange={(open) => { setFormationDialogOpen(open); if (!open) setEditingFormation(null); }} open={formationDialogOpen}><DialogContent className="athlete-dialog sm:max-w-[520px]"><form onSubmit={saveFormation}><DialogHeader><DialogTitle>{editingFormation ? 'Edit formation' : 'New formation'}</DialogTitle><DialogDescription>Formation records are shared by the playbook editor and depth-chart tools.</DialogDescription></DialogHeader><div className="athlete-form-grid"><label className="full" htmlFor="formation-name">Name<Input defaultValue={editingFormation?.name ?? ''} id="formation-name" name="formationName" placeholder="Doubles" required /></label><label className="full" htmlFor="formation-personnel">Personnel<Input defaultValue={editingFormation?.personnel ?? ''} id="formation-personnel" name="formationPersonnel" placeholder="10 personnel" required /></label></div><DialogFooter>{editingFormation ? <Button onClick={deleteFormation} type="button" variant="destructive"><Trash2 /> Delete</Button> : null}<Button type="submit">{editingFormation ? 'Save formation' : 'Create formation'} <Check /></Button></DialogFooter></form></DialogContent></Dialog>
+        <Dialog onOpenChange={setBookSettingsOpen} open={bookSettingsOpen}><DialogContent className="athlete-dialog sm:max-w-[520px]"><form onSubmit={saveBookSettings}><DialogHeader><DialogTitle>Playbook settings</DialogTitle><DialogDescription>Rename this collection, change its system, or move it to the archive.</DialogDescription></DialogHeader><div className="athlete-form-grid"><label className="full" htmlFor="edit-playbook-name">Name<Input defaultValue={activeBook.name} id="edit-playbook-name" name="bookName" required /></label><label className="full" htmlFor="edit-playbook-side">System<NativeSelect defaultValue={activeBook.side} id="edit-playbook-side" name="bookSide"><NativeSelectOption value="Offence">Offence</NativeSelectOption><NativeSelectOption value="Defence">Defence</NativeSelectOption><NativeSelectOption value="Special teams">Special teams</NativeSelectOption><NativeSelectOption value="Scout">Scout plays</NativeSelectOption></NativeSelect></label><label className="full form-checkbox" htmlFor="edit-playbook-archived"><input defaultChecked={activeBook.archived} id="edit-playbook-archived" name="bookArchived" type="checkbox" /> Archive this playbook</label></div><DialogFooter><Button onClick={() => setDeleteAction('book')} type="button" variant="destructive"><Trash2 /> Delete</Button><Button type="submit">Save settings <Check /></Button></DialogFooter></form></DialogContent></Dialog>
+        <Dialog onOpenChange={(open) => { setFormationDialogOpen(open); if (!open) setEditingFormation(null); }} open={formationDialogOpen}><DialogContent className="athlete-dialog sm:max-w-[520px]"><form onSubmit={saveFormation}><DialogHeader><DialogTitle>{editingFormation ? 'Edit formation' : 'New formation'}</DialogTitle><DialogDescription>Formation records are shared by the playbook editor and depth-chart tools.</DialogDescription></DialogHeader><div className="athlete-form-grid"><label className="full" htmlFor="formation-name">Name<Input defaultValue={editingFormation?.name ?? ''} id="formation-name" name="formationName" placeholder="Doubles" required /></label><label className="full" htmlFor="formation-personnel">Personnel<Input defaultValue={editingFormation?.personnel ?? ''} id="formation-personnel" name="formationPersonnel" placeholder="10 personnel" required /></label></div><DialogFooter>{editingFormation ? <Button onClick={() => setDeleteAction('formation')} type="button" variant="destructive"><Trash2 /> Delete</Button> : null}<Button type="submit">{editingFormation ? 'Save formation' : 'Create formation'} <Check /></Button></DialogFooter></form></DialogContent></Dialog>
       </section>
     );
   }
 
   return (
     <section className="module-surface playbook-surface pb-redesign">
+        <Dialog open={deleteAction !== null} onOpenChange={(open) => { if (!open) setDeleteAction(null); }}><DialogContent className="athlete-dialog"><DialogHeader><DialogTitle>Delete {deleteAction}?</DialogTitle><DialogDescription>This permanently removes the selected record. Plays used in installs cannot be deleted.</DialogDescription></DialogHeader><DialogFooter><Button onClick={() => setDeleteAction(null)} variant="outline">Cancel</Button><Button variant="destructive" onClick={() => void (deleteAction === 'book' ? deleteBook() : deleteAction === 'formation' ? deleteFormation() : deleteCurrentPlay())}>Delete</Button></DialogFooter></DialogContent></Dialog>
       <div className={`pb-play-shell ${screen === 'editor' ? 'editing' : 'viewing'}`}>
+        <Dialog open={discardAction !== null} onOpenChange={(open) => { if (!open) setDiscardAction(null); }}><DialogContent className="athlete-dialog"><DialogHeader><DialogTitle>Discard unsaved play changes?</DialogTitle><DialogDescription>Your last saved version will be kept.</DialogDescription></DialogHeader><DialogFooter><Button onClick={() => setDiscardAction(null)} variant="outline">Keep editing</Button><Button onClick={() => { discardAction?.(); setDiscardAction(null); }} variant="destructive">Discard changes</Button></DialogFooter></DialogContent></Dialog>
         <header className="pb-context-bar">
-          <button className="pb-back" onClick={() => setScreen('browser')} type="button"><ArrowLeft /></button>
+          <button className="pb-back" onClick={() => { if (screen === 'editor') setDiscardAction(() => () => setScreen('browser')); else setScreen('browser'); }} type="button"><ArrowLeft /></button>
           <div><span>{screen === 'editor' ? draftFormation || 'Unassigned' : currentPlay.formation} · {screen === 'editor' ? draftFamily : currentPlay.family}</span><strong>{screen === 'editor' ? draftName || 'Untitled play' : currentPlay.name}</strong></div>
-          <div className="pb-header-play-nav"><button aria-label="Previous play" onClick={() => nextPlay(-1)} title="Previous play" type="button"><ChevronLeft /></button><button aria-label="Next play" onClick={() => nextPlay(1)} title="Next play" type="button"><ChevronRight /></button></div>
+          <div className="pb-header-play-nav"><button aria-label="Previous play" disabled={screen === 'editor'} onClick={() => nextPlay(-1)} title="Previous play" type="button"><ChevronLeft /></button><button aria-label="Next play" disabled={screen === 'editor'} onClick={() => nextPlay(1)} title="Next play" type="button"><ChevronRight /></button></div>
           <div className="pb-context-actions">
             <span className={saved ? 'save-state visible' : 'save-state'}><Check /> Saved</span>
             <FocusModeButton focused={focusMode} onToggle={onToggleFocus} />
             <button aria-label={detailsCollapsed ? 'Show play details' : 'Hide play details'} aria-pressed={!detailsCollapsed} className={detailsCollapsed ? 'pb-details-toggle' : 'pb-details-toggle active'} onClick={() => setDetailsCollapsed((collapsed) => !collapsed)} title={detailsCollapsed ? 'Show play details' : 'Hide play details'} type="button"><Info /><span>Details</span></button>
-            <button title="Preview animation" onClick={() => setIsAnimating((value) => !value)} type="button">{isAnimating ? <Pause /> : <Play />}</button>
-            {screen === 'viewer' ? <><Button aria-label="Delete play" onClick={deleteCurrentPlay} size="icon-sm" title="Delete play" variant="ghost"><Trash2 /></Button><Button size="sm" onClick={() => { prepareDraft(currentPlay); setScreen('editor'); }}><Pencil /> Edit play</Button></> : <><Button className="pb-cancel-edit" size="sm" variant="outline" onClick={cancelEditing}><X /> Cancel</Button><Button size="sm" onClick={saveAndCloseEditing}><Check /> Save changes</Button></>}
+            {screen === 'viewer' ? <><Button disabled={playSaving} onClick={() => void duplicatePlay()} size="sm" variant="outline">Duplicate</Button><Button disabled={Boolean(currentPlay.locked)} aria-label="Delete play" onClick={() => setDeleteAction('play')} size="icon-sm" title="Delete play" variant="ghost"><Trash2 /></Button><Button disabled={Boolean(currentPlay.locked)} size="sm" onClick={() => { prepareDraft(currentPlay); setScreen('editor'); }}><Pencil /> Edit play</Button></> : <><Button disabled={playSaving} className="pb-cancel-edit" size="sm" variant="outline" onClick={cancelEditing}><X /> Cancel</Button><Button disabled={playSaving} size="sm" onClick={saveAndCloseEditing}><Check /> {playSaving ? 'Saving…' : 'Save changes'}</Button></>}
           </div>
         </header>
         <div className={detailsCollapsed ? 'pb-play-layout details-collapsed' : 'pb-play-layout'}>
           <main className="pb-play-stage">
+            {currentPlay.locked ? <p className="pb-lock-notice"><Lock /> Used in a published install. Duplicate this play to revise it.</p> : null}
             {screen === 'editor' ? <div className="pb-editor-tools" aria-label="Play drawing tools">{[{ name: 'Select', icon: MousePointer2 },{ name: 'Route', icon: Pencil },{ name: 'Player', icon: CircleDot },{ name: 'Zone', icon: Shield },{ name: 'Label', icon: Tag }].map((item) => <button aria-label={item.name} className={tool === item.name ? 'active' : ''} key={item.name} onClick={() => activateDiagramTool(item.name)} title={item.name} type="button"><item.icon /><span>{item.name}</span></button>)}<i /><button aria-label="Toggle opponent" className={draftShowOpponent ? 'active utility-active' : ''} onClick={() => { rememberDiagram(); setDraftShowOpponent((visible) => !visible); }} title="Show or hide opponent"><Users /><span>Opponent</span></button><button aria-label="Duplicate selected item" disabled={!selectedElement} onClick={duplicateSelected} title="Duplicate selected item"><Plus /><span>Duplicate</span></button>{activeRouteId ? <button className="route-finish" onClick={finishActiveRoute} type="button"><Check /><span>Finish route</span></button> : null}<i /><button aria-label="Undo diagram change" disabled={undoStack.length === 0} onClick={undoDiagram} title="Undo" type="button"><Undo2 /></button><button aria-label="Redo diagram change" disabled={redoStack.length === 0} onClick={redoDiagram} title="Redo" type="button"><Redo2 /></button><button aria-label="Delete selected diagram item" disabled={!selectedElement && draftRoutes.length === 0} onClick={deleteSelected} title="Delete selected item" type="button"><Trash2 /></button></div> : null}
             <button className="pb-full-field" onClick={handleCanvas} onPointerDown={startDiagramDrag} onPointerMove={moveDiagramItem} onPointerUp={endDiagramDrag} type="button"><StudioPlayDiagram play={screen === 'editor' ? { ...currentPlay, family: draftFamily, fieldPosition: draftFieldPosition, showOpponent: draftShowOpponent, routes: draftRoutes, players: draftPlayers, zones: draftZones, labels: draftLabels } : currentPlay} />{screen === 'editor' && tool !== 'Select' ? <span className="pb-canvas-hint"><Plus /> {tool === 'Route' ? activeRouteId ? 'Click to extend this route; Finish route when done' : 'Click the field to start from the selected player' : `Click the field to add a ${tool.toLowerCase()}`}</span> : null}</button>
             {screen === 'editor' ? <div className="pb-edit-palette">
@@ -1527,7 +1585,7 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
           {detailsCollapsed ? null : <aside className="pb-inspector">
             <div className="pb-inspector-heading"><div><p className="eyebrow">Play details</p><h3>{screen === 'editor' ? 'Edit teaching details' : 'Coach view'}</h3></div><Badge variant="secondary">{screen === 'editor' ? 'Draft' : 'Saved play'}</Badge></div>
             <label htmlFor="studio-play-name">Play name<Input disabled={screen !== 'editor'} id="studio-play-name" onChange={(event) => setDraftName(event.target.value)} value={screen === 'editor' ? draftName : currentPlay.name} /></label>
-            <label htmlFor="studio-play-formation">Formation<NativeSelect className="w-full" disabled={screen !== 'editor'} id="studio-play-formation" onChange={(event) => setDraftFormation(event.target.value)} value={screen === 'editor' ? draftFormation : currentPlay.formation}>{formations.map((item) => <NativeSelectOption key={item.id} value={item.name}>{item.name}</NativeSelectOption>)}</NativeSelect></label>
+            <label htmlFor="studio-play-formation">Formation<NativeSelect className="w-full" disabled={screen !== 'editor'} id="studio-play-formation" onChange={(event) => setDraftFormation(event.target.value)} value={screen === 'editor' ? draftFormation : currentPlay.formation}><NativeSelectOption value="">Unassigned</NativeSelectOption>{formations.map((item) => <NativeSelectOption key={item.id} value={item.name}>{item.name}</NativeSelectOption>)}</NativeSelect></label>
             <label htmlFor="studio-play-family">Play type<NativeSelect className="w-full" disabled={screen !== 'editor'} id="studio-play-family" onChange={(event) => setDraftFamily(event.target.value as StudioPlay['family'])} value={screen === 'editor' ? draftFamily : currentPlay.family}><NativeSelectOption value="Unassigned">Choose a play type…</NativeSelectOption><NativeSelectOption value="Run">Run</NativeSelectOption><NativeSelectOption value="Pass">Pass</NativeSelectOption><NativeSelectOption value="RPO">RPO</NativeSelectOption><NativeSelectOption value="Screen">Screen</NativeSelectOption></NativeSelect></label>
             <label htmlFor="studio-play-concept">Concept<Input disabled={screen !== 'editor'} id="studio-play-concept" onChange={(event) => setDraftConcept(event.target.value)} value={screen === 'editor' ? draftConcept : currentPlay.concept} /></label>
             <label htmlFor="studio-field-position">Ball position<NativeSelect className="w-full" disabled={screen !== 'editor'} id="studio-field-position" onChange={(event) => changeFieldPosition(Number(event.target.value))} value={screen === 'editor' ? String(draftFieldPosition) : String(currentPlay.fieldPosition ?? 55)}>{canadianFieldPositions.map((position) => <NativeSelectOption key={position.yard} value={String(position.yard)}>{position.label}</NativeSelectOption>)}</NativeSelect><small className="pb-field-helper">Defaults to centre field (C). Players and routes move with the ball spot.</small></label>
@@ -1537,8 +1595,7 @@ function PlaybookView({ focusMode, onNavigate, onNotify, onToggleFocus }: { focu
             <div className="property-divider" />
             <label htmlFor="studio-play-notes">Coaching notes<Textarea disabled={screen !== 'editor'} id="studio-play-notes" onChange={(event) => setDraftNotes(event.target.value)} value={screen === 'editor' ? draftNotes : currentPlay.notes ?? ''} /></label>
             <div className="property-divider" />
-            <section className="pb-install-panel"><div className="property-title"><strong>Install</strong>{installedPlayIds.includes(currentPlay.id) ? <Badge variant="secondary">Added</Badge> : null}</div>{installPackageName ? <><label htmlFor="studio-install-package">Package<NativeSelect className="w-full" disabled id="studio-install-package" value="current"><NativeSelectOption value="current">{installPackageName}</NativeSelectOption></NativeSelect></label><p>{installedPlayIds.includes(currentPlay.id) ? 'This play is already available in the current learning package.' : screen === 'editor' ? 'Save this draft before adding it to the learning package.' : 'Add this saved play to athlete assignments and review tracking.'}</p><div><Button disabled={screen === 'editor' || installedPlayIds.includes(currentPlay.id)} onClick={() => void addCurrentPlayToInstall()} size="sm"><ClipboardList /> {installedPlayIds.includes(currentPlay.id) ? 'In install' : 'Add to install'}</Button><Button onClick={() => onNavigate('Install')} size="sm" variant="outline">Open install</Button></div></> : <><p>No current install package is available yet.</p><Button onClick={() => onNavigate('Install')} size="sm" variant="outline">Set up install</Button></>}</section>
-            <div className="pb-inspector-actions"><Button onClick={() => { setDetailsCollapsed(true); onNotify('Player view hides coaching details.', 'info'); }} variant="outline"><Eye /> Player view</Button><Button onClick={() => onNavigate('Install')} variant="outline"><ClipboardList /> Install</Button></div>
+            <section className="pb-install-panel"><div className="property-title"><strong>Install</strong></div><label htmlFor="studio-install-package">Draft package<NativeSelect className="w-full" id="studio-install-package" onChange={(event) => { setInstalledPlayIds([]); setInstallPackageId(event.target.value); }} value={installPackageId}><NativeSelectOption value="">Choose an install…</NativeSelectOption>{installPackages.filter((pack) => !pack.publishedAt && (pack.unit === 'Team' || pack.unit === currentPlay.unit)).map((pack) => <NativeSelectOption key={pack.id} value={pack.id}>{pack.name}{pack.dueAt ? ` · ${pack.dueAt}` : ''}</NativeSelectOption>)}</NativeSelect></label><p>{screen === 'editor' ? 'Save your changes before adding the play.' : installedPlayIds.includes(currentPlay.id) ? 'This play is already in the selected draft.' : 'Choose a draft or create a new install.'}</p><div><Button disabled={screen === 'editor' || !installPackageId || installedPlayIds.includes(currentPlay.id)} onClick={() => void addCurrentPlayToInstall()} size="sm"><ClipboardList /> {installedPlayIds.includes(currentPlay.id) ? 'Added' : 'Add play'}</Button><Button onClick={() => onNavigate('Install')} size="sm" variant="outline">Manage installs</Button></div></section>
           </aside>}
         </div>
       </div>
@@ -2253,6 +2310,10 @@ function GameplanningView({ onNavigate, onNotify }: { onNavigate: (view: string)
   const [gameplanFilm, setGameplanFilm] = useState<FilmClipRecord[]>([]);
   const [objectiveDialogOpen, setObjectiveDialogOpen] = useState(false);
   const [sectionDialogOpen, setSectionDialogOpen] = useState(false);
+  const [installChoices, setInstallChoices] = useState<InstallPackage[]>([]);
+  const [targetInstall, setTargetInstall] = useState('');
+  const [installDialogOpen, setInstallDialogOpen] = useState(false);
+  const [sendingInstall, setSendingInstall] = useState(false);
   const insights = gameplanFilm.filter((clip) => clip.note || clip.concept || clip.tags.length).slice(0, 8).map((clip) => ({ id: clip.id, title: clipLabel(clip), detail: clip.note || [clip.odk, clip.result].filter(Boolean).join(' · ') || 'Charted film clip', clips: 1 }));
 
   useEffect(() => {
@@ -2269,15 +2330,19 @@ function GameplanningView({ onNavigate, onNotify }: { onNavigate: (view: string)
   };
 
   const sendPlanToInstall = async () => {
+    if (!targetInstall || sendingInstall) return;
+    setSendingInstall(true);
+    try {
     await saveGameplan({});
     const selectedNames = Array.from(new Set(callBuckets.flatMap((bucket) => bucket.plays)));
     const selectedPlays = selectedNames.map((name) => gameplanPlays.find((play) => play.name === name)).filter((play): play is StudioPlay => Boolean(play));
-    for (const play of selectedPlays) {
-      const response = await fetch('/api/install', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ playId: play.id }) });
-      if (!response.ok) { const body = await response.json() as { error?: string }; throw new Error(body.error ?? `Unable to add ${play.name} to install.`); }
-    }
-    onNotify(`${selectedPlays.length} saved ${selectedPlays.length === 1 ? 'play' : 'plays'} sent to the current install.`);
+    if (selectedPlays.length !== selectedNames.length) throw new Error('Some selected plays were renamed or deleted. Update the call sheet before sending.');
+    const response = await fetch('/api/install', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ packageId: targetInstall, playIds: selectedPlays.map((play) => play.id) }) });
+    if (!response.ok) { const body = await response.json() as { error?: string }; throw new Error(body.error || 'Unable to add plays to install.'); }
+    onNotify(`${selectedPlays.length} plays added to the selected draft install.`);
+    setInstallDialogOpen(false);
     onNavigate('Install');
+    } finally { setSendingInstall(false); }
   };
   const addObjective = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2295,9 +2360,10 @@ function GameplanningView({ onNavigate, onNotify }: { onNavigate: (view: string)
   };
   return (
     <section className="module-surface gameplan-surface">
+      <Dialog open={installDialogOpen} onOpenChange={(open) => { if (!sendingInstall) setInstallDialogOpen(open); }}><DialogContent className="athlete-dialog"><DialogHeader><DialogTitle>Add gameplan plays to an install</DialogTitle><DialogDescription>Choose a draft package. Existing plays will not be duplicated.</DialogDescription></DialogHeader><NativeSelect aria-label="Destination install" onChange={(event) => setTargetInstall(event.target.value)} value={targetInstall}><NativeSelectOption value="">Choose an install…</NativeSelectOption>{installChoices.map((pack) => <NativeSelectOption key={pack.id} value={pack.id}>{pack.name} · {pack.unit}</NativeSelectOption>)}</NativeSelect><DialogFooter><Button disabled={sendingInstall} onClick={() => onNavigate('Install')} variant="outline">Manage installs</Button><Button disabled={!targetInstall || sendingInstall} onClick={() => void sendPlanToInstall().catch((error: unknown) => onNotify(error instanceof Error ? error.message : 'Unable to add plays.', 'error'))}>{sendingInstall ? 'Adding…' : 'Add plays'}</Button></DialogFooter></DialogContent></Dialog>
       <ModuleHeader eyebrow="Coordinator workspace" title="Gameplan" description="Bridge scouting evidence to your call sheet, install, and practice script.">
         <Button className="module-secondary" onClick={() => onNavigate('Reports')} variant="outline"><SlidersHorizontal /> Open reports</Button>
-        <Button className="module-primary" disabled={!callBuckets.some((bucket) => bucket.plays.length)} onClick={() => void sendPlanToInstall().catch((error: unknown) => onNotify(error instanceof Error ? error.message : 'Unable to send the gameplan.', 'error'))}><ClipboardList /> Send to install</Button>
+        <Button className="module-primary" disabled={!callBuckets.some((bucket) => bucket.plays.length)} onClick={() => { void fetch('/api/install').then(async (response) => { if (!response.ok) throw new Error('Unable to load installs.'); return await response.json() as { packages: InstallPackage[] }; }).then((data) => { setInstallChoices(data.packages.filter((pack) => !pack.publishedAt)); setTargetInstall(''); setInstallDialogOpen(true); }).catch((error: unknown) => onNotify(error instanceof Error ? error.message : 'Unable to load installs.', 'error')); }}><ClipboardList /> Add to install</Button>
       </ModuleHeader>
       <div className="workflow-stepper">
         <button className={gameplanFilm.length ? 'complete' : ''} onClick={() => onNavigate('Film Room')} type="button"><span>{gameplanFilm.length ? <Check /> : '1'}</span><div><strong>Film charted</strong><small>{gameplanFilm.length} saved clips</small></div></button>
@@ -2596,173 +2662,7 @@ type InstallReview = {
   acknowledged: boolean;
 };
 
-type InstallPayload = {
-  items: InstallItemRecord[];
-  reviews: InstallReview[];
-  error?: string;
-};
 
-function InstallView({ onNavigate, onNotify }: { onNavigate: (view: string) => void; onNotify: Notify }) {
-  const [items, setItems] = useState<InstallItemRecord[]>([]);
-  const [installPlays, setInstallPlays] = useState<StudioPlay[]>([]);
-  const [reviews, setReviews] = useState<InstallReview[]>([]);
-  const [completed, setCompleted] = useState<string[]>([]);
-  const [tab, setTab] = useState('All');
-  const [installMode, setInstallMode] = useState<'Coach' | 'Athlete'>('Coach');
-  const [selectedInstall, setSelectedInstall] = useState('install-1');
-  const [activeAthleteId, setActiveAthleteId] = useState('');
-  const [acknowledged, setAcknowledged] = useState<string[]>(['play']);
-  const [installEvents, setInstallEvents] = useState<CalendarEventRecord[]>([]);
-  const [pendingNotification, setPendingNotification] = useState<{ label: string; recipient: string } | null>(null);
-  const shown = items.filter((item) => tab === 'All' || item.group === tab);
-  const selectedItem = items.find((item) => item.id === selectedInstall) ?? items[0] ?? null;
-  const selectedPlay = selectedItem ? installPlays.find((play) => play.id === selectedItem.playId || play.name === selectedItem.title) : undefined;
-  const playerAssignment = selectedPlay?.assignments?.find((assignment) => assignment.position === 'QB') ?? selectedPlay?.assignments?.[0];
-  const reviewRows = reviews.filter((review) => review.itemId === selectedInstall).map((review) => {
-    const progress = [review.reviewed, review.assignment, review.note, review.acknowledged].filter(Boolean).length * 25;
-    return [review.initials, review.name, review.position, review.reviewed, review.assignment, review.note, review.acknowledged, `${progress}%`] as const;
-  });
-  const teamReadiness = items.length ? Math.round(items.reduce((total, item) => total + item.complete, 0) / items.length) : 0;
-  const acknowledgedReviews = reviews.filter((review) => review.acknowledged).length;
-  const completedReviewSteps = reviews.reduce((total, review) => total + Number(review.reviewed) + Number(review.assignment) + Number(review.note), 0);
-  const attentionAthletes = Object.values(reviews.filter((review) => !review.acknowledged).reduce<Record<string, { initials: string; name: string; pending: number }>>((groups, review) => {
-    const current = groups[review.athleteId] ?? { initials: review.initials, name: review.name, pending: 0 };
-    current.pending += 1; groups[review.athleteId] = current; return groups;
-  }, {}));
-
-  useEffect(() => {
-    fetch('/api/install').then(async (response) => {
-      const data = await response.json() as InstallPayload;
-      if (!response.ok) throw new Error(data.error ?? 'Unable to load install.');
-      setItems(data.items); setReviews(data.reviews);
-      if (data.items.length) {
-        const selectedId = data.items[0].id;
-        setSelectedInstall(selectedId);
-        const athleteId = data.reviews[0]?.athleteId ?? '';
-        setActiveAthleteId(athleteId);
-        const athleteReview = data.reviews.find((review) => review.itemId === selectedId && review.athleteId === athleteId);
-        setAcknowledged(athleteReview ? [athleteReview.reviewed ? 'play' : '', athleteReview.assignment ? 'assignment' : '', athleteReview.note ? 'note' : ''].filter(Boolean) : []);
-      }
-      const athleteId = data.reviews[0]?.athleteId ?? '';
-      setCompleted(data.reviews.filter((review) => review.athleteId === athleteId && review.acknowledged).map((review) => review.itemId));
-    }).catch(() => onNotify('Saved install progress could not be restored.', 'warning'));
-    loadPlaybookData()
-      .then((saved) => setInstallPlays(saved.plays))
-      .catch(() => setInstallPlays([]));
-    fetch('/api/calendar-events', { cache: 'no-store' }).then(async (response) => await response.json() as { events?: CalendarEventRecord[] }).then((data) => setInstallEvents((data.events ?? []).filter((event) => event.eventType === 'install' || event.eventType === 'practice'))).catch(() => setInstallEvents([]));
-  }, [onNotify]);
-
-  const updateReview = async (step: 'play' | 'assignment' | 'note' | 'all') => {
-    if (!activeAthleteId) { onNotify('Add an athlete to this install before opening athlete view.', 'info'); return; }
-    try {
-      const response = await fetch('/api/install', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ itemId: selectedInstall, athleteId: activeAthleteId, step }) });
-      const data = await response.json() as InstallPayload;
-      if (!response.ok) throw new Error(data.error ?? 'Unable to update review.');
-      setItems(data.items); setReviews(data.reviews);
-      const athleteReview = data.reviews.find((review) => review.itemId === selectedInstall && review.athleteId === activeAthleteId);
-      setAcknowledged(athleteReview ? [athleteReview.reviewed ? 'play' : '', athleteReview.assignment ? 'assignment' : '', athleteReview.note ? 'note' : ''].filter(Boolean) : []);
-      setCompleted(data.reviews.filter((review) => review.athleteId === activeAthleteId && review.acknowledged).map((review) => review.itemId));
-    } catch (error) { onNotify(error instanceof Error ? error.message : 'Unable to update review.', 'warning'); }
-  };
-
-  const addInstallAssignment = () => {
-    onNotify('Choose a saved play, then use Add to install.', 'info');
-    onNavigate('Playbook');
-  };
-
-  const confirmNotification = async () => {
-    if (!pendingNotification) return;
-    const state = await loadWorkspaceState<{ reminders: string[] }>('install-reminders', { reminders: [] });
-    await saveWorkspaceState('install-reminders', { reminders: [...state.reminders, `${pendingNotification.label}: ${pendingNotification.recipient}`] });
-    onNotify(`${pendingNotification.label} sent to ${pendingNotification.recipient}.`);
-    setPendingNotification(null);
-  };
-
-  if (!selectedItem) return <section className="module-surface install-surface"><ModuleHeader eyebrow="Learning package" title="Install" description="Build, schedule, and track the current team learning package."><Button onClick={addInstallAssignment}><Plus /> Add first play</Button></ModuleHeader><div className="install-overview install-overview-empty"><div className="install-ring" style={{ '--install-progress': '0%' } as CSSProperties}><span>0%</span><small>team ready</small></div><div className="install-summary"><p className="eyebrow">Current progress</p><h2>No assignments in this package yet</h2><p>Add a saved play when it is ready to teach. Team progress will calculate from real athlete reviews.</p><div className="readiness-track big"><span style={{ width: '0%' }} /></div></div><div className="install-metrics"><div><strong>0</strong><span>Assignments</span></div><div><strong>0</strong><span>Reviews open</span></div><div><strong>{installEvents.length}</strong><span>Scheduled events</span></div></div></div><div className="install-layout install-empty-layout"><div className="install-main"><div className="install-toolbar"><div className="segmented-control"><button className="active" type="button">All</button><button disabled type="button">Offence</button><button disabled type="button">Defence</button><button disabled type="button">Special teams</button></div><Button disabled variant="outline"><CalendarDays /> This week</Button></div><div className="assignment-table"><div className="assignment-table-head"><span>Assignment</span><span>Group</span><span>Due</span><span>Completion</span><span /></div><div className="install-table-empty"><ClipboardList /><strong>No install assignments yet</strong><span>Open Playbook, choose a saved play, and select Add to install.</span><Button onClick={addInstallAssignment}><BookOpen /> Open Playbook</Button></div></div></div><aside className="install-rail"><section className="rail-card"><div className="rail-heading"><div><p className="eyebrow">Schedule</p><h3>Install plan</h3></div><CalendarDays /></div>{installEvents.length ? <div className="install-schedule">{installEvents.slice(0, 4).map((event) => <div key={event.id}><span>{new Date(event.startsAt).toLocaleDateString([], { weekday: 'short' }).toUpperCase()}</span><i /><p><strong>{event.title}</strong><small>{eventClock(event.startsAt).label} · {event.location || 'Location TBD'}</small></p></div>)}</div> : <div className="install-rail-empty"><CalendarDays /><strong>No install events scheduled</strong><span>Add practice or install time in Calendar.</span><Button onClick={() => onNavigate('Calendar')} variant="outline">Open calendar</Button></div>}</section></aside></div></section>;
-
-  return (
-    <section className="module-surface install-surface">
-      <ModuleHeader
-        eyebrow="Learning package"
-        title="Install"
-        description="Turn the weekly plan into clear, measurable learning for every athlete and unit."
-      >
-        <Button className="module-secondary" disabled={!reviews.length} onClick={() => setInstallMode((mode) => mode === 'Coach' ? 'Athlete' : 'Coach')} variant="outline"><Eye /> {installMode === 'Coach' ? 'Athlete view' : 'Coach tracking'}</Button>
-        <Button className="module-primary" onClick={addInstallAssignment}><Plus /> Add assignment</Button>
-      </ModuleHeader>
-
-      <div className="install-overview">
-        <div className="install-ring" style={{ '--install-progress': `${teamReadiness}%` } as CSSProperties}><span>{teamReadiness}%</span><small>team ready</small></div>
-        <div className="install-summary">
-          <p className="eyebrow">Current progress</p><h2>{acknowledgedReviews} of {reviews.length} assigned reviews complete</h2><p>{attentionAthletes.length} athletes still have at least one review to finish.</p>
-          <div className="readiness-track big"><span style={{ width: `${teamReadiness}%` }} /></div>
-        </div>
-        <div className="install-metrics"><div><strong>{completedReviewSteps}</strong><span>Review steps done</span></div><div><strong>{reviews.length - acknowledgedReviews}</strong><span>Reviews open</span></div><div><strong>{attentionAthletes.length}</strong><span>Need attention</span></div></div>
-      </div>
-
-      {installMode === 'Coach' ? <div className="install-layout">
-        <div className="install-main">
-          <div className="install-toolbar">
-            <div className="segmented-control">
-              {['All', 'Offence', 'Defence', 'Special teams'].map((item) => <button className={tab === item ? 'active' : ''} key={item} onClick={() => setTab(item)} type="button">{item}</button>)}
-            </div>
-            <Button onClick={() => onNotify('Showing assignments due this week.', 'info')} variant="outline"><CalendarDays /> This week</Button>
-          </div>
-          <div className="assignment-table">
-            <div className="assignment-table-head"><span>Assignment</span><span>Group</span><span>Due</span><span>Completion</span><span /></div>
-            {shown.map((item) => (
-              <div className={selectedInstall === item.id ? 'assignment-row selected' : 'assignment-row'} key={item.id}>
-                <button aria-label={`Open ${item.title} completion`} className="assignment-check status" onClick={() => setSelectedInstall(item.id)} type="button"><Eye /></button>
-                <span className={`assignment-type ${item.type.toLowerCase()}`}>{item.type === 'Film' ? <Film /> : item.type === 'Quiz' ? <ClipboardList /> : <BookOpen />}</span>
-                <div><strong>{item.title}</strong><small>{item.type} assignment</small></div>
-                <span>{item.group}</span><span>{item.due}</span>
-                <div className="row-progress"><span><i style={{ width: `${item.complete}%` }} /></span><b>{item.complete}%</b></div>
-                <Button aria-label={`Review ${item.title}`} onClick={() => setSelectedInstall(item.id)} size="icon-sm" variant="ghost"><ChevronRight /></Button>
-              </div>
-            ))}
-          </div>
-          <section className="install-review-detail">
-            <div className="analytics-head"><div><p className="eyebrow">Review verification</p><h3>{selectedItem.title}</h3><span>See exactly what every athlete opened, read, and acknowledged.</span></div><div><Button onClick={() => { const rows = [['Athlete','Position','Play reviewed','Assignment','Coach note','Acknowledged','Progress'], ...reviewRows.map((athlete) => [athlete[1], athlete[2], athlete[3], athlete[4], athlete[5], athlete[6], athlete[7]])]; downloadText('install-review.csv', rows.map((row) => row.map(quoteCsv).join(',')).join('\n'), 'text/csv;charset=utf-8'); onNotify('Install review exported.'); }} size="sm" variant="outline"><Download /> Export</Button><Button disabled={!attentionAthletes.length} onClick={() => setPendingNotification({ label: 'Install reminder', recipient: `${attentionAthletes.length} incomplete ${attentionAthletes.length === 1 ? 'athlete' : 'athletes'}` })} size="sm"><Mail /> Remind incomplete</Button></div></div>
-            <div className="review-matrix">
-              <div className="review-matrix-head"><span>Athlete</span><span>Play reviewed</span><span>Position assignment</span><span>Coach note</span><span>Acknowledged</span><span>Progress</span></div>
-              {reviewRows.map((athlete) => <div className="review-athlete" key={athlete[1] as string}><span><b className="roster-avatar">{athlete[0]}</b><i><strong>{athlete[1]}</strong><small>{athlete[2]}</small></i></span>{[athlete[3], athlete[4], athlete[5], athlete[6]].map((done, index) => <span className={done ? 'review-done' : 'review-pending'} key={index}>{done ? <CheckCircle2 /> : <Clock3 />}{done ? 'Done' : 'Pending'}</span>)}<span className="review-percent"><b>{athlete[7]}</b><i><em style={{ width: athlete[7] as string }} /></i></span></div>)}
-            </div>
-          </section>
-        </div>
-        <aside className="install-rail">
-          <section className="rail-card">
-            <div className="rail-heading"><div><p className="eyebrow">Needs attention</p><h3>{attentionAthletes.length} athletes behind</h3></div><AlertCircle className="text-[#c87927]" /></div>
-            {attentionAthletes.slice(0, 3).map((athlete) => <div className="attention-row" key={athlete.name}><span className="roster-avatar">{athlete.initials}</span><div><strong>{athlete.name}</strong><small>{athlete.pending} open {athlete.pending === 1 ? 'review' : 'reviews'}</small></div><Button onClick={() => setPendingNotification({ label: 'Install nudge', recipient: athlete.name })} size="xs" variant="outline">Nudge</Button></div>)}
-            <Button className="w-full" onClick={() => onNavigate('Athletes')} variant="ghost">View all athletes <ChevronRight /></Button>
-          </section>
-          <section className="rail-card">
-            <div className="rail-heading"><div><p className="eyebrow">Schedule</p><h3>Install plan</h3></div><CalendarDays /></div>
-            {installEvents.length ? <div className="install-schedule">{installEvents.slice(0, 4).map((event) => <div key={event.id}><span>{new Date(event.startsAt).toLocaleDateString([], { weekday: 'short' }).toUpperCase()}</span><i /><p><strong>{event.title}</strong><small>{eventClock(event.startsAt).label} · {event.location || 'Location TBD'}</small></p></div>)}</div> : <div className="channel-empty">No install or practice events scheduled.</div>}
-          </section>
-        </aside>
-      </div> : <div className="athlete-install-shell">
-        <aside className="athlete-install-list">
-          <div className="analytics-head"><div><p className="eyebrow">Your package</p><h3>Current install</h3></div><strong>{completed.length} / {items.length}</strong></div>
-          <div className="readiness-track"><span style={{ width: `${items.length ? Math.round(completed.length / items.length * 100) : 0}%` }} /></div>
-          {items.slice(0, 6).map((item) => <button className={selectedInstall === item.id ? 'active' : ''} key={item.id} onClick={() => { setSelectedInstall(item.id); const athleteReview = reviews.find((review) => review.itemId === item.id && review.athleteId === activeAthleteId); setAcknowledged(athleteReview ? [athleteReview.reviewed ? 'play' : '', athleteReview.assignment ? 'assignment' : '', athleteReview.note ? 'note' : ''].filter(Boolean) : []); }} type="button"><span className={`assignment-type ${item.type.toLowerCase()}`}>{item.type === 'Film' ? <Film /> : item.type === 'Quiz' ? <ClipboardList /> : <BookOpen />}</span><span><strong>{item.title}</strong><small>{item.group} · Due {item.due}</small></span>{completed.includes(item.id) ? <CheckCircle2 className="complete-icon" /> : <ChevronRight />}</button>)}
-        </aside>
-        <section className="athlete-install-review">
-          <header><div><Badge>PLAY · {selectedItem.group.toUpperCase()}</Badge><h2>{selectedItem.title}</h2><p>Review the play, your position assignment, and the coordinator note before acknowledging completion.</p></div><span className="position-pill large">{playerAssignment?.position ?? '—'}</span></header>
-          <div className="install-play-preview">{selectedPlay && ((selectedPlay.routes?.length ?? 0) + (selectedPlay.zones?.length ?? 0) + (selectedPlay.labels?.length ?? 0) > 0) ? <StudioPlayDiagram label={false} play={selectedPlay} /> : <div className="viewer-empty-state compact"><BookOpen /><strong>No play diagram attached</strong><span>Ask a coach to draw and save this play in Playbook.</span><Button onClick={() => onNavigate('Playbook')} size="sm" variant="outline">Open playbook</Button></div>}</div>
-          <div className="athlete-review-steps">
-            {[
-              ['play', 'Review the full play', 'Formation, motion, routes, and timing.', BookOpen],
-              ['assignment', `Read your ${playerAssignment?.position ?? 'position'} assignment`, playerAssignment ? `${playerAssignment.title}: ${playerAssignment.detail}` : 'No position assignment has been added yet.', CircleDot],
-              ['note', 'Read the coaching note', selectedPlay?.notes || 'No coaching note has been added yet.', MessageSquareText],
-            ].map(([id, title, detail, Icon]) => { const done = acknowledged.includes(id as string); return <button className={done ? 'done' : ''} key={id as string} onClick={() => void updateReview(id as 'play' | 'assignment' | 'note')} type="button"><span className="step-check">{done ? <Check /> : null}</span><span className="step-icon"><Icon /></span><span><strong>{title as string}</strong><small>{detail as string}</small></span><ChevronRight /></button>; })}
-          </div>
-          <div className="athlete-acknowledge"><div><Shield /><span><strong>Your acknowledgement is visible to coaches.</strong><small>It confirms you opened this play and reviewed the assignment and note for your position.</small></span></div><Button disabled={acknowledged.length < 3 && !completed.includes(selectedItem.id)} onClick={async () => { await updateReview('all'); onNotify(`${selectedItem.title} acknowledged.`); }}>{completed.includes(selectedItem.id) ? <><CheckCircle2 /> Acknowledged</> : 'Acknowledge play'}</Button></div>
-        </section>
-      </div>}
-      <Dialog onOpenChange={(open) => { if (!open) setPendingNotification(null); }} open={Boolean(pendingNotification)}><DialogContent className="athlete-dialog sm:max-w-[480px]"><DialogHeader><DialogTitle>Send this notification?</DialogTitle><DialogDescription>{pendingNotification ? `${pendingNotification.label} will be sent to ${pendingNotification.recipient}.` : ''}</DialogDescription></DialogHeader><div className="event-detail-copy"><Badge variant="outline"><Mail /> Confirmation required</Badge><p>You can cancel without changing any install records.</p></div><DialogFooter><Button onClick={() => setPendingNotification(null)} variant="outline">Cancel</Button><Button onClick={() => void confirmNotification().catch((error: unknown) => onNotify(error instanceof Error ? error.message : 'Unable to send the notification.', 'error'))}>Confirm and send <Send /></Button></DialogFooter></DialogContent></Dialog>
-    </section>
-  );
-}
 
 function SettingsView({ assetRevision, onAssetsChanged, onNavigate, onNotify, teamSettings, onTeamSettingsChange }: { assetRevision: number; onAssetsChanged: () => void; onNavigate: (view: string) => void; onNotify: Notify; teamSettings: TeamSettings; onTeamSettingsChange: (settings: TeamSettings) => void }) {
   const [saved, setSaved] = useState(false);

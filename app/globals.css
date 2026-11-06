@@ -1901,6 +1901,46 @@ html { background: #f4f7fb; }
 .pb-redesign [data-slot="button"]:not([data-variant="outline"]):not([data-variant="ghost"]):hover { border-color: #5c7faa; background: #3a679f; }
 .pb-context-actions > .pb-details-toggle.active { border-color: #4c6f98; background: #203b5d; box-shadow: none; }
 
+/* Install packages: one workspace for content, cadence, and review tracking. */
+.install-workspace { color: #dce8f4; }
+.install-workspace-header,.install-package-bar,.install-content > header,.install-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.install-workspace-header { margin-bottom: 24px; }
+.install-workspace h1 { margin: 0; font-size: 32px; letter-spacing: -.04em; }
+.install-workspace-header p { margin: 6px 0 0; color: #91a4b8; font-size: 13px; }
+.install-package-bar { flex-wrap: wrap; margin-bottom: 18px; border-block: 1px solid #293d52; padding: 15px 0; }
+.install-package-bar > label { display: grid; min-width: 260px; gap: 6px; color: #91a4b8; font-size: 11px; }
+.install-package-bar > div { display: flex; align-items: center; gap: 14px; color: #91a4b8; font-size: 12px; }
+.install-package-actions { margin-left: auto; }
+.install-state { border: 1px solid #3b5169; border-radius: 6px; padding: 4px 8px; color: #b9cce0; font-size: 11px; }
+.install-state.published { border-color: #347361; color: #82cfb6; }
+.install-core-layout { display: grid; min-height: 500px; grid-template-columns: 280px minmax(0,1fr); border: 1px solid #293d52; border-radius: 12px; overflow: hidden; }
+.install-play-list { border-right: 1px solid #293d52; background: #0b1929; padding: 14px; }
+.install-list-heading { margin-bottom: 14px; font-size: 13px; }
+.install-play-list > button { display: flex; width: 100%; align-items: center; gap: 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; padding: 13px 9px; color: #b8cadd; text-align: left; }
+.install-play-list > button:hover { background: #142941; }
+.install-play-list > button.active { border-color: #41648d; background: #1a3049; color: #eef5fd; }
+.install-play-list > button svg { width: 18px; flex-shrink: 0; }
+.install-play-list strong,.install-play-list small { display: block; }
+.install-play-list strong { font-size: 12px; }.install-play-list small { margin-top: 5px; color: #8a9fb6; font-size: 11px; }
+.install-content { min-width: 0; padding: 20px; background: #0c1a2b; }
+.install-content > header { margin-bottom: 18px; }.install-content h2 { margin: 0 0 5px; font-size: 21px; }.install-content > header span { color: #8ea4ba; font-size: 12px; }
+.install-real-diagram { max-width: 700px; margin-inline: auto; overflow: hidden; border: 1px solid #30475f; border-radius: 8px; }
+.install-real-diagram svg { display: block; width: 100%; height: auto; }
+.install-teaching { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-block: 20px; }
+.install-content h3 { margin: 0 0 12px; font-size: 14px; }.install-teaching article { margin-block: 10px; }.install-teaching strong { font-size: 12px; }
+.install-teaching p,.install-draft-note,.install-review-table > p { color: #91a4b8; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+.install-review-table { overflow-x: auto; border-top: 1px solid #293d52; padding-top: 20px; }
+.install-review-table table { width: 100%; border-collapse: collapse; font-size: 12px; }.install-review-table th,.install-review-table td { border-bottom: 1px solid #293d52; padding: 12px 10px; text-align: left; }.install-review-table th { color: #8198b1; }
+.install-honest-empty { display: grid; min-height: 200px; justify-items: center; align-content: center; gap: 10px; padding: 24px; text-align: center; }
+.install-honest-empty svg { width: 28px; color: #8198b1; }.install-honest-empty h2 { margin: 0; font-size: 20px; }.install-honest-empty p { max-width: 480px; margin: 0; color: #91a4b8; font-size: 13px; line-height: 1.6; }
+.install-feedback { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid #315b50; border-radius: 9px; background: #112c28; padding: 12px; color: #a0ddc9; font-size: 13px; }.install-feedback.error,.install-dialog-error { border-color: #79453d; background: #2e2025; color: #f4b4ab; }.install-dialog-error { border-radius: 7px; padding: 10px; font-size: 12px; }
+.install-loading { padding: 24px; color: #91a4b8; }.install-dialog { max-width: 580px; }
+.install-play-picker { max-height: 380px; overflow-y: auto; }.install-play-picker > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid #293d52; padding: 14px 0; }.install-play-picker strong,.install-play-picker small { display: block; }.install-play-picker strong { font-size: 13px; }.install-play-picker small { margin-top: 4px; color: #91a4b8; font-size: 11px; }
+.pb-lock-notice { position: absolute; z-index: 8; top: 10px; left: 10px; display: flex; align-items: center; gap: 7px; margin: 0; border: 1px solid #3a5069; border-radius: 7px; background: #102238; padding: 9px; color: #a7bdd4; font-size: 11px; }.pb-lock-notice svg { width: 14px; }
+.pb-book-actions i { display: none; }.pb-palette-body .pb-palette-action { display: none; }.pb-header-play-nav button:disabled { opacity: .3; cursor: not-allowed; }
+.app-shell:not(.dark) .install-workspace { color: #26374b; }.app-shell:not(.dark) :is(.install-play-list,.install-content) { background: #f5f8fb; }.app-shell:not(.dark) .install-play-list > button { color: #29415e; }.app-shell:not(.dark) .install-play-list > button.active { background: #dfeaf6; color: #16314f; }
+@media(max-width: 900px) { .install-core-layout { grid-template-columns: 1fr; }.install-play-list { border-right: 0; border-bottom: 1px solid #293d52; }.install-teaching { grid-template-columns: 1fr; }.install-package-bar > label { width: 100%; }.install-package-actions { margin-left: 0; }.install-content { padding: 14px; }.install-workspace-header { flex-wrap: wrap; } }
+
 @media (max-width: 1180px) {
   .pb-editor-tools button span { display: none; }
   .pb-edit-palette { width: min(690px,calc(100% - 26px)); }

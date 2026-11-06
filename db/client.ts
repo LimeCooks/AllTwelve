@@ -328,10 +328,6 @@ async function initialize(database: D1Database) {
     `INSERT OR IGNORE INTO games (id, team_id, opponent, kickoff_at, venue, status, home_away)
      VALUES ('game-hamilton-week-5', ?, 'Hamilton', '2026-09-18T19:30:00-03:00', 'Harbour Field', 'scheduled', 'home')`,
   ).bind(TEAM_ID).run());
-  await initializeStep('Ensuring the current install package', () => database.prepare(
-    `INSERT OR IGNORE INTO install_packages (id, team_id, game_id, name, unit, due_at, published_at)
-     VALUES ('install-week-5', ?, NULL, 'Current install', 'Team', '', NULL)`,
-  ).bind(TEAM_ID).run());
   await database.prepare('PRAGMA optimize').run();
 }
 
