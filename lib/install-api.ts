@@ -1,4 +1,4 @@
-import { getDatabase, TEAM_ID } from '@/db/client';
+import { getDatabase, type TeamDatabase } from '@/db/client';
 
 type PackageRow = { id: string; name: string; unit: string; due_at: string; published_at: string | null };
 type ItemRow = { id: string; play_id: string | null; title: string; unit: string | null; total: number; complete: number };
@@ -13,14 +13,14 @@ function packageFields(body: Record<string, unknown>) {
   return { name, unit, dueAt };
 }
 
-async function getPackage(database: D1Database, id: string) {
-  const row = await database.prepare('SELECT id, name, unit, due_at, published_at FROM install_packages WHERE id = ? AND team_id = ?').bind(id, TEAM_ID).first<PackageRow>();
+async function getPackage(database: TeamDatabase, id: string) {
+  const row = await database.prepare('SELECT id, name, unit, due_at, published_at FROM install_packages WHERE id = ? AND team_id = ?').bind(id, database.teamId).first<PackageRow>();
   if (!row) throw new Error('Install not found. Refresh and choose an existing install.');
   return row;
 }
 
-async function payload(database: D1Database, requestedId = '') {
-  const result = await database.prepare('SELECT id, name, unit, due_at, published_at FROM install_packages WHERE team_id = ? ORDER BY rowid DESC').bind(TEAM_ID).all<PackageRow>();
+async function payload(database: TeamDatabase, requestedId = '') {
+  const result = await database.prepare('SELECT id, name, unit, due_at, published_at FROM install_packages WHERE team_id = ? ORDER BY rowid DESC').bind(database.teamId).all<PackageRow>();
   const selected = requestedId ? result.results.find((row) => row.id === requestedId) : result.results[0];
   if (requestedId && !selected) throw new Error('Install not found.');
   const packageId = selected?.id ?? '';
@@ -31,7 +31,7 @@ async function payload(database: D1Database, requestedId = '') {
       WHERE i.package_id = ? GROUP BY i.id ORDER BY i.sort_order, i.id`).bind(packageId).all<ItemRow>(),
     database.prepare(`SELECT r.id, r.install_item_id, r.athlete_id, a.first_name, a.last_name, a.position, r.reviewed_at, r.assignment_acknowledged_at, r.note_acknowledged_at
       FROM athlete_reviews r JOIN athletes a ON a.id = r.athlete_id JOIN install_items i ON i.id = r.install_item_id
-      WHERE i.package_id = ? AND a.team_id = ? ORDER BY a.last_name, a.first_name`).bind(packageId, TEAM_ID).all<ReviewRow>(),
+      WHERE i.package_id = ? AND a.team_id = ? ORDER BY a.last_name, a.first_name`).bind(packageId, database.teamId).all<ReviewRow>(),
   ]);
   const pack = (row: PackageRow) => ({ id: row.id, name: row.name, unit: row.unit, dueAt: row.due_at, publishedAt: row.published_at });
   return {
@@ -54,7 +54,7 @@ export async function POST(request: Request) {
     const database = await getDatabase();
     if (body.kind === 'package') {
       const fields = packageFields(body), id = crypto.randomUUID();
-      await database.prepare('INSERT INTO install_packages (id, team_id, game_id, name, unit, due_at, published_at) VALUES (?, ?, NULL, ?, ?, ?, NULL)').bind(id, TEAM_ID, fields.name, fields.unit, fields.dueAt).run();
+      await database.prepare('INSERT INTO install_packages (id, team_id, game_id, name, unit, due_at, published_at) VALUES (?, ?, NULL, ?, ?, ?, NULL)').bind(id, database.teamId, fields.name, fields.unit, fields.dueAt).run();
       return Response.json(await payload(database, id), { status: 201 });
     }
     const packageId = text(body.packageId);
@@ -63,7 +63,7 @@ export async function POST(request: Request) {
     if (install.published_at) throw new Error('Published installs are locked. Create another install for new teaching material.');
     const playIds = Array.from(new Set(Array.isArray(body.playIds) ? body.playIds.map(text) : [text(body.playId)]));
     if (!playIds.length || playIds.length > 200 || playIds.some((id) => !id)) throw new Error('Choose 1–200 saved plays.');
-    const selectedPlays = await Promise.all(playIds.map((id) => database.prepare('SELECT id, name, unit FROM plays WHERE id = ? AND team_id = ?').bind(id, TEAM_ID).first<{ id: string; name: string; unit: string }>()));
+    const selectedPlays = await Promise.all(playIds.map((id) => database.prepare('SELECT id, name, unit FROM plays WHERE id = ? AND team_id = ?').bind(id, database.teamId).first<{ id: string; name: string; unit: string }>()));
     if (selectedPlays.some((play) => !play)) throw new Error('One or more saved plays could not be found.');
     if (selectedPlays.some((play) => install.unit !== 'Team' && install.unit !== play!.unit)) throw new Error(`This install is for ${install.unit}. Choose matching plays or a Team install.`);
     await database.batch(selectedPlays.map((play) => database.prepare(`INSERT INTO install_items (id, package_id, play_id, title, item_type, position_group, sort_order)
@@ -82,19 +82,19 @@ export async function PATCH(request: Request) {
       if (install.published_at) return Response.json(await payload(database, packageId));
       const items = await database.prepare('SELECT id, position_group FROM install_items WHERE package_id = ?').bind(packageId).all<{ id: string; position_group: string }>();
       if (!items.results.length) throw new Error('Add at least one play before publishing.');
-      const athletes = await database.prepare('SELECT id, unit FROM athletes WHERE team_id = ?').bind(TEAM_ID).all<{ id: string; unit: string }>();
+      const athletes = await database.prepare('SELECT id, unit FROM athletes WHERE team_id = ?').bind(database.teamId).all<{ id: string; unit: string }>();
       const recipients = items.results.flatMap((item) => athletes.results.filter((athlete) => item.position_group === 'Team' || item.position_group === athlete.unit).map((athlete) => ({ item, athlete })));
       if (items.results.some((item) => !recipients.some((entry) => entry.item.id === item.id))) throw new Error('Every play needs at least one matching roster athlete before publishing.');
       await database.batch([
         ...recipients.map(({ item, athlete }) => database.prepare('INSERT OR IGNORE INTO athlete_reviews (id, install_item_id, athlete_id, reviewed_at, assignment_acknowledged_at, note_acknowledged_at) VALUES (?, ?, ?, NULL, NULL, NULL)').bind(crypto.randomUUID(), item.id, athlete.id)),
-        database.prepare('UPDATE install_packages SET published_at = ? WHERE id = ? AND team_id = ?').bind(new Date().toISOString(), packageId, TEAM_ID),
+        database.prepare('UPDATE install_packages SET published_at = ? WHERE id = ? AND team_id = ?').bind(new Date().toISOString(), packageId, database.teamId),
       ]);
     } else if (body.kind === 'package') {
       if (install.published_at) throw new Error('Published installs cannot be edited.');
       const fields = packageFields(body);
       const incompatible = await database.prepare('SELECT id FROM install_items WHERE package_id = ? AND position_group != ? LIMIT 1').bind(packageId, fields.unit).first();
       if (fields.unit !== 'Team' && incompatible) throw new Error('Remove plays from other units before changing the install unit.');
-      await database.prepare('UPDATE install_packages SET name = ?, unit = ?, due_at = ? WHERE id = ? AND team_id = ?').bind(fields.name, fields.unit, fields.dueAt, packageId, TEAM_ID).run();
+      await database.prepare('UPDATE install_packages SET name = ?, unit = ?, due_at = ? WHERE id = ? AND team_id = ?').bind(fields.name, fields.unit, fields.dueAt, packageId, database.teamId).run();
     } else {
       return Response.json({ error: 'Player acknowledgements require a linked, authenticated athlete account. Coach previews are read-only.' }, { status: 403 });
     }
@@ -113,7 +113,7 @@ export async function DELETE(request: Request) {
       return Response.json(await payload(database, packageId));
     }
     if (body.kind !== 'package') throw new Error('Choose an install or play to remove.');
-    await database.prepare('DELETE FROM install_packages WHERE id = ? AND team_id = ?').bind(packageId, TEAM_ID).run();
+    await database.prepare('DELETE FROM install_packages WHERE id = ? AND team_id = ?').bind(packageId, database.teamId).run();
     return Response.json(await payload(database));
   } catch (error) { return failure(error); }
 }

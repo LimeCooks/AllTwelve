@@ -1,4 +1,4 @@
-import { getDatabase, TEAM_ID } from '@/db/client';
+import { getDatabase, type TeamDatabase } from '@/db/client';
 
 type AssetRow = {
   id: string;
@@ -87,8 +87,8 @@ function presentClip(row: ClipRow) {
   };
 }
 
-async function payload(database: D1Database) {
-  const assets = await database.prepare(`${assetSelect} WHERE a.team_id = ? ORDER BY a.created_at DESC`).bind(TEAM_ID).all<AssetRow>();
+async function payload(database: TeamDatabase) {
+  const assets = await database.prepare(`${assetSelect} WHERE a.team_id = ? ORDER BY a.created_at DESC`).bind(database.teamId).all<AssetRow>();
   const activeAsset = assets.results[0] ?? null;
   const clips = activeAsset
     ? await database.prepare(`${clipSelect} WHERE c.film_asset_id = ? ORDER BY c.clip_number`).bind(activeAsset.id).all<ClipRow>()
@@ -114,23 +114,23 @@ export async function POST(request: Request) {
       const storageKey = text(body.storageKey);
       const title = text(body.title, 'Uploaded game film');
       if (!storageKey) throw new Error('A stored video is required.');
-      const existing = await database.prepare('SELECT id FROM film_assets WHERE team_id = ? AND storage_key = ?').bind(TEAM_ID, storageKey).first<{ id: string }>();
+      const existing = await database.prepare('SELECT id FROM film_assets WHERE team_id = ? AND storage_key = ?').bind(database.teamId, storageKey).first<{ id: string }>();
       const id = existing?.id ?? crypto.randomUUID();
       if (existing) {
         await database.prepare("UPDATE film_assets SET title = ?, duration_seconds = ?, status = 'ready', game_id = 'game-hamilton-week-5' WHERE id = ? AND team_id = ?")
-          .bind(title, Math.max(0, Math.round(number(body.durationSeconds))), id, TEAM_ID).run();
+          .bind(title, Math.max(0, Math.round(number(body.durationSeconds))), id, database.teamId).run();
       } else {
         await database.prepare(
           `INSERT INTO film_assets (id, team_id, game_id, title, storage_key, duration_seconds, status, created_at)
            VALUES (?, ?, 'game-hamilton-week-5', ?, ?, ?, 'ready', ?)`,
-        ).bind(id, TEAM_ID, title, storageKey, Math.max(0, Math.round(number(body.durationSeconds))), new Date().toISOString()).run();
+        ).bind(id, database.teamId, title, storageKey, Math.max(0, Math.round(number(body.durationSeconds))), new Date().toISOString()).run();
       }
       return Response.json(await payload(database), { status: existing ? 200 : 201 });
     }
     if (action === 'upsertClip') {
       const assetId = text(body.assetId);
       if (!assetId) throw new Error('Upload film before charting clips.');
-      const asset = await database.prepare('SELECT id FROM film_assets WHERE id = ? AND team_id = ?').bind(assetId, TEAM_ID).first<{ id: string }>();
+      const asset = await database.prepare('SELECT id FROM film_assets WHERE id = ? AND team_id = ?').bind(assetId, database.teamId).first<{ id: string }>();
       if (!asset) return Response.json({ error: 'Film record not found.' }, { status: 404 });
       const clipId = text(body.id) || crypto.randomUUID();
       const existing = await database.prepare('SELECT id FROM film_clips WHERE id = ? AND film_asset_id = ?').bind(clipId, assetId).first<{ id: string }>();
@@ -173,9 +173,9 @@ export async function DELETE(request: Request) {
     if (clipId) {
       await database.prepare(
         `DELETE FROM film_clips WHERE id = ? AND film_asset_id IN (SELECT id FROM film_assets WHERE team_id = ?)`,
-      ).bind(clipId, TEAM_ID).run();
+      ).bind(clipId, database.teamId).run();
     } else {
-      await database.prepare('DELETE FROM film_assets WHERE id = ? AND team_id = ?').bind(assetId, TEAM_ID).run();
+      await database.prepare('DELETE FROM film_assets WHERE id = ? AND team_id = ?').bind(assetId, database.teamId).run();
     }
     return Response.json(await payload(database));
   } catch (error) {

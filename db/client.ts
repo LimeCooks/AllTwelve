@@ -1,4 +1,7 @@
 import { env } from 'cloudflare:workers';
+import { isPrototype, requestIdentity } from '@/lib/request-identity';
+import { scopedDatabase, WorkspaceAccessError } from '@/lib/workspace-identity';
+export type { TeamDatabase } from '@/lib/workspace-identity';
 
 const TEAM_ID = 'team-north-shore-2026';
 
@@ -198,37 +201,64 @@ const bootstrapStatements = [
 
 let ready: Promise<void> | undefined;
 
-async function initializeStep(label: string, work: () => Promise<unknown>) {
-  try {
-    await work();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${label}: ${message}`);
+export async function getRawDatabase() {
+  const database = (env as unknown as { DB?: D1Database }).DB;
+  if (!database) throw new Error('The database binding is unavailable.');
+  if (isPrototype()) {
+    ready ??= initialize(database).catch((error) => {
+      ready = undefined;
+      throw error;
+    });
+    await ready;
   }
+  return database;
 }
 
-export function getDatabase() {
-  const database = (env as unknown as { DB?: D1Database }).DB;
-  if (!database) throw new Error('The local D1 database binding is unavailable.');
-  ready ??= initialize(database);
-  return ready.then(() => database);
+export async function getDatabase() {
+  const identity = await requestIdentity();
+  const database = await getRawDatabase();
+  if (isPrototype()) return scopedDatabase(database, TEAM_ID);
+  const owner = await database
+    .prepare('SELECT team_id FROM workspace_owners WHERE user_id = ?')
+    .bind(identity.id)
+    .first<{ team_id: string }>();
+  if (!owner)
+    throw new WorkspaceAccessError('Create your team to continue.', 409);
+  return scopedDatabase(database, owner.team_id);
 }
 
 async function initialize(database: D1Database) {
   await database.prepare('PRAGMA foreign_keys = ON').run();
-  await database.prepare('CREATE TABLE IF NOT EXISTS app_migrations (id TEXT PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL)').run();
-  for (const statement of bootstrapStatements.slice(0, 2)) await database.prepare(statement).run();
+  await database
+    .prepare(
+      'CREATE TABLE IF NOT EXISTS app_migrations (id TEXT PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL)',
+    )
+    .run();
+  for (const statement of bootstrapStatements.slice(0, 2))
+    await database.prepare(statement).run();
 
-  const optionalFieldsMigration = await database.prepare('SELECT id FROM app_migrations WHERE id = ?').bind('0001_optional_athlete_fields').first();
+  const optionalFieldsMigration = await database
+    .prepare('SELECT id FROM app_migrations WHERE id = ?')
+    .bind('0001_optional_athlete_fields')
+    .first();
   if (!optionalFieldsMigration) {
-    const columns = await database.prepare('PRAGMA table_info(athletes)').all<{ name: string; notnull: number }>();
-    const numberColumn = columns.results.find((column) => column.name === 'number');
-    const emailColumn = columns.results.find((column) => column.name === 'email');
+    const columns = await database
+      .prepare('PRAGMA table_info(athletes)')
+      .all<{ name: string; notnull: number }>();
+    const numberColumn = columns.results.find(
+      (column) => column.name === 'number',
+    );
+    const emailColumn = columns.results.find(
+      (column) => column.name === 'email',
+    );
     if (numberColumn?.notnull === 1 || emailColumn?.notnull === 0) {
-      await database.prepare('ALTER TABLE athletes RENAME TO athletes_legacy').run();
+      await database
+        .prepare('ALTER TABLE athletes RENAME TO athletes_legacy')
+        .run();
       await database.prepare(bootstrapStatements[1]).run();
-      await database.prepare(
-        `INSERT INTO athletes (
+      await database
+        .prepare(
+          `INSERT INTO athletes (
           id, team_id, number, first_name, last_name, position, unit, graduation_year,
           height, weight_lb, status, eligibility, attendance_percent, install_percent,
           email, phone, staff_note, created_at, updated_at
@@ -236,98 +266,214 @@ async function initialize(database: D1Database) {
           height, weight_lb, status, eligibility, attendance_percent, install_percent,
           COALESCE(NULLIF(email, ''), lower(replace(first_name || '.' || last_name, ' ', '')) || '+' || id || '@local.chalktalk'),
           phone, staff_note, created_at, updated_at FROM athletes_legacy`,
-      ).run();
+        )
+        .run();
       await database.prepare('DROP TABLE athletes_legacy').run();
     }
-    await database.prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)').bind('0001_optional_athlete_fields', new Date().toISOString()).run();
+    await database
+      .prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)')
+      .bind('0001_optional_athlete_fields', new Date().toISOString())
+      .run();
   }
-  for (const statement of bootstrapStatements.slice(2)) await database.prepare(statement).run();
+  for (const statement of bootstrapStatements.slice(2))
+    await database.prepare(statement).run();
 
-  const connectedPlaybooksMigration = await database.prepare('SELECT id FROM app_migrations WHERE id = ?').bind('0003_connected_playbooks').first();
+  const connectedPlaybooksMigration = await database
+    .prepare('SELECT id FROM app_migrations WHERE id = ?')
+    .bind('0003_connected_playbooks')
+    .first();
   if (!connectedPlaybooksMigration) {
-    const playColumns = await database.prepare('PRAGMA table_info(plays)').all<{ name: string }>();
+    const playColumns = await database
+      .prepare('PRAGMA table_info(plays)')
+      .all<{ name: string }>();
     if (!playColumns.results.some((column) => column.name === 'playbook_id')) {
-      await database.prepare('ALTER TABLE plays ADD COLUMN playbook_id TEXT REFERENCES playbooks(id) ON DELETE CASCADE').run();
+      await database
+        .prepare(
+          'ALTER TABLE plays ADD COLUMN playbook_id TEXT REFERENCES playbooks(id) ON DELETE CASCADE',
+        )
+        .run();
     }
     if (!playColumns.results.some((column) => column.name === 'category')) {
-      await database.prepare("ALTER TABLE plays ADD COLUMN category TEXT NOT NULL DEFAULT 'Uncategorized'").run();
+      await database
+        .prepare(
+          "ALTER TABLE plays ADD COLUMN category TEXT NOT NULL DEFAULT 'Uncategorized'",
+        )
+        .run();
     }
-    await database.prepare('CREATE INDEX IF NOT EXISTS idx_plays_playbook_category ON plays(playbook_id, category)').run();
-    await database.prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)').bind('0003_connected_playbooks', new Date().toISOString()).run();
+    await database
+      .prepare(
+        'CREATE INDEX IF NOT EXISTS idx_plays_playbook_category ON plays(playbook_id, category)',
+      )
+      .run();
+    await database
+      .prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)')
+      .bind('0003_connected_playbooks', new Date().toISOString())
+      .run();
   }
 
-  await database.prepare(
-    `INSERT OR IGNORE INTO teams (id, name, short_name, season, created_at)
+  await database
+    .prepare(
+      `INSERT OR IGNORE INTO teams (id, name, short_name, season, created_at)
      VALUES (?, ?, ?, ?, ?)`,
-  ).bind(TEAM_ID, 'North Shore Wolves', 'North Shore', '2026', '2026-08-29T00:00:00.000Z').run();
+    )
+    .bind(
+      TEAM_ID,
+      'North Shore Wolves',
+      'North Shore',
+      '2026',
+      '2026-08-29T00:00:00.000Z',
+    )
+    .run();
 
-  const demoRosterMigration = await database.prepare('SELECT id FROM app_migrations WHERE id = ?').bind('0005_remove_demo_roster').first();
+  const demoRosterMigration = await database
+    .prepare('SELECT id FROM app_migrations WHERE id = ?')
+    .bind('0005_remove_demo_roster')
+    .first();
   if (!demoRosterMigration) {
-    await database.prepare(
-      `DELETE FROM athletes WHERE team_id = ? AND id IN (
+    await database
+      .prepare(
+        `DELETE FROM athletes WHERE team_id = ? AND id IN (
         'ath-jordan-lee', 'ath-marcus-brown', 'ath-noah-tremblay', 'ath-liam-chen',
         'ath-andre-joseph', 'ath-evan-macdonald', 'ath-cole-fraser', 'ath-sam-okafor',
         'ath-jay-ahmed', 'ath-ravi-patel', 'ath-aiden-peters', 'ath-taj-singh',
         'ath-michel-savoie', 'ath-ben-clarke', 'ath-malik-white'
       )`,
-    ).bind(TEAM_ID).run();
-    await database.prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)').bind('0005_remove_demo_roster', new Date().toISOString()).run();
+      )
+      .bind(TEAM_ID)
+      .run();
+    await database
+      .prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)')
+      .bind('0005_remove_demo_roster', new Date().toISOString())
+      .run();
   }
 
-  const cleanRosterMigration = await database.prepare('SELECT id FROM app_migrations WHERE id = ?').bind('0006_clear_legacy_roster').first();
+  const cleanRosterMigration = await database
+    .prepare('SELECT id FROM app_migrations WHERE id = ?')
+    .bind('0006_clear_legacy_roster')
+    .first();
   if (!cleanRosterMigration) {
-    await database.prepare('DELETE FROM athletes WHERE team_id = ?').bind(TEAM_ID).run();
-    await database.prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)').bind('0006_clear_legacy_roster', new Date().toISOString()).run();
+    await database
+      .prepare('DELETE FROM athletes WHERE team_id = ?')
+      .bind(TEAM_ID)
+      .run();
+    await database
+      .prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)')
+      .bind('0006_clear_legacy_roster', new Date().toISOString())
+      .run();
   }
 
-  const cleanMessagesMigration = await database.prepare('SELECT id FROM app_migrations WHERE id = ?').bind('0007_clear_demo_messages').first();
+  const cleanMessagesMigration = await database
+    .prepare('SELECT id FROM app_migrations WHERE id = ?')
+    .bind('0007_clear_demo_messages')
+    .first();
   if (!cleanMessagesMigration) {
-    await database.prepare("DELETE FROM workspace_state WHERE team_id = ? AND state_key IN ('message-centre', 'messages-team')").bind(TEAM_ID).run();
-    await database.prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)').bind('0007_clear_demo_messages', new Date().toISOString()).run();
+    await database
+      .prepare(
+        "DELETE FROM workspace_state WHERE team_id = ? AND state_key IN ('message-centre', 'messages-team')",
+      )
+      .bind(TEAM_ID)
+      .run();
+    await database
+      .prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)')
+      .bind('0007_clear_demo_messages', new Date().toISOString())
+      .run();
   }
 
-  const cleanCalendarMigration = await database.prepare('SELECT id FROM app_migrations WHERE id = ?').bind('0008_remove_demo_calendar').first();
+  const cleanCalendarMigration = await database
+    .prepare('SELECT id FROM app_migrations WHERE id = ?')
+    .bind('0008_remove_demo_calendar')
+    .first();
   if (!cleanCalendarMigration) {
-    await database.prepare(
-      `DELETE FROM calendar_events WHERE team_id = ? AND id IN (
+    await database
+      .prepare(
+        `DELETE FROM calendar_events WHERE team_id = ? AND id IN (
         'calendar-film-review', 'calendar-base-install', 'calendar-full-pads',
         'calendar-situational-practice', 'calendar-hamilton-game', 'calendar-staff-grading'
       )`,
-    ).bind(TEAM_ID).run();
-    await database.prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)').bind('0008_remove_demo_calendar', new Date().toISOString()).run();
+      )
+      .bind(TEAM_ID)
+      .run();
+    await database
+      .prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)')
+      .bind('0008_remove_demo_calendar', new Date().toISOString())
+      .run();
   }
 
-  const cleanQaCalendarMigration = await database.prepare('SELECT id FROM app_migrations WHERE id = ?').bind('0009_remove_qa_calendar').first();
+  const cleanQaCalendarMigration = await database
+    .prepare('SELECT id FROM app_migrations WHERE id = ?')
+    .bind('0009_remove_qa_calendar')
+    .first();
   if (!cleanQaCalendarMigration) {
-    await database.prepare(
-      `DELETE FROM calendar_events WHERE team_id = ? AND id IN (
+    await database
+      .prepare(
+        `DELETE FROM calendar_events WHERE team_id = ? AND id IN (
         'cfa5f7fc-e8b0-4585-8e38-f6cf2d46b9cb',
         'bf71ffb2-5806-4b2f-baa5-6dce99d4a769'
       )`,
-    ).bind(TEAM_ID).run();
-    await database.prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)').bind('0009_remove_qa_calendar', new Date().toISOString()).run();
+      )
+      .bind(TEAM_ID)
+      .run();
+    await database
+      .prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)')
+      .bind('0009_remove_qa_calendar', new Date().toISOString())
+      .run();
   }
 
-  const cleanInstallMigration = await database.prepare('SELECT id FROM app_migrations WHERE id = ?').bind('0010_remove_demo_install').first();
+  const cleanInstallMigration = await database
+    .prepare('SELECT id FROM app_migrations WHERE id = ?')
+    .bind('0010_remove_demo_install')
+    .first();
   if (!cleanInstallMigration) {
-    await database.prepare("DELETE FROM install_items WHERE package_id = 'install-week-5'").run();
-    await database.prepare("UPDATE install_packages SET game_id = NULL, name = 'Current install', due_at = '', published_at = NULL WHERE id = 'install-week-5' AND team_id = ?").bind(TEAM_ID).run();
-    await database.prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)').bind('0010_remove_demo_install', new Date().toISOString()).run();
+    await database
+      .prepare("DELETE FROM install_items WHERE package_id = 'install-week-5'")
+      .run();
+    await database
+      .prepare(
+        "UPDATE install_packages SET game_id = NULL, name = 'Current install', due_at = '', published_at = NULL WHERE id = 'install-week-5' AND team_id = ?",
+      )
+      .bind(TEAM_ID)
+      .run();
+    await database
+      .prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)')
+      .bind('0010_remove_demo_install', new Date().toISOString())
+      .run();
   }
 
-  const cleanPlaybookMigration = await database.prepare('SELECT id FROM app_migrations WHERE id = ?').bind('0011_remove_demo_playbooks').first();
+  const cleanPlaybookMigration = await database
+    .prepare('SELECT id FROM app_migrations WHERE id = ?')
+    .bind('0011_remove_demo_playbooks')
+    .first();
   if (!cleanPlaybookMigration) {
-    await database.prepare("DELETE FROM depth_charts WHERE team_id = ? AND id = 'depth-offence-doubles'").bind(TEAM_ID).run();
-    await database.prepare("DELETE FROM plays WHERE team_id = ? AND id IN ('red-24','mesh-switch','northern-lights','boundary-sail','ace-counter','doubles-mesh','orbit-screen','empty-smoke','max-sail','qb-draw','sprint-flood','empty-power','boundary-slip','trips-glance','bunch-wheel','heavy-toss','doubles-stick','ace-play-action')").bind(TEAM_ID).run();
-    await database.prepare("DELETE FROM formations WHERE team_id = ? AND id IN ('formation-offence-doubles','formation-offence-ace','formation-offence-trips-open','formation-offence-empty','formation-offence-tight-bunch','formation-offence-heavy')").bind(TEAM_ID).run();
-    await database.prepare("DELETE FROM playbooks WHERE team_id = ? AND id IN ('offence','defence','special-teams','scout','2025-offence')").bind(TEAM_ID).run();
-    await database.prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)').bind('0011_remove_demo_playbooks', new Date().toISOString()).run();
+    await database
+      .prepare(
+        "DELETE FROM depth_charts WHERE team_id = ? AND id = 'depth-offence-doubles'",
+      )
+      .bind(TEAM_ID)
+      .run();
+    await database
+      .prepare(
+        "DELETE FROM plays WHERE team_id = ? AND id IN ('red-24','mesh-switch','northern-lights','boundary-sail','ace-counter','doubles-mesh','orbit-screen','empty-smoke','max-sail','qb-draw','sprint-flood','empty-power','boundary-slip','trips-glance','bunch-wheel','heavy-toss','doubles-stick','ace-play-action')",
+      )
+      .bind(TEAM_ID)
+      .run();
+    await database
+      .prepare(
+        "DELETE FROM formations WHERE team_id = ? AND id IN ('formation-offence-doubles','formation-offence-ace','formation-offence-trips-open','formation-offence-empty','formation-offence-tight-bunch','formation-offence-heavy')",
+      )
+      .bind(TEAM_ID)
+      .run();
+    await database
+      .prepare(
+        "DELETE FROM playbooks WHERE team_id = ? AND id IN ('offence','defence','special-teams','scout','2025-offence')",
+      )
+      .bind(TEAM_ID)
+      .run();
+    await database
+      .prepare('INSERT INTO app_migrations (id, applied_at) VALUES (?, ?)')
+      .bind('0011_remove_demo_playbooks', new Date().toISOString())
+      .run();
   }
 
-  await initializeStep('Seeding the Week 5 game', () => database.prepare(
-    `INSERT OR IGNORE INTO games (id, team_id, opponent, kickoff_at, venue, status, home_away)
-     VALUES ('game-hamilton-week-5', ?, 'Hamilton', '2026-09-18T19:30:00-03:00', 'Harbour Field', 'scheduled', 'home')`,
-  ).bind(TEAM_ID).run());
   await database.prepare('PRAGMA optimize').run();
 }
 

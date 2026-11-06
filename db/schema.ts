@@ -9,6 +9,12 @@ export const teams = sqliteTable('teams', {
   createdAt: text('created_at').notNull(),
 });
 
+export const workspaceOwners = sqliteTable('workspace_owners', {
+  userId: text('user_id').primaryKey(),
+  teamId: text('team_id').notNull().references(() => teams.id, { onDelete: 'cascade' }),
+  createdAt: text('created_at').notNull(),
+}, (table) => [uniqueIndex('idx_workspace_owner_team').on(table.teamId)]);
+
 export const workspaceState = sqliteTable('workspace_state', {
   id: text('id').primaryKey(),
   teamId: text('team_id').notNull().references(() => teams.id, { onDelete: 'cascade' }),

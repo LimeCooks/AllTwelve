@@ -1,4 +1,4 @@
-import { getDatabase, TEAM_ID } from '@/db/client';
+import { getDatabase, type TeamDatabase } from '@/db/client';
 import { validatePlayDiagram } from '@/lib/validate-play';
 import { startingPlayers } from '@/lib/play-designer';
 
@@ -114,7 +114,7 @@ function validFamily(value: unknown) {
   );
 }
 
-async function payload(database: D1Database) {
+async function payload(database: TeamDatabase) {
   const [bookResult, formationResult, playResult, assignmentResult] =
     await Promise.all([
       database
@@ -124,7 +124,7 @@ async function payload(database: D1Database) {
        FROM playbooks b LEFT JOIN plays p ON p.playbook_id = b.id
        WHERE b.team_id = ? GROUP BY b.id ORDER BY b.archived, b.created_at`,
         )
-        .bind(TEAM_ID)
+        .bind(database.teamId)
         .all<Record<string, string | number>>(),
       database
         .prepare(
@@ -132,7 +132,7 @@ async function payload(database: D1Database) {
        FROM formations f LEFT JOIN plays p ON p.formation_id = f.id
        WHERE f.team_id = ? GROUP BY f.id ORDER BY f.created_at`,
         )
-        .bind(TEAM_ID)
+        .bind(database.teamId)
         .all<Record<string, string | number>>(),
       database
         .prepare(
@@ -142,7 +142,7 @@ async function payload(database: D1Database) {
        FROM plays p LEFT JOIN formations f ON f.id = p.formation_id
        WHERE p.team_id = ? ORDER BY p.created_at`,
         )
-        .bind(TEAM_ID)
+        .bind(database.teamId)
         .all<PlayRow>(),
       database
         .prepare(
@@ -150,7 +150,7 @@ async function payload(database: D1Database) {
        FROM play_assignments a JOIN plays p ON p.id = a.play_id
        WHERE p.team_id = ? ORDER BY a.play_id, a.sort_order`,
         )
-        .bind(TEAM_ID)
+        .bind(database.teamId)
         .all<AssignmentRow>(),
     ]);
 
@@ -245,7 +245,7 @@ export async function POST(request: Request) {
       const sourceId = text(body.id);
       const source = await database
         .prepare('SELECT id, name FROM plays WHERE id = ? AND team_id = ?')
-        .bind(sourceId, TEAM_ID)
+        .bind(sourceId, database.teamId)
         .first<{ id: string; name: string }>();
       if (!source) throw new Error('Play not found.');
       const id = crypto.randomUUID();
@@ -265,7 +265,7 @@ export async function POST(request: Request) {
           .prepare(
             `INSERT INTO plays (id, team_id, playbook_id, formation_id, name, unit, category, family, concept, diagram_json, notes, created_at, updated_at) SELECT ?, team_id, playbook_id, formation_id, ?, unit, category, family, concept, diagram_json, notes, ?, ? FROM plays WHERE id = ? AND team_id = ?`,
           )
-          .bind(id, `${source.name} — copy`, now, now, sourceId, TEAM_ID),
+          .bind(id, `${source.name} — copy`, now, now, sourceId, database.teamId),
         ...sourceAssignments.results.map((assignment) =>
           database
             .prepare(
@@ -297,7 +297,7 @@ export async function POST(request: Request) {
           `INSERT INTO playbooks (id, team_id, name, side, archived, created_at, updated_at)
          VALUES (?, ?, ?, ?, 0, ?, ?)`,
         )
-        .bind(id, TEAM_ID, name, body.side, now, now)
+        .bind(id, database.teamId, name, body.side, now, now)
         .run();
       return Response.json(await payload(database), { status: 201 });
     }
@@ -311,7 +311,7 @@ export async function POST(request: Request) {
       const id = crypto.randomUUID();
       const book = await database
         .prepare('SELECT id, side FROM playbooks WHERE id = ? AND team_id = ?')
-        .bind(playbookId, TEAM_ID)
+        .bind(playbookId, database.teamId)
         .first<{ id: string; side: string }>();
       if (!book) throw new Error('Playbook not found.');
       const formation = formationId
@@ -319,7 +319,7 @@ export async function POST(request: Request) {
             .prepare(
               'SELECT id, unit, layout_json FROM formations WHERE id = ? AND team_id = ?',
             )
-            .bind(formationId, TEAM_ID)
+            .bind(formationId, database.teamId)
             .first<{ id: string; unit: string; layout_json: string }>()
         : null;
       if (formationId && !formation) throw new Error('Formation not found.');
@@ -338,7 +338,7 @@ export async function POST(request: Request) {
         )
         .bind(
           id,
-          TEAM_ID,
+          database.teamId,
           playbookId,
           formationId,
           name,
@@ -407,7 +407,7 @@ export async function POST(request: Request) {
         )
         .bind(
           id,
-          TEAM_ID,
+          database.teamId,
           JSON.stringify([name, scope, opponent, packageName]),
           unit,
           personnel,
@@ -442,7 +442,7 @@ export async function PUT(request: Request) {
         .prepare(
           'SELECT unit, layout_json FROM formations WHERE id = ? AND team_id = ?',
         )
-        .bind(id, TEAM_ID)
+        .bind(id, database.teamId)
         .first<{ unit: string; layout_json: string }>();
       if (!prior) throw new Error('Formation not found.');
       const unit = text(body.unit, prior.unit),
@@ -473,7 +473,7 @@ export async function PUT(request: Request) {
           .prepare(
             'SELECT i.id FROM install_items i JOIN install_packages k ON k.id = i.package_id JOIN plays p ON p.id = i.play_id WHERE p.formation_id = ? AND k.team_id = ? AND k.published_at IS NOT NULL LIMIT 1',
           )
-          .bind(id, TEAM_ID)
+          .bind(id, database.teamId)
           .first()
       )
         throw new Error(
@@ -496,7 +496,7 @@ export async function PUT(request: Request) {
             players: Array.isArray(body.players) ? body.players : [],
           }),
           id,
-          TEAM_ID,
+          database.teamId,
         )
         .run();
       return Response.json(await payload(database));
@@ -508,7 +508,7 @@ export async function PUT(request: Request) {
         throw new Error('Valid playbook details are required.');
       const book = await database
         .prepare('SELECT side FROM playbooks WHERE id = ? AND team_id = ?')
-        .bind(id, TEAM_ID)
+        .bind(id, database.teamId)
         .first<{ side: string }>();
       if (!book) throw new Error('Playbook not found.');
       if (
@@ -531,7 +531,7 @@ export async function PUT(request: Request) {
           body.archived ? 1 : 0,
           new Date().toISOString(),
           id,
-          TEAM_ID,
+          database.teamId,
         )
         .run();
       return Response.json(await payload(database));
@@ -551,7 +551,7 @@ export async function PUT(request: Request) {
           .prepare(
             'SELECT id, unit, layout_json FROM formations WHERE id = ? AND team_id = ?',
           )
-          .bind(formationId, TEAM_ID)
+          .bind(formationId, database.teamId)
           .first<{ id: string; unit: string; layout_json: string }>()
       : null;
     if (formationId && !ownFormation) throw new Error('Formation not found.');
@@ -559,7 +559,7 @@ export async function PUT(request: Request) {
       .prepare(
         'SELECT i.id FROM install_items i JOIN install_packages k ON k.id = i.package_id WHERE i.play_id = ? AND k.team_id = ? AND k.published_at IS NOT NULL LIMIT 1',
       )
-      .bind(id, TEAM_ID)
+      .bind(id, database.teamId)
       .first();
     if (published)
       return Response.json(
@@ -590,7 +590,7 @@ export async function PUT(request: Request) {
       : [];
     const existing = await database
       .prepare('SELECT id, unit FROM plays WHERE id = ? AND team_id = ?')
-      .bind(id, TEAM_ID)
+      .bind(id, database.teamId)
       .first<{ id: string; unit: string }>();
     if (!existing)
       return Response.json({ error: 'Play not found.' }, { status: 404 });
@@ -624,7 +624,7 @@ export async function PUT(request: Request) {
           text(body.notes),
           new Date().toISOString(),
           id,
-          TEAM_ID,
+          database.teamId,
         ),
       database
         .prepare('DELETE FROM play_assignments WHERE play_id = ?')
@@ -673,14 +673,14 @@ export async function DELETE(request: Request) {
         );
       await database
         .prepare('DELETE FROM formations WHERE id = ? AND team_id = ?')
-        .bind(id, TEAM_ID)
+        .bind(id, database.teamId)
         .run();
     } else if (kind === 'play') {
       const installed = await database
         .prepare(
           'SELECT i.id FROM install_items i JOIN install_packages k ON k.id = i.package_id WHERE i.play_id = ? AND k.team_id = ? LIMIT 1',
         )
-        .bind(id, TEAM_ID)
+        .bind(id, database.teamId)
         .first();
       if (installed)
         return Response.json(
@@ -692,7 +692,7 @@ export async function DELETE(request: Request) {
         );
       await database
         .prepare('DELETE FROM plays WHERE id = ? AND team_id = ?')
-        .bind(id, TEAM_ID)
+        .bind(id, database.teamId)
         .run();
     } else {
       const used = await database
@@ -706,7 +706,7 @@ export async function DELETE(request: Request) {
         );
       await database
         .prepare('DELETE FROM playbooks WHERE id = ? AND team_id = ?')
-        .bind(id, TEAM_ID)
+        .bind(id, database.teamId)
         .run();
     }
     return Response.json(await payload(database));

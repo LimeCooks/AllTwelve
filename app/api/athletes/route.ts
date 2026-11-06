@@ -1,4 +1,4 @@
-import { getDatabase, TEAM_ID } from '@/db/client';
+import { getDatabase, type TeamDatabase } from '@/db/client';
 import type { AthleteMetrics, AthletePayload, AthleteRecord, AthleteStatus, AthleteUnit } from '@/types/domain';
 
 type AthleteRow = {
@@ -93,7 +93,7 @@ function parsePayload(input: unknown): AthletePayload {
   };
 }
 
-async function metrics(database: D1Database): Promise<AthleteMetrics> {
+async function metrics(database: TeamDatabase): Promise<AthleteMetrics> {
   const row = await database.prepare(
     `SELECT COUNT(*) AS total,
       SUM(CASE WHEN status = 'Active' THEN 1 ELSE 0 END) AS active,
@@ -102,7 +102,7 @@ async function metrics(database: D1Database): Promise<AthleteMetrics> {
       SUM(CASE WHEN status = 'Out' THEN 1 ELSE 0 END) AS out,
       ROUND(AVG(install_percent)) AS install_average
      FROM athletes WHERE team_id = ?`,
-  ).bind(TEAM_ID).first<Record<string, number>>();
+  ).bind(database.teamId).first<Record<string, number>>();
   return {
     total: row?.total ?? 0,
     active: row?.active ?? 0,
@@ -116,7 +116,7 @@ async function metrics(database: D1Database): Promise<AthleteMetrics> {
 export async function GET() {
   try {
     const database = await getDatabase();
-    const result = await database.prepare(`${athleteSelect} WHERE team_id = ? ORDER BY number`).bind(TEAM_ID).all<AthleteRow>();
+    const result = await database.prepare(`${athleteSelect} WHERE team_id = ? ORDER BY number`).bind(database.teamId).all<AthleteRow>();
     return Response.json({ athletes: result.results.map(present), metrics: await metrics(database) });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to load athletes.' }, { status: 500 });
@@ -127,10 +127,10 @@ export async function POST(request: Request) {
   try {
     const payload = parsePayload(await request.json());
     const database = await getDatabase();
-    const existingEmail = await database.prepare('SELECT id FROM athletes WHERE team_id = ? AND lower(email) = ?').bind(TEAM_ID, payload.email.toLowerCase()).first();
+    const existingEmail = await database.prepare('SELECT id FROM athletes WHERE team_id = ? AND lower(email) = ?').bind(database.teamId, payload.email.toLowerCase()).first();
     if (existingEmail) return Response.json({ error: 'An athlete with that email already exists.' }, { status: 409 });
     if (payload.number !== null) {
-      const existingNumber = await database.prepare('SELECT id FROM athletes WHERE team_id = ? AND number = ?').bind(TEAM_ID, payload.number).first();
+      const existingNumber = await database.prepare('SELECT id FROM athletes WHERE team_id = ? AND number = ?').bind(database.teamId, payload.number).first();
       if (existingNumber) return Response.json({ error: 'That jersey number is already in use.' }, { status: 409 });
     }
     const id = crypto.randomUUID();
@@ -142,7 +142,7 @@ export async function POST(request: Request) {
         email, phone, staff_note, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
-      id, TEAM_ID, payload.number, payload.firstName, payload.lastName, payload.position,
+      id, database.teamId, payload.number, payload.firstName, payload.lastName, payload.position,
       payload.unit, payload.graduationYear, payload.height, payload.weightLb, payload.status,
       payload.eligibility, payload.attendancePercent, payload.installPercent, payload.email,
       payload.phone, payload.staffNote, now, now,
@@ -173,7 +173,7 @@ export async function PATCH(request: Request) {
     if (updates.length === 0) throw new Error('No supported changes were supplied.');
     assign('updated_at', new Date().toISOString());
     const database = await getDatabase();
-    await database.prepare(`UPDATE athletes SET ${updates.join(', ')} WHERE id = ? AND team_id = ?`).bind(...values, id, TEAM_ID).run();
+    await database.prepare(`UPDATE athletes SET ${updates.join(', ')} WHERE id = ? AND team_id = ?`).bind(...values, id, database.teamId).run();
     const row = await database.prepare(`${athleteSelect} WHERE id = ?`).bind(id).first<AthleteRow>();
     if (!row) return Response.json({ error: 'Athlete not found.' }, { status: 404 });
     return Response.json({ athlete: present(row), metrics: await metrics(database) });

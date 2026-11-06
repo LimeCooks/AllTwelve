@@ -1,4 +1,4 @@
-import { getDatabase, TEAM_ID } from '@/db/client';
+import { getDatabase, type TeamDatabase } from '@/db/client';
 import type { AthleteStatus, AthleteUnit, DepthAssignmentRecord, DepthChartPayload, DepthRosterAthlete } from '@/types/domain';
 
 type ChartRow = {
@@ -32,13 +32,13 @@ type RosterRow = {
   status: AthleteStatus;
 };
 
-async function readDepthChart(database: D1Database): Promise<DepthChartPayload> {
+async function readDepthChart(database: TeamDatabase): Promise<DepthChartPayload> {
   const chart = await database.prepare(
     `SELECT dc.id, dc.name, dc.unit, f.name AS formation, dc.published_at
      FROM depth_charts dc
      JOIN formations f ON f.id = dc.formation_id
      WHERE dc.id = ? AND dc.team_id = ?`,
-  ).bind('depth-offence-doubles', TEAM_ID).first<ChartRow>();
+  ).bind('depth-offence-doubles', database.teamId).first<ChartRow>();
   if (!chart) throw new Error('The saved Doubles depth chart is unavailable.');
 
   const assignmentRows = await database.prepare(
@@ -52,7 +52,7 @@ async function readDepthChart(database: D1Database): Promise<DepthChartPayload> 
   const rosterRows = await database.prepare(
     `SELECT id, number, first_name, last_name, position, unit, status
      FROM athletes WHERE team_id = ? ORDER BY CASE WHEN number IS NULL THEN 1 ELSE 0 END, number, last_name`,
-  ).bind(TEAM_ID).all<RosterRow>();
+  ).bind(database.teamId).all<RosterRow>();
 
   const assignments: DepthAssignmentRecord[] = assignmentRows.results.map((row) => ({
     id: row.id,
@@ -100,9 +100,9 @@ export async function PATCH(request: Request) {
       `SELECT da.id, da.athlete_id, da.depth_chart_id
        FROM depth_assignments da JOIN depth_charts dc ON dc.id = da.depth_chart_id
        WHERE da.id = ? AND dc.team_id = ?`,
-    ).bind(assignmentId, TEAM_ID).first<{ id: string; athlete_id: string; depth_chart_id: string }>();
+    ).bind(assignmentId, database.teamId).first<{ id: string; athlete_id: string; depth_chart_id: string }>();
     if (!target) return Response.json({ error: 'Depth-chart slot not found.' }, { status: 404 });
-    const athlete = await database.prepare('SELECT id FROM athletes WHERE id = ? AND team_id = ?').bind(athleteId, TEAM_ID).first();
+    const athlete = await database.prepare('SELECT id FROM athletes WHERE id = ? AND team_id = ?').bind(athleteId, database.teamId).first();
     if (!athlete) return Response.json({ error: 'Athlete not found.' }, { status: 404 });
 
     const occupied = await database.prepare(

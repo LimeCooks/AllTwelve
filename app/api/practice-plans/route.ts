@@ -1,4 +1,4 @@
-import { getDatabase, TEAM_ID } from '@/db/client';
+import { getDatabase, type TeamDatabase } from '@/db/client';
 
 type PlanRow = {
   id: string;
@@ -29,8 +29,8 @@ function present(row: PlanRow) {
   };
 }
 
-async function payload(database: D1Database) {
-  const result = await database.prepare(`${planSelect} WHERE team_id = ? ORDER BY practice_date DESC, title`).bind(TEAM_ID).all<PlanRow>();
+async function payload(database: TeamDatabase) {
+  const result = await database.prepare(`${planSelect} WHERE team_id = ? ORDER BY practice_date DESC, title`).bind(database.teamId).all<PlanRow>();
   return { plans: result.results.map(present) };
 }
 
@@ -56,7 +56,7 @@ export async function POST(request: Request) {
     await database.prepare(
       `INSERT INTO practice_plans (id, team_id, game_id, title, practice_date, duration_minutes, plan_json)
        VALUES (?, ?, NULL, ?, ?, ?, ?)`,
-    ).bind(id, TEAM_ID, title, practiceDate, duration, JSON.stringify({ blocks: savedBlocks, generated: Boolean(body.generated) })).run();
+    ).bind(id, database.teamId, title, practiceDate, duration, JSON.stringify({ blocks: savedBlocks, generated: Boolean(body.generated) })).run();
     return Response.json(await payload(database), { status: 201 });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to create the practice plan.' }, { status: 400 });
@@ -73,7 +73,7 @@ export async function PUT(request: Request) {
     const database = await getDatabase();
     await database.prepare(
       `UPDATE practice_plans SET title = ?, practice_date = ?, duration_minutes = ?, plan_json = ? WHERE id = ? AND team_id = ?`,
-    ).bind(text(body.title, 'Untitled practice'), text(body.practiceDate), duration, JSON.stringify({ blocks: savedBlocks, generated: Boolean(body.generated) }), id, TEAM_ID).run();
+    ).bind(text(body.title, 'Untitled practice'), text(body.practiceDate), duration, JSON.stringify({ blocks: savedBlocks, generated: Boolean(body.generated) }), id, database.teamId).run();
     return Response.json(await payload(database));
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to update the practice plan.' }, { status: 400 });
@@ -85,7 +85,7 @@ export async function DELETE(request: Request) {
     const id = new URL(request.url).searchParams.get('id')?.trim() ?? '';
     if (!id) throw new Error('Choose a practice plan to delete.');
     const database = await getDatabase();
-    await database.prepare('DELETE FROM practice_plans WHERE id = ? AND team_id = ?').bind(id, TEAM_ID).run();
+    await database.prepare('DELETE FROM practice_plans WHERE id = ? AND team_id = ?').bind(id, database.teamId).run();
     return Response.json(await payload(database));
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to delete the practice plan.' }, { status: 400 });

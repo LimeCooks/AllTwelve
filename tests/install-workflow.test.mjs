@@ -52,7 +52,10 @@ const moduleUrl = async (path, replacements = []) => {
   });
   return `data:text/javascript;base64,${Buffer.from(result.outputText).toString('base64')}`;
 };
+const identityUrl = await moduleUrl('../lib/workspace-identity.ts');
 const dbUrl = await moduleUrl('../db/client.ts', [
+  ["import { isPrototype, requestIdentity } from '@/lib/request-identity';", "const isPrototype = () => true; const requestIdentity = async () => ({id: 'local-test'});"],
+  ["'@/lib/workspace-identity'", JSON.stringify(identityUrl)],
   [
     "import { env } from 'cloudflare:workers';",
     'const env = { DB: globalThis.chalkTestDatabase };',

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getDatabase, TEAM_ID } from '@/db/client';
+import { getDatabase } from '@/db/client';
 
 type WorkspaceStateRow = {
   state_key: string;
@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     const database = await getDatabase();
     const row = await database.prepare(
       'SELECT state_key, value_json, updated_at FROM workspace_state WHERE team_id = ? AND state_key = ?',
-    ).bind(TEAM_ID, key).first<WorkspaceStateRow>();
+    ).bind(database.teamId, key).first<WorkspaceStateRow>();
 
     if (!row) return NextResponse.json({ key, value: null, updatedAt: null });
     return NextResponse.json({ key: row.state_key, value: JSON.parse(row.value_json), updatedAt: row.updated_at });
@@ -44,7 +44,7 @@ export async function PUT(request: NextRequest) {
       `INSERT INTO workspace_state (id, team_id, state_key, value_json, updated_at)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(team_id, state_key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
-    ).bind(`state-${TEAM_ID}-${payload.key}`, TEAM_ID, payload.key, valueJson, updatedAt).run();
+    ).bind(`state-${database.teamId}-${payload.key}`, database.teamId, payload.key, valueJson, updatedAt).run();
 
     return NextResponse.json({ key: payload.key, value: payload.value ?? null, updatedAt });
   } catch (error) {

@@ -1,4 +1,5 @@
 'use client';
+import { WorkspaceGate, type WorkspaceSession } from '@/components/workspace-gate';
 
 import {
   useCallback,
@@ -150,12 +151,12 @@ type TeamSettings = {
 };
 
 const initialTeamSettings: TeamSettings = {
-  teamName: 'North Shore Wolves',
-  level: 'varsity',
-  city: 'Halifax',
-  province: 'ns',
+  teamName: '',
+  level: '',
+  city: '',
+  province: '',
   colour: 'navy',
-  season: '2026',
+  season: String(new Date().getFullYear()),
   notifications: true,
   practiceFacility: '',
   homeField: '',
@@ -334,6 +335,10 @@ function MediaUploadControl({
 }
 
 export default function Home() {
+  return <WorkspaceGate>{(session) => <WorkspaceHome session={session} />}</WorkspaceGate>;
+}
+
+function WorkspaceHome({ session }: { session: WorkspaceSession }) {
   const [activeView, setActiveViewUnsafe] = useState('Home');
   const [pendingView, setPendingView] = useState('');
   const editingPlayRef = useRef(false);
@@ -357,7 +362,7 @@ export default function Home() {
     reviews: InstallReview[];
   }>({ items: [], reviews: [] });
   const [teamSettings, setTeamSettings] =
-    useState<TeamSettings>(initialTeamSettings);
+    useState<TeamSettings>({ ...initialTeamSettings, teamName: session.team?.name ?? '', season: session.team?.season ?? initialTeamSettings.season });
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [teamMenuOpen, setTeamMenuOpen] = useState(false);
   const [toolFocus, setToolFocus] = useState(false);
@@ -539,8 +544,8 @@ export default function Home() {
     openGlobalSearchResult();
   };
 
-  const accountName = userRole === 'Coach' ? 'Coach Martin' : 'Player account';
-  const accountInitials = userRole === 'Coach' ? 'CM' : 'PL';
+  const accountName = userRole === 'Coach' ? session.user.name : 'Player account';
+  const accountInitials = initialsFor(accountName);
   const teamShortName =
     teamSettings.teamName
       .trim()
@@ -890,7 +895,7 @@ export default function Home() {
                       </span>
                     </button>
                   )}
-                  <button
+                  {session.mode === 'prototype' ? <><button
                     onClick={() => changeRole('Coach')}
                     role="menuitem"
                     type="button"
@@ -920,6 +925,7 @@ export default function Home() {
                       </small>
                     </span>
                   </button>
+                  </> : <a href="/signout-with-chatgpt?return_to=%2F" target="_top" role="menuitem">Sign out</a>}
                   <button
                     onClick={() => {
                       toggleTheme();

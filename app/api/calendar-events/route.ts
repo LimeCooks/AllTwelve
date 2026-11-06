@@ -1,4 +1,4 @@
-import { getDatabase, TEAM_ID } from '@/db/client';
+import { getDatabase } from '@/db/client';
 import type { CalendarEventRecord, CalendarEventType } from '@/types/domain';
 
 type CalendarEventRow = {
@@ -37,7 +37,7 @@ function text(value: unknown) {
 export async function GET() {
   try {
     const database = await getDatabase();
-    const result = await database.prepare(`${eventSelect} WHERE team_id = ? ORDER BY starts_at`).bind(TEAM_ID).all<CalendarEventRow>();
+    const result = await database.prepare(`${eventSelect} WHERE team_id = ? ORDER BY starts_at`).bind(database.teamId).all<CalendarEventRow>();
     return Response.json({ events: result.results.map(present) });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to load calendar events.' }, { status: 500 });
@@ -62,8 +62,8 @@ export async function POST(request: Request) {
     await database.prepare(
       `INSERT INTO calendar_events (id, team_id, game_id, title, event_type, starts_at, ends_at, location, notes)
        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
-    ).bind(id, TEAM_ID, title, eventType, startsAt, endsAt, location, notes).run();
-    const row = await database.prepare(`${eventSelect} WHERE id = ? AND team_id = ?`).bind(id, TEAM_ID).first<CalendarEventRow>();
+    ).bind(id, database.teamId, title, eventType, startsAt, endsAt, location, notes).run();
+    const row = await database.prepare(`${eventSelect} WHERE id = ? AND team_id = ?`).bind(id, database.teamId).first<CalendarEventRow>();
     return Response.json({ event: row ? present(row) : null }, { status: 201 });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to create the event.' }, { status: 400 });
@@ -75,9 +75,9 @@ export async function DELETE(request: Request) {
     const id = text(new URL(request.url).searchParams.get('id'));
     if (!id) throw new Error('Event id is required.');
     const database = await getDatabase();
-    const existing = await database.prepare(`${eventSelect} WHERE id = ? AND team_id = ?`).bind(id, TEAM_ID).first<CalendarEventRow>();
+    const existing = await database.prepare(`${eventSelect} WHERE id = ? AND team_id = ?`).bind(id, database.teamId).first<CalendarEventRow>();
     if (!existing) return Response.json({ error: 'Event not found.' }, { status: 404 });
-    await database.prepare('DELETE FROM calendar_events WHERE id = ? AND team_id = ?').bind(id, TEAM_ID).run();
+    await database.prepare('DELETE FROM calendar_events WHERE id = ? AND team_id = ?').bind(id, database.teamId).run();
     return Response.json({ deleted: id });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to remove the event.' }, { status: 400 });
