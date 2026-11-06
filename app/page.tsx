@@ -1,5 +1,9 @@
 'use client';
-import { WorkspaceGate, type WorkspaceSession } from '@/components/workspace-gate';
+import {
+  WorkspaceGate,
+  useWorkspaceSession,
+  type WorkspaceSession,
+} from '@/components/workspace-gate';
 
 import {
   useCallback,
@@ -335,7 +339,11 @@ function MediaUploadControl({
 }
 
 export default function Home() {
-  return <WorkspaceGate>{(session) => <WorkspaceHome session={session} />}</WorkspaceGate>;
+  return (
+    <WorkspaceGate>
+      {(session) => <WorkspaceHome session={session} />}
+    </WorkspaceGate>
+  );
 }
 
 function WorkspaceHome({ session }: { session: WorkspaceSession }) {
@@ -352,6 +360,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
   const [isDark, setIsDark] = useState(true);
   const [userRole, setUserRole] = useState<'Coach' | 'Player'>('Coach');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [assetRevision, setAssetRevision] = useState(0);
   const [dashboardEvents, setDashboardEvents] = useState<CalendarEventRecord[]>(
@@ -361,8 +370,11 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
     items: InstallItemRecord[];
     reviews: InstallReview[];
   }>({ items: [], reviews: [] });
-  const [teamSettings, setTeamSettings] =
-    useState<TeamSettings>({ ...initialTeamSettings, teamName: session.team?.name ?? '', season: session.team?.season ?? initialTeamSettings.season });
+  const [teamSettings, setTeamSettings] = useState<TeamSettings>({
+    ...initialTeamSettings,
+    teamName: session.team?.name ?? '',
+    season: session.team?.season ?? initialTeamSettings.season,
+  });
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [teamMenuOpen, setTeamMenuOpen] = useState(false);
   const [toolFocus, setToolFocus] = useState(false);
@@ -544,8 +556,30 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
     openGlobalSearchResult();
   };
 
-  const accountName = userRole === 'Coach' ? session.user.name : 'Player account';
+  const accountName =
+    userRole === 'Coach' ? session.user.name : 'Player account';
   const accountInitials = initialsFor(accountName);
+  const mobileQuickLinks = [
+    { label: 'Home', icon: LayoutDashboard },
+    { label: 'Film Room', icon: Film },
+    { label: 'Playbook', icon: BookOpen },
+    { label: 'Install', icon: ClipboardList },
+  ].filter(
+    (item) => userRole === 'Coach' || playerAllowedViews.has(item.label),
+  );
+  const mobileAllLinks = [
+    ...primaryNavigation,
+    { label: 'Playbook', icon: BookOpen },
+    { label: 'Install', icon: ClipboardList },
+    { label: 'Learn', icon: GraduationCap },
+    { label: 'Printouts', icon: Printer },
+    { label: 'Leaderboard', icon: Trophy },
+    { label: 'Formations', icon: Shirt },
+    ...planningNavigation,
+    ...workspaceNavigation,
+  ].filter(
+    (item) => userRole === 'Coach' || playerAllowedViews.has(item.label),
+  );
   const teamShortName =
     teamSettings.teamName
       .trim()
@@ -895,37 +929,50 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
                       </span>
                     </button>
                   )}
-                  {session.mode === 'prototype' ? <><button
-                    onClick={() => changeRole('Coach')}
-                    role="menuitem"
-                    type="button"
-                  >
-                    <Shield />
-                    <span>
-                      <strong>Coach view</strong>
-                      <small>
-                        {userRole === 'Coach'
-                          ? 'Currently active'
-                          : 'Open the staff workspace'}
-                      </small>
-                    </span>
-                  </button>
-                  <button
-                    onClick={() => changeRole('Player')}
-                    role="menuitem"
-                    type="button"
-                  >
-                    <Users />
-                    <span>
-                      <strong>Player view</strong>
-                      <small>
-                        {userRole === 'Player'
-                          ? 'Currently active'
-                          : 'Preview a connected player account'}
-                      </small>
-                    </span>
-                  </button>
-                  </> : <a href="/signout-with-chatgpt?return_to=%2F" target="_top" role="menuitem">Sign out</a>}
+                  {session.mode === 'prototype' ? (
+                    <>
+                      <button
+                        onClick={() => changeRole('Coach')}
+                        role="menuitem"
+                        type="button"
+                      >
+                        <Shield />
+                        <span>
+                          <strong>Coach view</strong>
+                          <small>
+                            {userRole === 'Coach'
+                              ? 'Currently active'
+                              : 'Open the staff workspace'}
+                          </small>
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => changeRole('Player')}
+                        role="menuitem"
+                        type="button"
+                      >
+                        <Users />
+                        <span>
+                          <strong>Player view</strong>
+                          <small>
+                            {userRole === 'Player'
+                              ? 'Currently active'
+                              : 'Preview a connected player account'}
+                          </small>
+                        </span>
+                      </button>
+                    </>
+                  ) : (
+                    // Sites sign-out requires top-level navigation.
+                    // eslint-disable-next-line next/no-html-link-for-pages
+                    <a
+                      href="/signout-with-chatgpt?return_to=%2F"
+                      target="_top"
+                      role="menuitem"
+                    >
+                      Sign out
+                    </a>
+                  )}
                   <button
                     onClick={() => {
                       toggleTheme();
@@ -1402,28 +1449,64 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
         </div>
       </section>
       <nav aria-label="Mobile navigation" className="mobile-dock">
-        {primaryNavigation
-          .filter((item) => userRole === 'Coach' || item.label === 'Home')
-          .slice(0, 5)
-          .map((item) => (
-            <button
-              className={activeView === item.label ? 'active' : ''}
-              key={item.label}
-              onClick={() => setActiveView(item.label)}
-              type="button"
-            >
-              <item.icon />
-              <span>{item.label === 'Film Room' ? 'Film' : item.label}</span>
-            </button>
-          ))}
+        {mobileQuickLinks.map((item) => (
+          <button
+            className={activeView === item.label ? 'active' : ''}
+            key={item.label}
+            onClick={() => setActiveView(item.label)}
+            type="button"
+          >
+            <item.icon />
+            <span>{item.label === 'Film Room' ? 'Film' : item.label}</span>
+          </button>
+        ))}
+        <button
+          type="button"
+          aria-label="More sections"
+          aria-expanded={mobileMenuOpen}
+          onClick={() => setMobileMenuOpen(true)}
+        >
+          <MoreHorizontal />
+          <span>More</span>
+        </button>
       </nav>
+      <Dialog open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+        <DialogContent className="mobile-sections-dialog">
+          <DialogHeader>
+            <DialogTitle>Your workspace</DialogTitle>
+            <DialogDescription>
+              Open a team tool or manage your workspace.
+            </DialogDescription>
+          </DialogHeader>
+          <nav
+            aria-label="All workspace sections"
+            className="mobile-sections-list"
+          >
+            {mobileAllLinks.map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                aria-current={activeView === item.label ? 'page' : undefined}
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setActiveView(item.label);
+                }}
+              >
+                <item.icon />
+                <span>{item.label}</span>
+                <ChevronRight />
+              </button>
+            ))}
+          </nav>
+        </DialogContent>
+      </Dialog>
       {loadingVisible ? (
         <div aria-live="polite" className="app-loading-overlay">
           <div className="app-loading-card">
             <LoaderCircle aria-hidden="true" />
             <span>
               <strong>Loading saved data</strong>
-              <small>Waiting for the local workspace to respond…</small>
+              <small>Waiting for your workspace to respond…</small>
             </span>
           </div>
         </div>
@@ -3356,6 +3439,7 @@ function AthletesView({
   onAssetsChanged: () => void;
   onNotify: Notify;
 }) {
+  const session = useWorkspaceSession();
   const [query, setQuery] = useState('');
   const [unit, setUnit] = useState('All');
   const [statusFilter, setStatusFilter] = useState<'All' | AthleteStatus>(
@@ -3367,7 +3451,7 @@ function AthletesView({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
-  const [dataMessage, setDataMessage] = useState('Loading the local roster…');
+  const [dataMessage, setDataMessage] = useState('Loading your roster…');
   const visibleAthletes = useMemo(
     () =>
       roster.filter((athlete) => {
@@ -3564,7 +3648,7 @@ function AthletesView({
               ]),
             ];
             downloadText(
-              'north-shore-roster.csv',
+              'team-roster.csv',
               rows.map((row) => row.map(quoteCsv).join(',')).join('\n'),
               'text/csv;charset=utf-8',
             );
@@ -3582,7 +3666,11 @@ function AthletesView({
       <div className="local-data-status">
         <span className={loading || saving ? 'sync-dot working' : 'sync-dot'} />
         <strong>{dataMessage}</strong>
-        <small>Local D1 database</small>
+        <small>
+          {session.mode === 'prototype'
+            ? 'Development workspace'
+            : 'Private team workspace'}
+        </small>
       </div>
 
       <div className="roster-stats">
@@ -7522,9 +7610,10 @@ function SettingsView({
   teamSettings: TeamSettings;
   onTeamSettingsChange: (settings: TeamSettings) => void;
 }) {
+  const session = useWorkspaceSession();
+  const prototype = session.mode === 'prototype';
   const [saved, setSaved] = useState(false);
   const [activeTab, setActiveTab] = useState('Team profile');
-  const [staffInviteOpen, setStaffInviteOpen] = useState(false);
 
   const saveSettings = async () => {
     try {
@@ -7543,41 +7632,19 @@ function SettingsView({
     onTeamSettingsChange(next);
     setSaved(false);
   };
-  const confirmStaffInvite = async (event: SyntheticEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const fields = new FormData(event.currentTarget);
-    const name = formText(fields, 'staffName').trim();
-    const email = formText(fields, 'staffEmail').trim();
-    if (!name || !email) return;
-    const savedInvites = await loadWorkspaceState<
-      Array<{ id: string; name: string; email: string; createdAt: string }>
-    >('staff-invitations', []);
-    await saveWorkspaceState('staff-invitations', [
-      ...savedInvites,
-      {
-        id: crypto.randomUUID(),
-        name,
-        email,
-        createdAt: new Date().toISOString(),
-      },
-    ]);
-    setStaffInviteOpen(false);
-    onNotify(`Invitation confirmed for ${name}.`);
-  };
-
   const tabs = [
     'Team profile',
     'Season & schedule',
     'Staff & permissions',
     'Notifications',
-    'Local data',
+    'Data & privacy',
   ];
   return (
     <section className="module-surface settings-surface">
       <ModuleHeader
         eyebrow="Workspace"
         title="Settings"
-        description="Control your team identity, season, permissions, and local prototype preferences."
+        description="Manage your team profile, season, account, and saved data."
       />
       <div className="settings-layout">
         <aside className="settings-nav">
@@ -7636,7 +7703,7 @@ function SettingsView({
                 {
                   key: 'coach-profile',
                   label: 'Coach photo',
-                  fallback: 'CM',
+                  fallback: initialsFor(session.user.name),
                   className: 'detail-avatar',
                 },
                 {
@@ -7755,7 +7822,7 @@ function SettingsView({
               </div>
             </div>
             <div className="colour-row">
-              {['navy', 'red', 'gold', 'green'].map((colour) => (
+              {['navy', 'red', 'gold', 'green', 'teal'].map((colour) => (
                 <button
                   aria-label={`Use ${colour} team colour`}
                   aria-pressed={teamSettings.colour === colour}
@@ -7767,24 +7834,18 @@ function SettingsView({
                   {teamSettings.colour === colour ? <Check /> : null}
                 </button>
               ))}
-              <Button
-                onClick={() => {
-                  updateSettings({ colour: 'teal' });
-                  onNotify('Custom teal colour selected.', 'info');
-                }}
-                variant="outline"
-              >
-                <Plus /> Custom colour
-              </Button>
             </div>
             <div className="property-divider" />
             <div className="local-data-note">
               <CloudOff />
               <div>
-                <strong>Local prototype mode</strong>
+                <strong>
+                  {prototype ? 'Local prototype' : 'Private cloud workspace'}
+                </strong>
                 <p>
-                  Your prototype runs entirely on this computer. Cloud sync,
-                  sign-in, and team invitations can be connected later.
+                  {prototype
+                    ? 'This development workspace is stored on this computer, separate from your private pilot.'
+                    : 'Your team’s records and uploaded files are stored securely online and available when you sign in on another device.'}
                 </p>
               </div>
               <Button onClick={() => onNavigate('Home')} variant="outline">
@@ -7810,10 +7871,10 @@ function SettingsView({
                   {activeTab === 'Season & schedule'
                     ? 'Set the active season used across schedules and game-week tools.'
                     : activeTab === 'Staff & permissions'
-                      ? 'Review local staff access and coaching roles.'
+                      ? 'Review who can access this private workspace.'
                       : activeTab === 'Notifications'
-                        ? 'Choose whether ChalkTalk surfaces team reminders.'
-                        : 'Inspect and export the local prototype record.'}
+                        ? 'Review how team updates are delivered.'
+                        : 'Review storage and export your team settings.'}
                 </p>
               </div>
               {activeTab === 'Season & schedule' ? (
@@ -7837,21 +7898,6 @@ function SettingsView({
                     }
                     value={teamSettings.season}
                   />
-                </label>
-                <label htmlFor="schedule-mode">
-                  Schedule
-                  <NativeSelect
-                    className="w-full"
-                    defaultValue="canadian"
-                    id="schedule-mode"
-                  >
-                    <NativeSelectOption value="canadian">
-                      Canadian football
-                    </NativeSelectOption>
-                    <NativeSelectOption value="custom">
-                      Custom season
-                    </NativeSelectOption>
-                  </NativeSelect>
                 </label>
                 <label htmlFor="practice-facility">
                   Practice facility
@@ -7899,68 +7945,49 @@ function SettingsView({
               </div>
             ) : null}
             {activeTab === 'Staff & permissions' ? (
-              <div className="settings-list-actions">
-                <button
-                  onClick={() =>
-                    onNotify('Coach Martin has administrator access.', 'info')
-                  }
-                  type="button"
-                >
-                  <MediaAvatar
-                    assetKey="coach-profile"
-                    className="profile-avatar"
-                    fallback="CM"
-                    label="Coach Martin profile photo"
-                    revision={assetRevision}
-                  />
-                  <span>
-                    <strong>Coach Martin</strong>
-                    <small>Administrator · Offence</small>
-                  </span>
-                  <ChevronRight />
-                </button>
-                <Button onClick={() => setStaffInviteOpen(true)}>
-                  <UserPlus /> Invite staff
-                </Button>
+              <div className="settings-owner-card">
+                <MediaAvatar
+                  assetKey="coach-profile"
+                  className="profile-avatar"
+                  fallback={initialsFor(session.user.name)}
+                  label="Your profile photo"
+                  revision={assetRevision}
+                />
+                <div>
+                  <strong>{session.user.name}</strong>
+                  <small>
+                    {session.user.email || 'Development account'} · Workspace
+                    owner
+                  </small>
+                </div>
+                <p>
+                  {prototype
+                    ? 'Role previews are available in the development profile menu.'
+                    : 'This pilot is private to your account. Staff and player invitations are not enabled.'}
+                </p>
               </div>
             ) : null}
             {activeTab === 'Notifications' ? (
-              <div className="settings-toggle-card">
-                <button
-                  aria-pressed={teamSettings.notifications}
-                  onClick={() =>
-                    updateSettings({
-                      notifications: !teamSettings.notifications,
-                    })
-                  }
-                  type="button"
-                >
-                  <Bell />
-                  <span>
-                    <strong>Team reminders</strong>
-                    <small>Install, practice, and schedule updates</small>
-                  </span>
-                  <span
-                    aria-hidden="true"
-                    className={
-                      teamSettings.notifications
-                        ? 'visual-toggle on'
-                        : 'visual-toggle'
-                    }
-                  >
-                    <i />
-                  </span>
-                </button>
+              <div className="settings-owner-card">
+                <p>
+                  ChalkTalk does not currently send email or push notifications.
+                  View saved schedules and install progress in your workspace.
+                </p>
               </div>
             ) : null}
-            {activeTab === 'Local data' ? (
+            {activeTab === 'Data & privacy' ? (
               <div className="local-data-note">
                 <CloudOff />
                 <div>
-                  <strong>Local D1 persistence is active</strong>
+                  <strong>
+                    {prototype
+                      ? 'Stored on this computer'
+                      : 'Stored in your private workspace'}
+                  </strong>
                   <p>
-                    Roster, schedule, workspace drafts, install progress, and
-                    settings remain on this computer.
+                    {prototype
+                      ? 'Development records stay on this computer. They are not copied into your hosted pilot.'
+                      : 'Your account owns this team. Signing out does not delete its records. The settings export below contains team settings only, not a complete backup of plays, roster, or files.'}
                   </p>
                 </div>
                 <Button
@@ -7970,7 +7997,7 @@ function SettingsView({
                       JSON.stringify(teamSettings, null, 2),
                       'application/json',
                     );
-                    onNotify('Local settings backup downloaded.');
+                    onNotify('Team settings exported.');
                   }}
                   variant="outline"
                 >
@@ -7978,69 +8005,17 @@ function SettingsView({
                 </Button>
               </div>
             ) : null}
-            <div className="settings-section-save">
-              <span>Changes stay in this section until you save them.</span>
-              <Button onClick={() => void saveSettings()}>
-                {saved ? <Check /> : null}
-                {saved
-                  ? `${activeTab} saved`
-                  : `Save ${activeTab.toLowerCase()}`}
-              </Button>
-            </div>
+            {activeTab === 'Season & schedule' ? (
+              <div className="settings-section-save">
+                <span>Save your season and venue changes.</span>
+                <Button onClick={() => void saveSettings()}>
+                  {saved ? 'Season saved' : 'Save season'}
+                </Button>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
-      <Dialog onOpenChange={setStaffInviteOpen} open={staffInviteOpen}>
-        <DialogContent className="athlete-dialog sm:max-w-[500px]">
-          <form
-            onSubmit={(event) =>
-              void confirmStaffInvite(event).catch((error: unknown) =>
-                onNotify(
-                  error instanceof Error
-                    ? error.message
-                    : 'Unable to save the invitation.',
-                  'error',
-                ),
-              )
-            }
-          >
-            <DialogHeader>
-              <DialogTitle>Confirm staff invitation</DialogTitle>
-              <DialogDescription>
-                Review the recipient before creating this invitation. No
-                notification is sent until you confirm.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="athlete-form-grid">
-              <label htmlFor="staff-invite-name">
-                Staff name
-                <Input id="staff-invite-name" name="staffName" required />
-              </label>
-              <label htmlFor="staff-invite-email">
-                Email
-                <Input
-                  id="staff-invite-email"
-                  name="staffEmail"
-                  required
-                  type="email"
-                />
-              </label>
-            </div>
-            <DialogFooter>
-              <Button
-                onClick={() => setStaffInviteOpen(false)}
-                type="button"
-                variant="outline"
-              >
-                Cancel
-              </Button>
-              <Button type="submit">
-                Confirm invitation <Send />
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
     </section>
   );
 }

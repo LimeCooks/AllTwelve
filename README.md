@@ -13,7 +13,9 @@ pnpm dev
 
 Open the local URL printed by the development server.
 
-The app uses React and Vinext with Cloudflare D1 and R2 bindings. Local database and uploaded media state lives in `.wrangler/` and is excluded from Git. The database initializes on first API access. A fresh clone does not contain existing local roster records, settings, or uploaded film.
+The app uses React and Vinext with Cloudflare D1 and R2 bindings. Local database and uploaded media state lives in `.wrangler/` and is excluded from Git. The development database initializes on first API access. Hosted environments use the schema-only `drizzle/` migrations and authenticated team ownership; they never run the prototype bootstrap. A fresh clone does not contain existing local roster records, settings, or uploaded film.
+
+The private pilot architecture, verified milestones, and remaining handoff gates are tracked in [docs/private-pilot.md](docs/private-pilot.md).
 
 ## Checks
 

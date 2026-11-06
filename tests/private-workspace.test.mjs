@@ -87,6 +87,15 @@ const playbooks = await import(
 );
 const { getDatabase } = await import(dbUrl);
 const { identityFromHeaders } = await import(identityUrl);
+const workspaceState = await import(
+  await moduleUrl('../app/api/workspace-state/route.ts', [
+    [
+      "import { NextRequest, NextResponse } from 'next/server';",
+      'const NextResponse = { json: (body, init) => Response.json(body, init) };',
+    ],
+    ...replacements,
+  ])
+);
 const objects = new Map();
 globalThis.privateTestBucket = {
   async put(key, body, options) {
@@ -227,6 +236,60 @@ test('fresh hosted migration chain is empty, identity required, owners receive i
   );
   assert.equal(sqlite.prepare('SELECT count(*) AS n FROM teams').get().n, 2);
   assert.equal(sqlite.prepare('SELECT count(*) AS n FROM athletes').get().n, 0);
+});
+
+test('profile updates remain team-scoped and update the next signed-in session', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'owner-a',
+    name: 'Coach A',
+    email: 'a@example.test',
+  };
+  const saved = await workspaceState.PUT(
+    request({
+      key: 'team-settings',
+      value: { teamName: 'Renamed Team A', season: '2027' },
+    }),
+  );
+  assert.equal(saved.status, 200);
+  assert.equal(
+    (await (await session.GET()).json()).team.name,
+    'Renamed Team A',
+  );
+  const invalid = await workspaceState.PUT(
+    request({ key: 'team-settings', value: { teamName: '', season: 'oops' } }),
+  );
+  assert.equal(invalid.status, 400);
+  assert.equal(
+    (await (await session.GET()).json()).team.name,
+    'Renamed Team A',
+  );
+  globalThis.privateTestIdentity = {
+    id: 'owner-b',
+    name: 'Coach B',
+    email: 'b@example.test',
+  };
+  const getRequest = new Request(
+    'https://pilot.test/api/workspace-state?key=team-settings',
+  );
+  Object.assign(getRequest, { nextUrl: new URL(getRequest.url) });
+  assert.equal(
+    (await (await workspaceState.GET(getRequest)).json()).value.teamName,
+    'Team B',
+  );
+  assert.equal((await (await session.GET()).json()).team.name, 'Team B');
+  globalThis.privateTestIdentity = null;
+  assert.equal((await workspaceState.GET(getRequest)).status, 401);
+  assert.equal(
+    (
+      await workspaceState.PUT(
+        request({
+          key: 'team-settings',
+          value: { teamName: 'No access', season: '2027' },
+        }),
+      )
+    ).status,
+    401,
+  );
 });
 
 test('same media key is isolated per team and anonymous media access is rejected', async () => {

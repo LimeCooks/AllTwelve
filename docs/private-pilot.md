@@ -18,12 +18,16 @@ A private, authenticated ChalkTalk workspace usable on laptop, iPhone and tablet
 
 The isolated tests apply the actual hosted SQL to a fresh database, verify that domain tables are empty, exercise unauthenticated rejection and first-time onboarding, create two owners, prove team-specific Playbook reads and attempted cross-team modification rejection, and prove team-prefixed media read/write/delete isolation. The earlier Playbook/Install tests continue exercising the actual handlers against the prototype fixture.
 
-These tests do not prove the deployed ingress policy, browser sign-in, cloud migrations, backup recovery or device compatibility. Those require live verification before handoff.
+The first private deployment succeeded. The hosting policy was checked: owner only, no other visitors. The deployed database has all 20 expected tables and each was read back as empty. Browser verification reached the real ChatGPT sign-in gate; authenticated onboarding awaits the owner signing in.
+
+Follow-up work removed simulated invitations, disconnected notification/schedule controls, and hard-coded account identity from Settings. Phone (390 × 844) and tablet (820 × 1180) browser checks verified the full section menu, Settings and Playbook library. A tablet-only empty sidebar gap was corrected. Profile saves update both workspace settings and team/session identity atomically, with an isolation test.
+
+Viewport checks do not prove physical iPhone/iPad touch behaviour. Sign-in, backup recovery, cross-device persistence and real coaching workflows still require verification before handoff.
 
 ## Remaining handoff gates
 
-1. Verify the registered Site remains owner-private and publish the exact tested source with its new schema and empty cloud storage. Confirm sign-in on the hosted URL. Do not create a team using an agent/service identity; the owner should see the actual first-time screen.
-2. Remove remaining prototype-only account/settings copy and simulated staff controls from the pilot. Staff/player invitations and account-to-athlete linking require real membership roles before external users can join.
+1. Confirm authenticated first-time onboarding on the hosted URL after the owner signs in. Do not create a team using an agent/service identity; the owner should see the actual first-time screen.
+2. Continue auditing remaining module-specific prototype copy and incomplete controls. Staff/player invitations and account-to-athlete linking require real membership roles before external users can join.
 3. Verify every persisted module and uploaded file across two browser sessions/devices. Handle failed requests honestly; do not replace failures with apparent empty success.
 4. Verify responsive layouts and touch drawing on phone/tablet. Desktop tests are insufficient for this gate.
 5. Establish backup/export and demonstrate restore in a separate environment. Retain the local prototype unchanged; do not migrate its records into the clean pilot.

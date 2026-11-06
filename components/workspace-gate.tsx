@@ -2,6 +2,8 @@
 import {
   useEffect,
   useState,
+  createContext,
+  useContext,
   type ReactNode,
   type SyntheticEvent,
 } from 'react';
@@ -13,6 +15,13 @@ export type WorkspaceSession = {
   user: { id: string; email: string; name: string };
   team: { id: string; name?: string; season?: string } | null;
 };
+
+const WorkspaceContext = createContext<WorkspaceSession | null>(null);
+export function useWorkspaceSession() {
+  const session = useContext(WorkspaceContext);
+  if (!session) throw new Error('Workspace identity is unavailable.');
+  return session;
+}
 
 export function WorkspaceGate({
   children,
@@ -76,7 +85,12 @@ export function WorkspaceGate({
       setBusy(false);
     }
   };
-  if (session?.team) return children(session);
+  if (session?.team)
+    return (
+      <WorkspaceContext.Provider value={session}>
+        {children(session)}
+      </WorkspaceContext.Provider>
+    );
   return (
     <main className="workspace-welcome">
       <section>
