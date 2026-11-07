@@ -1,5 +1,9 @@
 'use client';
 import { BackupControls } from '@/components/backup-controls';
+import {
+  calendarSegments,
+  eventsInCalendarPeriod,
+} from '@/lib/calendar-layout';
 import { WorkspaceSearch } from '@/components/workspace-search';
 import type { SearchResult } from '@/lib/workspace-search';
 import { loadDashboard } from '@/lib/dashboard-load';
@@ -6909,36 +6913,6 @@ function eventClock(iso: string) {
   return calendarClock(iso);
 }
 
-function eventPlacement(
-  event: CalendarEventRecord,
-  weekDates: string[],
-  firstHour = 15,
-  hourCount = 6,
-) {
-  const day = Math.max(0, weekDates.indexOf(calendarDate(event.startsAt)));
-  const start = eventClock(event.startsAt);
-  const startMinutes = start.hour * 60 + start.minute;
-  const durationMinutes = Math.max(
-    30,
-    Math.round(
-      (Date.parse(event.endsAt) - Date.parse(event.startsAt)) / 60_000,
-    ),
-  );
-  return {
-    day,
-    start: Math.max(0, Math.floor((startMinutes - firstHour * 60) / 60)),
-    span: Math.max(
-      1,
-      Math.min(
-        hourCount - Math.floor((startMinutes - firstHour * 60) / 60),
-        Math.ceil(durationMinutes / 60),
-      ),
-    ),
-    meta: `${start.label} · ${event.location || 'Location TBD'}`,
-    tone: event.eventType,
-  };
-}
-
 function CalendarView({
   onEditingChange,
   onNavigate,
@@ -6992,25 +6966,21 @@ function CalendarView({
     return () => window.removeEventListener('beforeunload', warn);
   }, [eventDirty, eventSaving]);
   const weekDates = useMemo(() => calendarWeekDates(weekOffset), [weekOffset]);
-  const weekEvents = useMemo(
-    () =>
-      calendarEvents.filter((event) =>
-        weekDates.includes(calendarDate(event.startsAt)),
-      ),
+  const weekSegments = useMemo(
+    () => calendarSegments(calendarEvents, weekDates),
     [calendarEvents, weekDates],
   );
+  const weekEvents = useMemo(() => {
+    const ids = new Set(weekSegments.map((segment) => segment.event.id));
+    return calendarEvents.filter((event) => ids.has(event.id));
+  }, [calendarEvents, weekSegments]);
   const firstHour = Math.min(
     15,
-    ...weekEvents.map((event) => calendarClock(event.startsAt).hour),
+    ...weekSegments.map((segment) => Math.floor(segment.startMinute / 60)),
   );
   const lastHour = Math.max(
     21,
-    ...weekEvents.map((event) =>
-      calendarDate(event.startsAt) === calendarDate(event.endsAt)
-        ? calendarClock(event.endsAt).hour +
-          (calendarClock(event.endsAt).minute ? 1 : 0)
-        : 24,
-    ),
+    ...weekSegments.map((segment) => Math.ceil(segment.endMinute / 60)),
   );
   const calendarHours = Array.from(
     { length: lastHour - firstHour },
@@ -7023,17 +6993,13 @@ function CalendarView({
     value.setHours(12, 0, 0, 0);
     return value;
   }, [monthOffset]);
-  const monthEvents = useMemo(
-    () =>
-      calendarEvents.filter((event) => {
-        const value = new Date(event.startsAt);
-        return (
-          value.getFullYear() === monthAnchor.getFullYear() &&
-          value.getMonth() === monthAnchor.getMonth()
-        );
-      }),
-    [calendarEvents, monthAnchor],
-  );
+  const monthEvents = useMemo(() => {
+    const start = new Date(monthAnchor);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setMonth(end.getMonth() + 1);
+    return eventsInCalendarPeriod(calendarEvents, start, end);
+  }, [calendarEvents, monthAnchor]);
   const days = weekDates.map((date) => {
     const value = new Date(`${date}T12:00:00`);
     return `${value.toLocaleDateString(undefined, { weekday: 'short' }).toUpperCase()} ${value.getDate()}`;
@@ -7362,31 +7328,69 @@ function CalendarView({
                   ),
                 )}
               </div>
-              {weekEvents.map((event) => {
-                const placement = eventPlacement(
-                  event,
-                  weekDates,
-                  firstHour,
-                  calendarHours.length,
-                );
-                return (
-                  <button
-                    className={'calendar-event ' + placement.tone}
-                    key={event.id}
-                    onClick={() => setSelectedEvent(event)}
-                    style={{
-                      gridColumn: placement.day + 2,
-                      gridRow:
-                        placement.start + 1 + ' / span ' + placement.span,
-                    }}
-                    title={event.notes}
-                    type="button"
-                  >
-                    <strong>{event.title}</strong>
-                    <small>{placement.meta}</small>
-                  </button>
-                );
-              })}
+              <div className="calendar-day-columns">
+                {weekDates.map((date, day) => (
+                  <div className="calendar-day-column" key={date}>
+                    {weekSegments
+                      .filter((segment) => segment.day === day)
+                      .map((segment) => {
+                        const event = segment.event;
+                        const timing = [
+                          segment.continuesBefore
+                            ? 'Continues'
+                            : eventClock(event.startsAt).label,
+                          segment.continuesAfter
+                            ? 'continues tomorrow'
+                            : eventClock(event.endsAt).label,
+                        ].join(' – ');
+                        return (
+                          <button
+                            className={'calendar-event ' + event.eventType}
+                            key={event.id}
+                            onClick={() => setSelectedEvent(event)}
+                            style={{
+                              top:
+                                ((segment.startMinute - firstHour * 60) /
+                                  (calendarHours.length * 60)) *
+                                  100 +
+                                '%',
+                              height:
+                                ((segment.endMinute - segment.startMinute) /
+                                  (calendarHours.length * 60)) *
+                                  100 +
+                                '%',
+                              left:
+                                (segment.column / segment.columns) * 100 + '%',
+                              width: 100 / segment.columns + '%',
+                            }}
+                            aria-label={
+                              event.title +
+                              ' · ' +
+                              date +
+                              ' · ' +
+                              timing +
+                              ' · ' +
+                              (event.location || 'Location TBD')
+                            }
+                            title={
+                              event.title +
+                              '\n' +
+                              timing +
+                              '\n' +
+                              event.location +
+                              '\n' +
+                              event.notes
+                            }
+                            type="button"
+                          >
+                            <strong>{event.title}</strong>
+                            <small>{timing}</small>
+                          </button>
+                        );
+                      })}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         ) : (
@@ -7410,7 +7414,9 @@ function CalendarView({
                     <strong>{event.title}</strong>
                     <small>
                       {calendarDate(event.startsAt)} ·{' '}
-                      {eventClock(event.startsAt).label} ·{' '}
+                      {eventClock(event.startsAt).label} –{' '}
+                      {calendarDate(event.endsAt)} ·{' '}
+                      {eventClock(event.endsAt).label} ·{' '}
                       {event.location || 'Location TBD'}
                     </small>
                   </span>

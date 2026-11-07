@@ -156,6 +156,12 @@
 .topbar { position: sticky; top: 0; z-index: 15; display: flex; height: 66px; align-items: center; justify-content: space-between; border-bottom: 1px solid #e6e1d7; background: rgba(250,249,246,.88); padding: 0 34px; backdrop-filter: blur(16px); }
 .mobile-brand { display: none; align-items: center; gap: 9px; }
 .workspace-search-trigger { max-width: min(410px, 42vw); justify-content: flex-start; color: var(--muted-foreground); }
+.calendar-day-columns { position: absolute; inset: 0 0 0 60px; display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); pointer-events: none; }
+.calendar-day-column { position: relative; min-width: 0; }
+.calendar-day-column .calendar-event { position: absolute; margin: 0; padding: 5px; border: 2px solid transparent; border-left: 3px solid; border-radius: 6px; pointer-events: auto; background-clip: padding-box; }
+.calendar-day-column .calendar-event strong { font-size: 12px; line-height: 1.25; white-space: nowrap; }
+.calendar-day-column .calendar-event small { margin-top: 2px; font-size: 10px; }
+.calendar-day-column .calendar-event:focus-visible { outline: 3px solid #4f7cff; outline-offset: -2px; z-index: 5; }
 .workspace-search-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-search-results { list-style: none; margin: 0; padding: 0; max-height: 45dvh; overflow-y: auto; }
 .workspace-search-results button { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; min-height: 52px; padding: 12px; text-align: left; border-radius: 6px; }
