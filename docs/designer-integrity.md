@@ -4,7 +4,7 @@ Deleting an opponent now removes routes anchored to that opponent, just as delet
 
 Normalization repairs historical dangling references in memory and reconciles route endpoints with their points/player anchors. It does not write back merely because a play was opened. Modern API writes reject missing player/route references and overlapping own/opponent IDs before changing the saved record. Undo snapshots remain unchanged by the model operations.
 
-The Canadian amateur field remains 110×65 yards between goal lines, with 20-yard end zones at each end. The previous Full field option used 140 yards and clipped the far end; it now fits the complete 150-yard footprint. Player/route coordinates and one-yard scale are unchanged. Source: [Football Canada tackle rulebook, Rule 1](https://footballcanada.com/wp-content/uploads/2022/04/2022-Tackle-Rulebook-English-Web.pdf). This is the amateur preset, not a claim about future professional-rule variants.
+The Canadian amateur field remains 110×65 yards between goal lines, with 20-yard end zones at each end. The previous Full field option used 140 yards and clipped the far end; it now fits the complete 150-yard footprint. Zoom also centers on the actual ball position before clamping, so goal-line plays remain visible. Player/route coordinates and one-yard scale are unchanged. Source: [Football Canada tackle rulebook, Rule 1](https://footballcanada.com/wp-content/uploads/2022/04/2022-Tackle-Rulebook-English-Web.pdf). This is the amateur preset, not a claim about future professional-rule variants.
 
 ## Verification
 

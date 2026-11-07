@@ -48,6 +48,13 @@ test('camera stays within the field at goal lines, full field, maximum zoom and 
           assert.ok(view.width > 0 && view.height > 0);
           assert.ok(view.x >= 0 && view.x + view.width <= 720 + 1e-8);
           assert.ok(view.y >= -100 && view.y + view.height <= 1400 + 1e-8);
+          if (delta === 0) {
+            const ballY = 100 + spot * 10;
+            assert.ok(
+              ballY >= view.y && ballY <= view.y + view.height,
+              'zoom must keep a goal-line play visible',
+            );
+          }
           assert.deepEqual(
             fieldViewport(100 + spot * 10, depth, zoom, view.pan),
             view,
