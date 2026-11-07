@@ -99,6 +99,9 @@ const playbooks = await import(
   await moduleUrl('../app/api/playbooks/route.ts', replacements)
 );
 const { getDatabase } = await import(dbUrl);
+const calendarEvents = await import(
+  await moduleUrl('../app/api/calendar-events/route.ts', replacements)
+);
 const practicePlans = await import(
   await moduleUrl('../app/api/practice-plans/route.ts', replacements)
 );
@@ -405,6 +408,61 @@ test('practice saves return the exact plan, reject invalid updates, and isolate 
   globalThis.privateTestIdentity = null;
   assert.equal((await practicePlans.GET()).status, 401);
   assert.equal((await practicePlans.POST(request(body))).status, 401);
+});
+
+test('calendar preserves real instants, rejects invalid input, and isolates saved schedules', async () => {
+  const alice = { id: 'owner-a', name: 'Coach A', email: 'a@example.test' };
+  const body = {
+    title: 'Winter practice',
+    eventType: 'practice',
+    startsAt: '2026-11-06T16:00:00-04:00',
+    endsAt: '2026-11-06T17:30:00-04:00',
+    location: 'Field',
+    notes: '',
+  };
+  globalThis.privateTestIdentity = null;
+  assert.equal((await calendarEvents.GET()).status, 401);
+  assert.equal((await calendarEvents.POST(request(body))).status, 401);
+  globalThis.privateTestIdentity = alice;
+  const created = await calendarEvents.POST(request(body));
+  assert.equal(created.status, 201);
+  const saved = (await created.json()).event;
+  assert.equal(saved.startsAt, '2026-11-06T20:00:00.000Z');
+  assert.equal(saved.endsAt, '2026-11-06T21:30:00.000Z');
+  for (const invalid of [
+    { ...body, startsAt: '2026-11-06T16:00:00' },
+    { ...body, startsAt: '2026-02-30T16:00:00Z' },
+    { ...body, endsAt: body.startsAt },
+    { ...body, title: '' },
+    { ...body, eventType: 'fake' },
+    null,
+  ])
+    assert.equal((await calendarEvents.POST(request(invalid))).status, 400);
+  assert.equal((await (await calendarEvents.GET()).json()).events.length, 1);
+  globalThis.privateTestIdentity = {
+    id: 'owner-b',
+    name: 'Coach B',
+    email: 'b@example.test',
+  };
+  assert.equal((await (await calendarEvents.GET()).json()).events.length, 0);
+  assert.equal(
+    (
+      await calendarEvents.DELETE(
+        new Request(`https://pilot.test/api/calendar-events?id=${saved.id}`),
+      )
+    ).status,
+    404,
+  );
+  globalThis.privateTestIdentity = alice;
+  assert.equal(
+    (
+      await calendarEvents.DELETE(
+        new Request(`https://pilot.test/api/calendar-events?id=${saved.id}`),
+      )
+    ).status,
+    200,
+  );
+  assert.equal((await (await calendarEvents.GET()).json()).events.length, 0);
 });
 
 test('profile updates remain team-scoped and update the next signed-in session', async () => {

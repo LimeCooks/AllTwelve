@@ -2,6 +2,12 @@
 import { BackupControls } from '@/components/backup-controls';
 import { loadDashboard } from '@/lib/dashboard-load';
 import {
+  calendarClock,
+  calendarDate,
+  calendarExport,
+  localEventTime,
+} from '@/lib/calendar-time';
+import {
   GAMEPLAN_KEY,
   loadGameplan,
   linkGameplanPlays,
@@ -6709,20 +6715,16 @@ function calendarWeekDates(offset = 0) {
 }
 
 function eventClock(iso: string) {
-  const match = iso.match(/T(\d{2}):(\d{2})/);
-  if (!match) return { hour: 15, minute: 0, label: '' };
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  const displayHour = hour % 12 || 12;
-  return {
-    hour,
-    minute,
-    label: `${displayHour}:${String(minute).padStart(2, '0')}`,
-  };
+  return calendarClock(iso);
 }
 
-function eventPlacement(event: CalendarEventRecord, weekDates: string[]) {
-  const day = Math.max(0, weekDates.indexOf(event.startsAt.slice(0, 10)));
+function eventPlacement(
+  event: CalendarEventRecord,
+  weekDates: string[],
+  firstHour = 15,
+  hourCount = 6,
+) {
+  const day = Math.max(0, weekDates.indexOf(calendarDate(event.startsAt)));
   const start = eventClock(event.startsAt);
   const startMinutes = start.hour * 60 + start.minute;
   const durationMinutes = Math.max(
@@ -6733,8 +6735,14 @@ function eventPlacement(event: CalendarEventRecord, weekDates: string[]) {
   );
   return {
     day,
-    start: Math.max(0, Math.min(5, Math.floor((startMinutes - 15 * 60) / 60))),
-    span: Math.max(1, Math.min(3, Math.ceil(durationMinutes / 60))),
+    start: Math.max(0, Math.floor((startMinutes - firstHour * 60) / 60)),
+    span: Math.max(
+      1,
+      Math.min(
+        hourCount - Math.floor((startMinutes - firstHour * 60) / 60),
+        Math.ceil(durationMinutes / 60),
+      ),
+    ),
     meta: `${start.label} · ${event.location || 'Location TBD'}`,
     tone: event.eventType,
   };
@@ -6759,6 +6767,12 @@ function CalendarView({
   const [weekOffset, setWeekOffset] = useState(0);
   const [monthOffset, setMonthOffset] = useState(0);
   const [eventSaving, setEventSaving] = useState(false);
+  const [calendarEventError, setCalendarEventError] = useState('');
+  const calendarWriteLock = useRef(false);
+  const [calendarLoad, setCalendarLoad] = useState<
+    'loading' | 'ready' | 'error'
+  >('loading');
+  const [calendarRetry, setCalendarRetry] = useState(0);
   const [calendarMessage, setCalendarMessage] = useState(
     'Loading saved schedule…',
   );
@@ -6769,9 +6783,26 @@ function CalendarView({
   const weekEvents = useMemo(
     () =>
       calendarEvents.filter((event) =>
-        weekDates.includes(event.startsAt.slice(0, 10)),
+        weekDates.includes(calendarDate(event.startsAt)),
       ),
     [calendarEvents, weekDates],
+  );
+  const firstHour = Math.min(
+    15,
+    ...weekEvents.map((event) => calendarClock(event.startsAt).hour),
+  );
+  const lastHour = Math.max(
+    21,
+    ...weekEvents.map((event) =>
+      calendarDate(event.startsAt) === calendarDate(event.endsAt)
+        ? calendarClock(event.endsAt).hour +
+          (calendarClock(event.endsAt).minute ? 1 : 0)
+        : 24,
+    ),
+  );
+  const calendarHours = Array.from(
+    { length: lastHour - firstHour },
+    (_, index) => firstHour + index,
   );
   const monthAnchor = useMemo(() => {
     const value = new Date();
@@ -6798,29 +6829,34 @@ function CalendarView({
 
   useEffect(() => {
     let active = true;
-    fetch('/api/calendar-events')
+    fetch('/api/calendar-events', { cache: 'no-store' })
       .then(async (response) => {
         const data = (await response.json()) as {
           events?: CalendarEventRecord[];
           error?: string;
         };
-        if (!response.ok || !data.events)
+        if (!response.ok || !Array.isArray(data.events))
           throw new Error(data.error ?? 'Unable to load calendar events.');
         return data.events;
       })
       .then((events) => {
         if (active) {
           setCalendarEvents(events);
-          setCalendarMessage('Schedule saved locally');
+          setCalendarMessage(
+            'Saved schedule · times shown in this device’s time zone',
+          );
+          setCalendarLoad('ready');
         }
       })
       .catch((error: unknown) => {
-        if (active)
+        if (active) {
+          setCalendarLoad('error');
           setCalendarMessage(
             error instanceof Error
               ? error.message
               : 'Unable to load saved events.',
           );
+        }
       });
     fetch('/api/athletes', { cache: 'no-store' })
       .then(
@@ -6834,12 +6870,15 @@ function CalendarView({
     return () => {
       active = false;
     };
-  }, []);
+  }, [calendarRetry]);
 
   const createCalendarEvent = async (
     event: SyntheticEvent<HTMLFormElement>,
   ) => {
     event.preventDefault();
+    if (calendarWriteLock.current) return;
+    calendarWriteLock.current = true;
+    setCalendarEventError('');
     setEventSaving(true);
     setCalendarMessage('Saving event…');
     const fields = new FormData(event.currentTarget);
@@ -6855,8 +6894,8 @@ function CalendarView({
         body: JSON.stringify({
           title: value('title'),
           eventType: value('eventType'),
-          startsAt: `${date}T${value('startTime')}:00-03:00`,
-          endsAt: `${date}T${value('endTime')}:00-03:00`,
+          startsAt: localEventTime(date, value('startTime')),
+          endsAt: localEventTime(date, value('endTime')),
           location: value('location'),
           notes: value('notes'),
         }),
@@ -6868,24 +6907,29 @@ function CalendarView({
       if (!response.ok || !data.event)
         throw new Error(data.error ?? 'Unable to create the event.');
       setCalendarEvents((events) =>
-        [...events, data.event!].sort((a, b) =>
-          a.startsAt.localeCompare(b.startsAt),
+        [...events, data.event!].sort(
+          (a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt),
         ),
       );
       setCalendarMessage(`${data.event.title} added to the shared schedule`);
       setEventOpen(false);
       onNotify(`${data.event.title} added to the calendar.`);
     } catch (error) {
+      setCalendarEventError(
+        error instanceof Error ? error.message : 'Unable to create the event.',
+      );
       setCalendarMessage(
         error instanceof Error ? error.message : 'Unable to create the event.',
       );
     } finally {
+      calendarWriteLock.current = false;
       setEventSaving(false);
     }
   };
 
   const deleteCalendarEvent = async () => {
-    if (!selectedEvent) return;
+    if (!selectedEvent || calendarWriteLock.current) return;
+    calendarWriteLock.current = true;
     setEventSaving(true);
     try {
       const response = await fetch(
@@ -6903,42 +6947,29 @@ function CalendarView({
       );
       onNotify(`${selectedEvent.title} removed from the calendar.`, 'info');
       setSelectedEvent(null);
-      setCalendarMessage('Schedule saved locally');
+      setCalendarMessage(
+        'Saved schedule · times shown in this device’s time zone',
+      );
     } catch (error) {
       onNotify(
         error instanceof Error ? error.message : 'Unable to remove the event.',
         'error',
       );
     } finally {
+      calendarWriteLock.current = false;
       setEventSaving(false);
     }
   };
 
   const subscribeCalendar = () => {
-    const format = (iso: string) =>
-      iso
-        .replaceAll('-', '')
-        .replaceAll(':', '')
-        .replace(/\.\d{3}/, '')
-        .replace(/[+-]\d{2}00$/, '');
-    const ics = [
-      'BEGIN:VCALENDAR',
-      'VERSION:2.0',
-      'PRODID:-//ChalkTalk//Team Calendar//EN',
-      ...calendarEvents.flatMap((event) => [
-        'BEGIN:VEVENT',
-        `UID:${event.id}@chalktalk.local`,
-        `DTSTART:${format(event.startsAt)}`,
-        `DTEND:${format(event.endsAt)}`,
-        `SUMMARY:${event.title}`,
-        `LOCATION:${event.location}`,
-        `DESCRIPTION:${event.notes.replaceAll('\n', '\\n')}`,
-        'END:VEVENT',
-      ]),
-      'END:VCALENDAR',
-    ].join('\r\n');
-    downloadText('chalktalk-calendar.ics', ics, 'text/calendar;charset=utf-8');
-    onNotify('Calendar subscription file downloaded.');
+    downloadText(
+      'chalktalk-calendar.ics',
+      calendarExport(calendarEvents),
+      'text/calendar;charset=utf-8',
+    );
+    onNotify(
+      'Calendar export downloaded. Import it into your calendar app; it does not update automatically.',
+    );
   };
 
   const periodLabel =
@@ -6954,6 +6985,7 @@ function CalendarView({
       ? setMonthOffset((offset) => offset + direction)
       : setWeekOffset((offset) => offset + direction);
   const openNewEvent = () => {
+    setCalendarEventError('');
     setNewEventLocation(
       teamSettings.practiceFacility ||
         teamSettings.homeField ||
@@ -6963,6 +6995,31 @@ function CalendarView({
     setEventOpen(true);
   };
 
+  if (calendarLoad !== 'ready')
+    return (
+      <section className="module-surface calendar-surface">
+        <ModuleHeader
+          eyebrow="Shared schedule"
+          title="Calendar"
+          description="Your team’s saved events."
+        />
+        {calendarLoad === 'error' ? (
+          <>
+            <p role="alert">{calendarMessage}</p>
+            <Button
+              onClick={() => {
+                setCalendarLoad('loading');
+                setCalendarRetry((value) => value + 1);
+              }}
+            >
+              Retry schedule
+            </Button>
+          </>
+        ) : (
+          <output>Loading your saved schedule…</output>
+        )}
+      </section>
+    );
   return (
     <section className="module-surface calendar-surface">
       <ModuleHeader
@@ -6975,7 +7032,7 @@ function CalendarView({
           onClick={subscribeCalendar}
           variant="outline"
         >
-          <Download /> Subscribe
+          <Download /> Export calendar
         </Button>
         <Button className="module-primary" onClick={openNewEvent}>
           <Plus /> New event
@@ -7042,21 +7099,45 @@ function CalendarView({
                 </div>
               ))}
             </div>
-            <div className="week-body">
-              <div className="time-labels">
-                {['3 PM', '4 PM', '5 PM', '6 PM', '7 PM', '8 PM'].map(
-                  (time) => (
-                    <span key={time}>{time}</span>
+            <div
+              className="week-body"
+              style={{
+                height: Math.max(610, calendarHours.length * 80),
+                gridTemplateRows: `repeat(${calendarHours.length}, 1fr)`,
+              }}
+            >
+              <div
+                className="time-labels"
+                style={{
+                  gridTemplateRows: `repeat(${calendarHours.length}, 1fr)`,
+                }}
+              >
+                {calendarHours.map((hour) => (
+                  <span key={hour}>
+                    {hour % 12 || 12} {hour < 12 ? 'AM' : 'PM'}
+                  </span>
+                ))}
+              </div>
+              <div
+                className="calendar-grid-lines"
+                style={{
+                  gridTemplateRows: `repeat(${calendarHours.length}, 1fr)`,
+                }}
+              >
+                {Array.from(
+                  { length: calendarHours.length * 7 },
+                  (_, index) => (
+                    <i key={index} />
                   ),
                 )}
               </div>
-              <div className="calendar-grid-lines">
-                {Array.from({ length: 42 }, (_, index) => (
-                  <i key={index} />
-                ))}
-              </div>
               {weekEvents.map((event) => {
-                const placement = eventPlacement(event, weekDates);
+                const placement = eventPlacement(
+                  event,
+                  weekDates,
+                  firstHour,
+                  calendarHours.length,
+                );
                 return (
                   <button
                     className={'calendar-event ' + placement.tone}
@@ -7097,7 +7178,7 @@ function CalendarView({
                   <span>
                     <strong>{event.title}</strong>
                     <small>
-                      {event.startsAt.slice(0, 10)} ·{' '}
+                      {calendarDate(event.startsAt)} ·{' '}
                       {eventClock(event.startsAt).label} ·{' '}
                       {event.location || 'Location TBD'}
                     </small>
@@ -7176,14 +7257,23 @@ function CalendarView({
         </aside>
       </div>
 
-      <Dialog onOpenChange={setEventOpen} open={eventOpen}>
+      <Dialog
+        onOpenChange={(open) => {
+          if (!eventSaving) setEventOpen(open);
+        }}
+        open={eventOpen}
+      >
         <DialogContent className="athlete-dialog sm:max-w-[620px]">
-          <form onSubmit={createCalendarEvent}>
+          <form inert={eventSaving} onSubmit={createCalendarEvent}>
+            {calendarEventError ? (
+              <p role="alert">{calendarEventError}</p>
+            ) : null}
             <DialogHeader>
               <DialogTitle>Add calendar event</DialogTitle>
               <DialogDescription>
-                Put a team activity on the saved local schedule. It will be
-                available to practice plans and gameplanning next.
+                Times use this device’s time zone (
+                {new Intl.DateTimeFormat().resolvedOptions().timeZone}). The
+                event is saved to your team schedule.
               </DialogDescription>
             </DialogHeader>
             <div className="athlete-form-grid">
@@ -7319,7 +7409,7 @@ function CalendarView({
       </Dialog>
       <Dialog
         onOpenChange={(open) => {
-          if (!open) setSelectedEvent(null);
+          if (!open && !eventSaving) setSelectedEvent(null);
         }}
         open={Boolean(selectedEvent)}
       >
