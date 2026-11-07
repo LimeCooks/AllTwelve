@@ -774,7 +774,9 @@
   .module-header { align-items: flex-start; margin-bottom: 18px; }
   .module-header h1 { font-size: 30px; }
   .module-header > div:first-child > p:last-child { font-size: 13px; }
-  .module-actions { display: none; }
+  .module-header { align-items: stretch; flex-direction: column; gap: 16px; }
+  .module-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .module-actions > button,.module-actions > label { min-height: 44px; }
   .toolbar-row, .roster-toolbar, .depth-toolbar, .install-toolbar { align-items: stretch; flex-wrap: wrap; }
   .toolbar-search { min-width: 100%; }
   .filter-select { min-width: calc(100% - 53px); flex: 1; }

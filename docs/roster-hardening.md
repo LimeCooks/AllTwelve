@@ -18,6 +18,8 @@ The profile editor now updates names, jersey number, position, unit, grade, heig
 
 Tests cover correction, number clearing, duplicate rejection, owner isolation and preservation of notes/status/progress even when stale values are submitted with the profile. Browser verification corrected a disposable athlete's last name, jersey to zero, position and phone; a duplicate email was rejected without losing the entered changes. A valid save reopened with its original staff note. Unsaved form closure was tested with Keep editing and explicit Discard. Test profiles were removed with the guarded local cleanup and the pre-test roster/metrics matched exactly. The production-artifact rehearsal also corrects a profile and checks that it survives version changes.
 
+The phone viewport check also exposed a shared responsive rule hiding every module's header actions. Those actions now wrap below the heading with usable targets. Shared dialogs are bounded to the dynamic viewport and scroll internally. At 390×844, Add athlete was accessible, the dialog heading/Close remained in bounds, and scrolling reached the form's submit button. The empty form was closed without creating a record and the viewport override was reset. These browser checks do not establish real iOS keyboard/touch behavior.
+
 ## Remaining work
 
 Safe athlete removal/archive, actual account-to-athlete membership and review-derived learning progress remain incomplete. Physical phone/tablet editing and authenticated hosted roster workflows still need verification. A saved install percentage alone does not prove quiz or film completion.
