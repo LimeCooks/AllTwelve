@@ -2,6 +2,12 @@
 import { BackupControls } from '@/components/backup-controls';
 import { loadDashboard } from '@/lib/dashboard-load';
 import {
+  GAMEPLAN_KEY,
+  loadGameplan,
+  linkGameplanPlays,
+  resolveGameplanPlay,
+} from '@/lib/gameplan-state';
+import {
   WorkspaceGate,
   useWorkspaceSession,
   type WorkspaceSession,
@@ -5926,6 +5932,12 @@ function GameplanningView({
   const [targetInstall, setTargetInstall] = useState('');
   const [installDialogOpen, setInstallDialogOpen] = useState(false);
   const [sendingInstall, setSendingInstall] = useState(false);
+  const [planLoad, setPlanLoad] = useState<'loading' | 'ready' | 'error'>(
+    'loading',
+  );
+  const [planRetry, setPlanRetry] = useState(0);
+  const [savingPlan, setSavingPlan] = useState(false);
+  const planSaveLock = useRef(false);
   const insights = gameplanFilm
     .filter((clip) => clip.note || clip.concept || clip.tags.length)
     .slice(0, 8)
@@ -5940,29 +5952,36 @@ function GameplanningView({
     }));
 
   useEffect(() => {
-    loadWorkspaceState('gameplan-week-5-v2', {
-      unit: 'Offence',
-      included: [] as string[],
-      objectives: initialGameplanObjectives,
-      callBuckets: initialGameplanBuckets,
-    })
-      .then((saved) => {
+    let cancelled = false;
+    Promise.all([
+      loadGameplan(),
+      loadPlaybookData(),
+      fetch('/api/film', { cache: 'no-store' }).then(async (response) => {
+        if (!response.ok) throw new Error('Unable to load film observations.');
+        const data = (await response.json()) as FilmPayload;
+        if (!Array.isArray(data.clips))
+          throw new Error('The film response was incomplete.');
+        return data;
+      }),
+    ])
+      .then(([state, playbook, film]) => {
+        if (cancelled) return;
+        const saved = linkGameplanPlays(state, playbook.plays);
         setUnit(saved.unit);
         setIncluded(saved.included);
         setObjectives(saved.objectives);
         setCallBuckets(saved.callBuckets);
+        setGameplanPlays(playbook.plays);
+        setGameplanFilm(film.clips);
+        setPlanLoad('ready');
       })
-      .catch(() =>
-        onNotify('Saved gameplan changes could not be restored.', 'warning'),
-      );
-    loadPlaybookData()
-      .then((data) => setGameplanPlays(data.plays))
-      .catch(() => setGameplanPlays([]));
-    fetch('/api/film', { cache: 'no-store' })
-      .then(async (response) => (await response.json()) as FilmPayload)
-      .then((data) => setGameplanFilm(data.clips ?? []))
-      .catch(() => setGameplanFilm([]));
-  }, [onNotify]);
+      .catch(() => {
+        if (!cancelled) setPlanLoad('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [planRetry]);
 
   const saveGameplan = async (changes: {
     unit?: string;
@@ -5970,29 +5989,50 @@ function GameplanningView({
     objectives?: typeof objectives;
     callBuckets?: typeof callBuckets;
   }) => {
+    if (planSaveLock.current || planLoad !== 'ready') return false;
+    planSaveLock.current = true;
+    setSavingPlan(true);
     const next = {
       unit: changes.unit ?? unit,
       included: changes.included ?? included,
       objectives: changes.objectives ?? objectives,
       callBuckets: changes.callBuckets ?? callBuckets,
     };
-    await saveWorkspaceState('gameplan-week-5-v2', next);
+    try {
+      await saveWorkspaceState(GAMEPLAN_KEY, next);
+      setUnit(next.unit);
+      setIncluded(next.included);
+      setObjectives(next.objectives);
+      setCallBuckets(next.callBuckets);
+      return true;
+    } catch (error) {
+      onNotify(
+        error instanceof Error
+          ? error.message
+          : 'Unable to save the gameplan. Please retry.',
+        'error',
+      );
+      return false;
+    } finally {
+      planSaveLock.current = false;
+      setSavingPlan(false);
+    }
   };
 
   const sendPlanToInstall = async () => {
     if (!targetInstall || sendingInstall) return;
     setSendingInstall(true);
     try {
-      await saveGameplan({});
+      if (!(await saveGameplan({}))) return;
       const selectedNames = Array.from(
         new Set(callBuckets.flatMap((bucket) => bucket.plays)),
       );
       const selectedPlays = selectedNames
-        .map((name) => gameplanPlays.find((play) => play.name === name))
+        .map((reference) => resolveGameplanPlay(reference, gameplanPlays))
         .filter((play): play is StudioPlay => Boolean(play));
       if (selectedPlays.length !== selectedNames.length)
         throw new Error(
-          'Some selected plays were renamed or deleted. Update the call sheet before sending.',
+          'Some selected plays are unavailable or have ambiguous legacy names. Remove and reselect them before sending.',
         );
       const response = await fetch('/api/install', {
         method: 'POST',
@@ -6015,7 +6055,7 @@ function GameplanningView({
       setSendingInstall(false);
     }
   };
-  const addObjective = (event: SyntheticEvent<HTMLFormElement>) => {
+  const addObjective = async (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
     const title = formText(fields, 'objectiveTitle').trim();
@@ -6028,12 +6068,13 @@ function GameplanningView({
         target: formText(fields, 'objectiveTarget').trim(),
       },
     ];
-    setObjectives(next);
-    void saveGameplan({ objectives: next });
+    if (!(await saveGameplan({ objectives: next }))) return;
     setObjectiveDialogOpen(false);
     onNotify('Objective added.');
   };
-  const addCallSheetSection = (event: SyntheticEvent<HTMLFormElement>) => {
+  const addCallSheetSection = async (
+    event: SyntheticEvent<HTMLFormElement>,
+  ) => {
     event.preventDefault();
     const name = formText(
       new FormData(event.currentTarget),
@@ -6041,12 +6082,42 @@ function GameplanningView({
     ).trim();
     if (!name) return;
     const next = [...callBuckets, { name, plays: [] }];
-    setCallBuckets(next);
-    void saveGameplan({ callBuckets: next });
+    if (!(await saveGameplan({ callBuckets: next }))) return;
     setSectionDialogOpen(false);
   };
+  if (planLoad !== 'ready')
+    return (
+      <section className="module-surface">
+        <ModuleHeader
+          eyebrow="Coordinator workspace"
+          title="Gameplan"
+          description="Your saved plan, plays, and film observations."
+        />
+        {planLoad === 'error' ? (
+          <>
+            <p role="alert">
+              Your gameplan could not be loaded. Your saved plan has not been
+              changed.
+            </p>
+            <Button
+              onClick={() => {
+                setPlanLoad('loading');
+                setPlanRetry((value) => value + 1);
+              }}
+            >
+              Retry gameplan
+            </Button>
+          </>
+        ) : (
+          <output>Loading your gameplan…</output>
+        )}
+      </section>
+    );
   return (
-    <section className="module-surface gameplan-surface">
+    <section
+      className="module-surface gameplan-surface"
+      inert={savingPlan || sendingInstall}
+    >
       <Dialog
         open={installDialogOpen}
         onOpenChange={(open) => {
@@ -6112,7 +6183,9 @@ function GameplanningView({
         </Button>
         <Button
           className="module-primary"
-          disabled={!callBuckets.some((bucket) => bucket.plays.length)}
+          disabled={
+            savingPlan || !callBuckets.some((bucket) => bucket.plays.length)
+          }
           onClick={() => {
             void fetch('/api/install')
               .then(async (response) => {
@@ -6195,7 +6268,6 @@ function GameplanningView({
               className={unit === item ? 'active' : ''}
               key={item}
               onClick={() => {
-                setUnit(item);
                 void saveGameplan({ unit: item });
               }}
               type="button"
@@ -6205,7 +6277,8 @@ function GameplanningView({
           ))}
         </div>
         <span className="autosave-status">
-          <CheckCircle2 /> Saved locally
+          <CheckCircle2 />{' '}
+          {savingPlan ? 'Saving…' : 'Changes save automatically'}
         </span>
         <Button onClick={() => setBriefOpen(true)} variant="outline">
           <Eye /> Preview staff brief
@@ -6221,7 +6294,7 @@ function GameplanningView({
             <Badge>{insights.length}</Badge>
           </div>
           <p className="panel-helper">
-            Add evidence-backed ideas to this week’s plan.
+            Add film observations to your active plan.
           </p>
           {insights.map((item) => (
             <button
@@ -6231,7 +6304,6 @@ function GameplanningView({
                 const next = included.includes(item.id)
                   ? included.filter((id) => id !== item.id)
                   : [...included, item.id];
-                setIncluded(next);
                 void saveGameplan({ included: next });
               }}
               type="button"
@@ -6284,7 +6356,6 @@ function GameplanningView({
                       const next = objectives.filter(
                         (_, itemIndex) => itemIndex !== index,
                       );
-                      setObjectives(next);
                       void saveGameplan({ objectives: next });
                     }}
                     size="icon-sm"
@@ -6337,7 +6408,6 @@ function GameplanningView({
                             ? { ...item, plays: [...item.plays, play] }
                             : item,
                         );
-                        setCallBuckets(next);
                         void saveGameplan({ callBuckets: next });
                         event.target.value = '';
                       }}
@@ -6350,27 +6420,26 @@ function GameplanningView({
                         .filter(
                           (play) =>
                             (play.unit ?? 'Offence') === unit &&
-                            !bucket.plays.includes(play.name),
+                            !bucket.plays.includes(play.id),
                         )
                         .map((play) => (
-                          <NativeSelectOption key={play.id} value={play.name}>
+                          <NativeSelectOption key={play.id} value={play.id}>
                             {play.name}
                           </NativeSelectOption>
                         ))}
                     </NativeSelect>
                   </header>
                   {bucket.plays.map((play, index) => {
-                    const savedPlay = gameplanPlays.find(
-                      (item) => item.name === play,
-                    );
+                    const savedPlay = resolveGameplanPlay(play, gameplanPlays);
                     const linked = gameplanFilm.filter(
                       (clip) => clip.playId === savedPlay?.id,
                     ).length;
                     return (
                       <div key={`${play}-${index}`}>
-                        <GripVertical />
                         <span>
-                          <b>{play}</b>
+                          <b>
+                            {savedPlay?.name ?? `Unavailable play: ${play}`}
+                          </b>
                           <small>
                             {index === 0 ? 'Primary' : 'Complement'}
                           </small>
@@ -6392,7 +6461,7 @@ function GameplanningView({
                           )}
                         </button>
                         <Button
-                          aria-label={`Remove ${play}`}
+                          aria-label={`Remove ${savedPlay?.name ?? play}`}
                           onClick={() => {
                             const next = callBuckets.map((item, itemIndex) =>
                               itemIndex === bucketIndex
@@ -6404,7 +6473,6 @@ function GameplanningView({
                                   }
                                 : item,
                             );
-                            setCallBuckets(next);
                             void saveGameplan({ callBuckets: next });
                           }}
                           size="icon-sm"
@@ -6531,9 +6599,17 @@ function GameplanningView({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog onOpenChange={setObjectiveDialogOpen} open={objectiveDialogOpen}>
+      <Dialog
+        onOpenChange={(open) => {
+          if (!savingPlan) setObjectiveDialogOpen(open);
+        }}
+        open={objectiveDialogOpen}
+      >
         <DialogContent className="athlete-dialog sm:max-w-[560px]">
-          <form onSubmit={addObjective}>
+          <form
+            inert={savingPlan}
+            onSubmit={(event) => void addObjective(event)}
+          >
             <DialogHeader>
               <DialogTitle>Add an objective</DialogTitle>
               <DialogDescription>
@@ -6563,15 +6639,23 @@ function GameplanningView({
                 Cancel
               </Button>
               <Button type="submit">
-                Add objective <Plus />
+                {savingPlan ? 'Saving…' : 'Add objective'} <Plus />
               </Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
-      <Dialog onOpenChange={setSectionDialogOpen} open={sectionDialogOpen}>
+      <Dialog
+        onOpenChange={(open) => {
+          if (!savingPlan) setSectionDialogOpen(open);
+        }}
+        open={sectionDialogOpen}
+      >
         <DialogContent className="athlete-dialog sm:max-w-[460px]">
-          <form onSubmit={addCallSheetSection}>
+          <form
+            inert={savingPlan}
+            onSubmit={(event) => void addCallSheetSection(event)}
+          >
             <DialogHeader>
               <DialogTitle>Add a call-sheet section</DialogTitle>
               <DialogDescription>
@@ -6598,7 +6682,7 @@ function GameplanningView({
                 Cancel
               </Button>
               <Button type="submit">
-                Add section <Plus />
+                {savingPlan ? 'Saving…' : 'Add section'} <Plus />
               </Button>
             </DialogFooter>
           </form>
@@ -7310,6 +7394,24 @@ function PracticePlansView({
   const [selectedPlanId, setSelectedPlanId] = useState('');
   const [newPlanOpen, setNewPlanOpen] = useState(false);
   const [newSegmentOpen, setNewSegmentOpen] = useState(false);
+  const [practiceLoad, setPracticeLoad] = useState<
+    'loading' | 'ready' | 'error'
+  >('loading');
+  const [practiceRetry, setPracticeRetry] = useState(0);
+  const [practiceBusy, setPracticeBusy] = useState(false);
+  const [replacePracticeOpen, setReplacePracticeOpen] = useState(false);
+  const practiceLock = useRef(false);
+  const mutatePractice = async (action: () => Promise<void>) => {
+    if (practiceLock.current || practiceLoad !== 'ready') return;
+    practiceLock.current = true;
+    setPracticeBusy(true);
+    try {
+      await action();
+    } finally {
+      practiceLock.current = false;
+      setPracticeBusy(false);
+    }
+  };
   const selectedPlan =
     practicePlans.find((plan) => plan.id === selectedPlanId) ?? null;
   const durationMinutes = practiceBlocks.reduce(
@@ -7318,6 +7420,7 @@ function PracticePlansView({
   );
 
   useEffect(() => {
+    let cancelled = false;
     fetch('/api/practice-plans', { cache: 'no-store' })
       .then(async (response) => {
         const data = (await response.json()) as {
@@ -7326,17 +7429,24 @@ function PracticePlansView({
         };
         if (!response.ok)
           throw new Error(data.error ?? 'Unable to load practice plans.');
-        const plans = data.plans ?? [];
+        if (!Array.isArray(data.plans))
+          throw new Error('The practice response was incomplete.');
+        if (cancelled) return;
+        const plans = data.plans;
         setPracticePlans(plans);
         const plan = plans[0];
         setSelectedPlanId(plan?.id ?? '');
         setGenerated(plan?.generated ?? false);
         setPracticeBlocks(plan?.blocks ?? []);
+        setPracticeLoad('ready');
       })
-      .catch(() =>
-        onNotify('Saved practice plans could not be restored.', 'warning'),
-      );
-  }, [onNotify]);
+      .catch(() => {
+        if (!cancelled) setPracticeLoad('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [practiceRetry]);
 
   const savePractice = async (
     blocks = practiceBlocks,
@@ -7364,20 +7474,21 @@ function PracticePlansView({
     });
     const data = (await response.json()) as {
       plans?: PracticePlanRecord[];
+      savedPlanId?: string;
       error?: string;
     };
     if (!response.ok)
       throw new Error(data.error ?? 'Unable to save the practice plan.');
-    const plans = data.plans ?? [];
-    setPracticePlans(plans);
-    const saved = selectedPlan
-      ? plans.find((plan) => plan.id === selectedPlan.id)
-      : plans[0];
-    if (saved) {
-      setSelectedPlanId(saved.id);
-      setPracticeBlocks(saved.blocks);
-      setGenerated(saved.generated);
-    }
+    const plans = data.plans;
+    const saved = plans?.find((plan) => plan.id === data.savedPlanId);
+    if (!saved || (selectedPlan && saved.id !== selectedPlan.id))
+      throw new Error(
+        'The saved practice plan could not be confirmed. Reload before retrying.',
+      );
+    setPracticePlans(plans!);
+    setSelectedPlanId(saved.id);
+    setPracticeBlocks(saved.blocks);
+    setGenerated(saved.generated);
   };
 
   const createPractice = async (event: SyntheticEvent<HTMLFormElement>) => {
@@ -7398,25 +7509,26 @@ function PracticePlansView({
     });
     const data = (await response.json()) as {
       plans?: PracticePlanRecord[];
+      savedPlanId?: string;
       error?: string;
     };
     if (!response.ok)
       throw new Error(data.error ?? 'Unable to create the practice plan.');
-    const plan =
-      data.plans?.find((item) => item.title === title) ?? data.plans?.[0];
-    setPracticePlans(data.plans ?? []);
-    setSelectedPlanId(plan?.id ?? '');
-    setPracticeBlocks(plan?.blocks ?? []);
+    const plan = data.plans?.find((item) => item.id === data.savedPlanId);
+    if (!plan)
+      throw new Error(
+        'The new practice plan could not be confirmed. Reload before retrying.',
+      );
+    setPracticePlans(data.plans!);
+    setSelectedPlanId(plan.id);
+    setPracticeBlocks(plan.blocks);
     setGenerated(false);
     setNewPlanOpen(false);
     onNotify(`${title} created.`);
   };
 
   const generatePractice = async () => {
-    const gameplan = await loadWorkspaceState<{
-      objectives: { title: string; detail: string }[];
-      callBuckets: { name: string; plays: string[] }[];
-    }>('gameplan-week-5-v2', { objectives: [], callBuckets: [] });
+    const gameplan = await loadGameplan();
     const generatedBlocks = [
       ...gameplan.objectives.map((objective) => [
         'TBD',
@@ -7432,7 +7544,9 @@ function PracticePlansView({
           '15 min',
           bucket.name,
           `${bucket.plays.length} saved plays`,
-          'offence',
+          gameplan.unit === 'Special teams'
+            ? 'teams'
+            : gameplan.unit.toLowerCase(),
         ]),
     ];
     if (!generatedBlocks.length) {
@@ -7442,8 +7556,6 @@ function PracticePlansView({
       );
       return;
     }
-    setGenerated(true);
-    setPracticeBlocks(generatedBlocks);
     await savePractice(generatedBlocks, true);
     onNotify('Practice plan generated from saved gameplan items.');
   };
@@ -7464,7 +7576,6 @@ function PracticePlansView({
       ...practiceBlocks,
       [start, `${minutes} min`, title, focus, group],
     ];
-    setPracticeBlocks(next);
     await savePractice(next);
     onNotify('Practice segment added.');
     setNewSegmentOpen(false);
@@ -7489,9 +7600,38 @@ function PracticePlansView({
     setGenerated(next?.generated ?? false);
     onNotify(`${selectedPlan.title} deleted.`);
   };
+  if (practiceLoad !== 'ready')
+    return (
+      <section className="module-surface">
+        <ModuleHeader
+          eyebrow="Team preparation"
+          title="Practice Plans"
+          description="Your saved practice plans."
+        />
+        {practiceLoad === 'error' ? (
+          <>
+            <p role="alert">
+              Your practice plans could not be loaded. Your saved plans have not
+              been changed.
+            </p>
+            <Button
+              onClick={() => {
+                setPracticeLoad('loading');
+                setPracticeRetry((value) => value + 1);
+              }}
+            >
+              Retry practice plans
+            </Button>
+          </>
+        ) : (
+          <output>Loading your practice plans…</output>
+        )}
+      </section>
+    );
   return (
     <section
       className={`module-surface practice-surface ${playerView ? 'player-preview' : ''}`}
+      inert={practiceBusy}
     >
       <ModuleHeader
         eyebrow="Team preparation"
@@ -7510,16 +7650,20 @@ function PracticePlansView({
         </Button>
         <Button
           className="module-primary"
-          onClick={() =>
-            void generatePractice().catch((error: unknown) =>
+          onClick={() => {
+            if (practiceBlocks.length) {
+              setReplacePracticeOpen(true);
+              return;
+            }
+            void mutatePractice(generatePractice).catch((error: unknown) =>
               onNotify(
                 error instanceof Error
                   ? error.message
                   : 'Unable to generate practice.',
                 'error',
               ),
-            )
-          }
+            );
+          }}
         >
           <Sparkles /> {generated ? 'Refresh from plan' : 'Generate from plan'}
         </Button>
@@ -7547,7 +7691,7 @@ function PracticePlansView({
         <Button
           disabled={!selectedPlan}
           onClick={() =>
-            void deletePractice().catch((error: unknown) =>
+            void mutatePractice(deletePractice).catch((error: unknown) =>
               onNotify(
                 error instanceof Error
                   ? error.message
@@ -7625,7 +7769,7 @@ function PracticePlansView({
             <div>
               <strong>Practice timeline</strong>
               <span>
-                {selectedPlan ? 'Saved local plan' : 'Create a plan to begin'} ·{' '}
+                {selectedPlan ? 'Saved plan' : 'Create a plan to begin'} ·{' '}
                 {practiceBlocks.length} segments
               </span>
             </div>
@@ -7644,7 +7788,6 @@ function PracticePlansView({
                 className={'practice-block ' + block[4]}
                 key={`${block[2]}-${index}`}
               >
-                <GripVertical />
                 <div className="practice-time">
                   <strong>{block[0]}</strong>
                   <small>{block[1]}</small>
@@ -7665,9 +7808,17 @@ function PracticePlansView({
                     const next = practiceBlocks.filter(
                       (_, itemIndex) => itemIndex !== index,
                     );
-                    setPracticeBlocks(next);
-                    void savePractice(next);
-                    onNotify(`${block[2]} removed from practice.`);
+                    void mutatePractice(async () => {
+                      await savePractice(next);
+                      onNotify(`${block[2]} removed from practice.`);
+                    }).catch((error: unknown) =>
+                      onNotify(
+                        error instanceof Error
+                          ? error.message
+                          : 'Unable to remove the segment.',
+                        'error',
+                      ),
+                    );
                   }}
                   size="icon-sm"
                   variant="ghost"
@@ -7732,19 +7883,71 @@ function PracticePlansView({
           </section>
         </aside>
       </div>
-      <Dialog onOpenChange={setNewPlanOpen} open={newPlanOpen}>
+      <Dialog
+        open={replacePracticeOpen}
+        onOpenChange={(open) => {
+          if (!practiceBusy) setReplacePracticeOpen(open);
+        }}
+      >
+        <DialogContent className="athlete-dialog">
+          <DialogHeader>
+            <DialogTitle>Replace the existing practice segments?</DialogTitle>
+            <DialogDescription>
+              This will replace all {practiceBlocks.length} segments in{' '}
+              {selectedPlan?.title ?? 'this plan'}, including manually added
+              segments, with the current saved gameplan.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              disabled={practiceBusy}
+              variant="outline"
+              onClick={() => setReplacePracticeOpen(false)}
+            >
+              Keep current segments
+            </Button>
+            <Button
+              disabled={practiceBusy}
+              onClick={() =>
+                void mutatePractice(async () => {
+                  await generatePractice();
+                  setReplacePracticeOpen(false);
+                }).catch((error: unknown) =>
+                  onNotify(
+                    error instanceof Error
+                      ? error.message
+                      : 'Unable to generate practice.',
+                    'error',
+                  ),
+                )
+              }
+            >
+              {practiceBusy ? 'Saving…' : 'Replace segments'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        onOpenChange={(open) => {
+          if (!practiceBusy) setNewPlanOpen(open);
+        }}
+        open={newPlanOpen}
+      >
         <DialogContent className="athlete-dialog sm:max-w-[500px]">
           <form
-            onSubmit={(event) =>
-              void createPractice(event).catch((error: unknown) =>
-                onNotify(
-                  error instanceof Error
-                    ? error.message
-                    : 'Unable to create a plan.',
-                  'error',
-                ),
-              )
-            }
+            inert={practiceBusy}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void mutatePractice(() => createPractice(event)).catch(
+                (error: unknown) =>
+                  onNotify(
+                    error instanceof Error
+                      ? error.message
+                      : 'Unable to create a plan.',
+                    'error',
+                  ),
+              );
+            }}
           >
             <DialogHeader>
               <DialogTitle>New practice plan</DialogTitle>
@@ -7782,25 +7985,33 @@ function PracticePlansView({
                 Cancel
               </Button>
               <Button type="submit">
-                Create plan <Plus />
+                {practiceBusy ? 'Saving…' : 'Create plan'} <Plus />
               </Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
-      <Dialog onOpenChange={setNewSegmentOpen} open={newSegmentOpen}>
+      <Dialog
+        onOpenChange={(open) => {
+          if (!practiceBusy) setNewSegmentOpen(open);
+        }}
+        open={newSegmentOpen}
+      >
         <DialogContent className="athlete-dialog sm:max-w-[560px]">
           <form
-            onSubmit={(event) =>
-              void addPracticeSegment(event).catch((error: unknown) =>
-                onNotify(
-                  error instanceof Error
-                    ? error.message
-                    : 'Unable to add a segment.',
-                  'error',
-                ),
-              )
-            }
+            inert={practiceBusy}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void mutatePractice(() => addPracticeSegment(event)).catch(
+                (error: unknown) =>
+                  onNotify(
+                    error instanceof Error
+                      ? error.message
+                      : 'Unable to add a segment.',
+                    'error',
+                  ),
+              );
+            }}
           >
             <DialogHeader>
               <DialogTitle>Add practice segment</DialogTitle>
@@ -7868,7 +8079,7 @@ function PracticePlansView({
                 Cancel
               </Button>
               <Button type="submit">
-                Add segment <Plus />
+                {practiceBusy ? 'Saving…' : 'Add segment'} <Plus />
               </Button>
             </DialogFooter>
           </form>

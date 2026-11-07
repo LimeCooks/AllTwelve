@@ -99,6 +99,9 @@ const playbooks = await import(
   await moduleUrl('../app/api/playbooks/route.ts', replacements)
 );
 const { getDatabase } = await import(dbUrl);
+const practicePlans = await import(
+  await moduleUrl('../app/api/practice-plans/route.ts', replacements)
+);
 const { identityFromHeaders } = await import(identityUrl);
 const workspaceState = await import(
   await moduleUrl('../app/api/workspace-state/route.ts', [
@@ -333,6 +336,75 @@ test('fresh hosted migration chain is empty, identity required, owners receive i
   );
   assert.equal(sqlite.prepare('SELECT count(*) AS n FROM teams').get().n, 2);
   assert.equal(sqlite.prepare('SELECT count(*) AS n FROM athletes').get().n, 0);
+});
+
+test('practice saves return the exact plan, reject invalid updates, and isolate owners', async () => {
+  const alice = { id: 'owner-a', name: 'Coach A', email: 'a@example.test' };
+  globalThis.privateTestIdentity = alice;
+  const body = {
+    title: 'Same name',
+    practiceDate: '2026-11-06',
+    blocks: [['4:00', '10 min', 'Contain', 'Leverage', 'defence']],
+    generated: true,
+  };
+  const first = await practicePlans.POST(request(body));
+  assert.equal(first.status, 201);
+  const a = await first.json();
+  const second = await practicePlans.POST(request(body));
+  const b = await second.json();
+  assert.notEqual(a.savedPlanId, b.savedPlanId);
+  assert.equal(
+    b.plans.find((plan) => plan.id === b.savedPlanId).durationMinutes,
+    10,
+  );
+  const update = {
+    ...body,
+    id: b.savedPlanId,
+    blocks: [...body.blocks, ['4:10', '15 min', 'Coverage', '', 'defence']],
+  };
+  assert.equal((await practicePlans.PUT(request(update))).status, 200);
+  for (const invalid of [
+    { ...update, practiceDate: '2026-02-30' },
+    { ...update, blocks: [['TBD', '-5 min', 'Bad', '', 'team']] },
+    { ...update, blocks: null },
+    { ...update, title: '' },
+  ])
+    assert.equal((await practicePlans.PUT(request(invalid))).status, 400);
+  const reopened = (await (await practicePlans.GET()).json()).plans.find(
+    (plan) => plan.id === b.savedPlanId,
+  );
+  assert.equal(reopened.durationMinutes, 25);
+  assert.deepEqual(reopened.blocks, update.blocks);
+  globalThis.privateTestIdentity = {
+    id: 'owner-b',
+    name: 'Coach B',
+    email: 'b@example.test',
+  };
+  assert.equal((await (await practicePlans.GET()).json()).plans.length, 0);
+  assert.equal((await practicePlans.PUT(request(update))).status, 404);
+  assert.equal(
+    (
+      await practicePlans.DELETE(
+        new Request(
+          `https://pilot.test/api/practice-plans?id=${b.savedPlanId}`,
+        ),
+      )
+    ).status,
+    404,
+  );
+  globalThis.privateTestIdentity = alice;
+  for (const id of [a.savedPlanId, b.savedPlanId])
+    assert.equal(
+      (
+        await practicePlans.DELETE(
+          new Request(`https://pilot.test/api/practice-plans?id=${id}`),
+        )
+      ).status,
+      200,
+    );
+  globalThis.privateTestIdentity = null;
+  assert.equal((await practicePlans.GET()).status, 401);
+  assert.equal((await practicePlans.POST(request(body))).status, 401);
 });
 
 test('profile updates remain team-scoped and update the next signed-in session', async () => {
