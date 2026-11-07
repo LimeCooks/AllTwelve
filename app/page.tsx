@@ -1960,6 +1960,7 @@ function ModuleView({
   if (view === 'Athletes')
     return (
       <AthletesView
+        onEditingChange={onPlayEditingChange}
         assetRevision={assetRevision}
         onAssetsChanged={onAssetsChanged}
         onNotify={onNotify}
@@ -3749,10 +3750,12 @@ function positionFamily(position: string, unit: string) {
 }
 
 function AthletesView({
+  onEditingChange,
   assetRevision,
   onAssetsChanged,
   onNotify,
 }: {
+  onEditingChange: (editing: boolean) => void;
   assetRevision: number;
   onAssetsChanged: () => void;
   onNotify: Notify;
@@ -3770,6 +3773,27 @@ function AthletesView({
   const [saving, setSaving] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [dataMessage, setDataMessage] = useState('Loading your roster…');
+  const [rosterLoadError, setRosterLoadError] = useState(false);
+  const [rosterRetry, setRosterRetry] = useState(0);
+  const [rosterSaveError, setRosterSaveError] = useState('');
+  const [noteDraft, setNoteDraft] = useState('');
+  const [pendingAthlete, setPendingAthlete] = useState<AthleteRecord | null>(
+    null,
+  );
+  const rosterWriteLock = useRef(false);
+  const noteDirty = Boolean(selected && noteDraft !== selected.staffNote);
+  useEffect(() => {
+    onEditingChange(noteDirty || saving);
+    return () => onEditingChange(false);
+  }, [noteDirty, saving, onEditingChange]);
+  useEffect(() => {
+    if (!noteDirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [noteDirty]);
   const visibleAthletes = useMemo(
     () =>
       roster.filter((athlete) => {
@@ -3787,7 +3811,7 @@ function AthletesView({
 
   useEffect(() => {
     let active = true;
-    fetch('/api/athletes')
+    fetch('/api/athletes', { cache: 'no-store' })
       .then(async (response) => {
         const data = (await response.json()) as {
           athletes?: AthleteRecord[];
@@ -3796,31 +3820,31 @@ function AthletesView({
         };
         if (!response.ok)
           throw new Error(data.error ?? 'Unable to load the roster.');
+        if (!Array.isArray(data.athletes) || !data.metrics)
+          throw new Error('The saved roster response was incomplete.');
         return data;
       })
       .then((data) => {
         if (!active || !data.athletes || !data.metrics) return;
         setRoster(data.athletes);
         setMetrics(data.metrics);
-        setSelected(
-          (current) =>
-            data.athletes?.find((athlete) => athlete.id === current?.id) ??
-            data.athletes?.[0] ??
-            null,
-        );
+        setSelected(data.athletes[0] ?? null);
+        setNoteDraft(data.athletes[0]?.staffNote ?? '');
         setDataMessage(
           data.athletes.length
-            ? 'Saved locally'
+            ? 'Saved roster'
             : 'Roster empty · ready for your athletes',
         );
       })
       .catch((error: unknown) => {
-        if (active)
+        if (active) {
+          setRosterLoadError(true);
           setDataMessage(
             error instanceof Error
               ? error.message
               : 'The roster could not be loaded.',
           );
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -3828,10 +3852,13 @@ function AthletesView({
     return () => {
       active = false;
     };
-  }, [onNotify]);
+  }, [rosterRetry]);
 
   const createAthlete = async (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (rosterWriteLock.current) return;
+    rosterWriteLock.current = true;
+    setRosterSaveError('');
     setSaving(true);
     setDataMessage('Saving athlete…');
     const fields = new FormData(event.currentTarget);
@@ -3874,14 +3901,19 @@ function AthletesView({
       );
       setMetrics(data.metrics);
       setSelected(data.athlete);
+      setNoteDraft(data.athlete.staffNote);
       setAddOpen(false);
-      setDataMessage(`${data.athlete.name} added to the local roster`);
+      setDataMessage(`${data.athlete.name} added to the roster`);
       onNotify(`${data.athlete.name} added to the roster.`);
     } catch (error) {
+      setRosterSaveError(
+        error instanceof Error ? error.message : 'Unable to add athlete.',
+      );
       setDataMessage(
         error instanceof Error ? error.message : 'Unable to add athlete.',
       );
     } finally {
+      rosterWriteLock.current = false;
       setSaving(false);
     }
   };
@@ -3891,7 +3923,9 @@ function AthletesView({
       Pick<AthleteRecord, 'status' | 'staffNote' | 'install' | 'attendance'>
     >,
   ) => {
-    if (!selected) return;
+    if (!selected || rosterWriteLock.current) return false;
+    rosterWriteLock.current = true;
+    setRosterSaveError('');
     setSaving(true);
     setDataMessage('Saving changes…');
     try {
@@ -3913,24 +3947,69 @@ function AthletesView({
       };
       if (!response.ok || !data.athlete || !data.metrics)
         throw new Error(data.error ?? 'Unable to save changes.');
-      setSelected(data.athlete);
+      setSelected((current) =>
+        current?.id === data.athlete?.id ? data.athlete! : current,
+      );
       setRoster((items) =>
         items.map((athlete) =>
           athlete.id === data.athlete?.id ? data.athlete : athlete,
         ),
       );
       setMetrics(data.metrics);
-      setDataMessage('Changes saved locally');
+      if (changes.staffNote !== undefined) setNoteDraft(data.athlete.staffNote);
+      setDataMessage('Changes saved');
       onNotify(`${data.athlete.name} updated.`);
+      return true;
     } catch (error) {
+      setRosterSaveError(
+        error instanceof Error ? error.message : 'Unable to save changes.',
+      );
       setDataMessage(
         error instanceof Error ? error.message : 'Unable to save changes.',
       );
+      return false;
     } finally {
+      rosterWriteLock.current = false;
       setSaving(false);
     }
   };
 
+  const chooseAthlete = (athlete: AthleteRecord) => {
+    if (rosterWriteLock.current || athlete.id === selected?.id) return;
+    if (noteDirty) {
+      setPendingAthlete(athlete);
+      return;
+    }
+    setSelected(athlete);
+    setNoteDraft(athlete.staffNote);
+    setRosterSaveError('');
+  };
+  if (loading || rosterLoadError)
+    return (
+      <section className="module-surface roster-surface">
+        <ModuleHeader
+          eyebrow="People & availability"
+          title="Athletes"
+          description="Your saved team roster."
+        />
+        {rosterLoadError ? (
+          <>
+            <p role="alert">{dataMessage}</p>
+            <Button
+              onClick={() => {
+                setLoading(true);
+                setRosterLoadError(false);
+                setRosterRetry((value) => value + 1);
+              }}
+            >
+              Retry roster
+            </Button>
+          </>
+        ) : (
+          <output>Loading your roster…</output>
+        )}
+      </section>
+    );
   return (
     <section className="module-surface roster-surface">
       <ModuleHeader
@@ -3976,7 +4055,14 @@ function AthletesView({
         >
           <Download /> Export
         </Button>
-        <Button className="module-primary" onClick={() => setAddOpen(true)}>
+        <Button
+          className="module-primary"
+          disabled={saving || noteDirty}
+          onClick={() => {
+            setRosterSaveError('');
+            setAddOpen(true);
+          }}
+        >
           <UserPlus /> Add athlete
         </Button>
       </ModuleHeader>
@@ -4122,7 +4208,7 @@ function AthletesView({
                   <tr
                     className={`${selected?.id === athlete.id ? 'selected ' : ''}position-family-${family}`}
                     key={athlete.id}
-                    onClick={() => setSelected(athlete)}
+                    onClick={() => chooseAthlete(athlete)}
                   >
                     <td>
                       <MediaAvatar
@@ -4177,8 +4263,7 @@ function AthletesView({
                         aria-label={`Open ${athlete.name}`}
                         onClick={(event) => {
                           event.stopPropagation();
-                          setSelected(athlete);
-                          onNotify(`${athlete.name} profile opened.`, 'info');
+                          chooseAthlete(athlete);
                         }}
                         size="icon-sm"
                         variant="ghost"
@@ -4213,40 +4298,8 @@ function AthletesView({
                   {selected.unit} · Grade {selected.year}
                 </p>
               </div>
-              <Button
-                aria-label="Athlete options"
-                onClick={() =>
-                  onNotify(
-                    `Availability, install, and private notes for ${selected.name} are editable here.`,
-                    'info',
-                  )
-                }
-                size="icon-sm"
-                variant="ghost"
-              >
-                <MoreHorizontal />
-              </Button>
             </div>
             <div className="contact-actions">
-              <Button
-                onClick={async () => {
-                  const state = await loadWorkspaceState<{
-                    threads: Record<string, string[]>;
-                  }>('messages-team', { threads: {} });
-                  await saveWorkspaceState('messages-team', {
-                    threads: {
-                      ...state.threads,
-                      [selected.name]: state.threads[selected.name] ?? [],
-                    },
-                  });
-                  onNotify(
-                    `Conversation with ${selected.name} is ready in Messages.`,
-                  );
-                }}
-                variant="outline"
-              >
-                <MessageSquareText /> Message
-              </Button>
               <Button
                 aria-label="Email athlete"
                 disabled={!selected.email}
@@ -4342,20 +4395,11 @@ function AthletesView({
             </label>
             <div className="detail-section">
               <div className="property-title">
-                <strong>Week 5 readiness</strong>
+                <strong>Install progress</strong>
                 <span>{selected.install}%</span>
               </div>
               <div className="detail-progress">
                 <i style={{ width: `${selected.install}%` }} />
-              </div>
-              <div className="readiness-check">
-                <Check /> Film assignment complete
-              </div>
-              <div className="readiness-check">
-                <Check /> Install quiz passed
-              </div>
-              <div className="readiness-check pending">
-                <Clock3 /> Position review pending
               </div>
             </div>
             <div className="detail-section">
@@ -4366,41 +4410,73 @@ function AthletesView({
               <Textarea
                 aria-label="Staff note"
                 className="staff-note-editor"
-                defaultValue={selected.staffNote}
+                value={noteDraft}
+                disabled={saving}
                 key={selected.id}
-                onBlur={(event) => {
-                  if (event.target.value !== selected.staffNote)
-                    void updateAthlete({ staffNote: event.target.value });
-                }}
+                onChange={(event) => setNoteDraft(event.target.value)}
               />
               <p className="staff-note-save">
-                Private · saves when you leave the note
+                Private · {noteDirty ? 'Unsaved changes' : 'Saved note'}
               </p>
+              <Button
+                disabled={!noteDirty || saving}
+                onClick={() => void updateAthlete({ staffNote: noteDraft })}
+              >
+                {saving ? 'Saving…' : 'Save note'}
+              </Button>
+              {rosterSaveError ? <p role="alert">{rosterSaveError}</p> : null}
             </div>
-            <Button
-              className="w-full"
-              onClick={() =>
-                onNotify(
-                  `${selected.name}'s roster record is fully open in this panel.`,
-                  'info',
-                )
-              }
-              variant="outline"
-            >
-              Profile open <Check />
-            </Button>
           </aside>
         ) : null}
       </div>
 
-      <Dialog onOpenChange={setAddOpen} open={addOpen}>
+      <Dialog
+        open={Boolean(pendingAthlete)}
+        onOpenChange={(open) => {
+          if (!open) setPendingAthlete(null);
+        }}
+      >
+        <DialogContent className="athlete-dialog">
+          <DialogHeader>
+            <DialogTitle>Leave this athlete’s unsaved note?</DialogTitle>
+            <DialogDescription>
+              Save the note first, or discard it before opening another athlete.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingAthlete(null)}>
+              Keep editing
+            </Button>
+            <Button
+              onClick={() => {
+                if (!pendingAthlete) return;
+                setSelected(pendingAthlete);
+                setNoteDraft(pendingAthlete.staffNote);
+                setPendingAthlete(null);
+                setRosterSaveError('');
+              }}
+            >
+              Discard note
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        onOpenChange={(open) => {
+          if (!saving) {
+            setAddOpen(open);
+            setRosterSaveError('');
+          }
+        }}
+        open={addOpen}
+      >
         <DialogContent className="athlete-dialog sm:max-w-[620px]">
-          <form onSubmit={createAthlete}>
+          <form inert={saving} onSubmit={createAthlete}>
+            {rosterSaveError ? <p role="alert">{rosterSaveError}</p> : null}
             <DialogHeader>
               <DialogTitle>Add athlete</DialogTitle>
               <DialogDescription>
-                Create a persistent local roster record. You can add assignments
-                and install history next.
+                Add an athlete to your team’s saved roster.
               </DialogDescription>
             </DialogHeader>
             <div className="athlete-form-grid">

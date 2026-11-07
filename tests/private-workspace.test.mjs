@@ -99,6 +99,9 @@ const playbooks = await import(
   await moduleUrl('../app/api/playbooks/route.ts', replacements)
 );
 const { getDatabase } = await import(dbUrl);
+const athletesApi = await import(
+  await moduleUrl('../app/api/athletes/route.ts', replacements)
+);
 const calendarEvents = await import(
   await moduleUrl('../app/api/calendar-events/route.ts', replacements)
 );
@@ -464,6 +467,77 @@ test('calendar preserves real instants, rejects invalid input, and isolates save
     200,
   );
   assert.equal((await (await calendarEvents.GET()).json()).events.length, 0);
+});
+
+test('roster create/update responses cannot reveal another owner’s athlete or accept invalid percentages', async () => {
+  const alice = { id: 'owner-a', name: 'Coach A', email: 'a@example.test' };
+  const bob = { id: 'owner-b', name: 'Coach B', email: 'b@example.test' };
+  const body = {
+    firstName: 'Test',
+    lastName: 'Athlete',
+    number: 12,
+    position: 'DB',
+    unit: 'Defence',
+    graduationYear: 12,
+    weightLb: 180,
+    email: 'athlete@example.test',
+    staffNote: 'Private coaching note',
+  };
+  globalThis.privateTestIdentity = null;
+  assert.equal((await athletesApi.GET()).status, 401);
+  assert.equal((await athletesApi.POST(request(body))).status, 401);
+  globalThis.privateTestIdentity = alice;
+  const response = await athletesApi.POST(request(body));
+  assert.equal(response.status, 201);
+  const athlete = (await response.json()).athlete;
+  assert.equal((await athletesApi.POST(request(body))).status, 409);
+  globalThis.privateTestIdentity = bob;
+  const forbidden = await athletesApi.PATCH(
+    request({ id: athlete.id, status: 'Out' }),
+  );
+  assert.equal(forbidden.status, 404);
+  const forbiddenBody = await forbidden.json();
+  assert.equal(forbiddenBody.athlete, undefined);
+  assert.ok(!JSON.stringify(forbiddenBody).includes('Private coaching note'));
+  const bobResponse = await athletesApi.POST(request(body));
+  assert.equal(
+    bobResponse.status,
+    201,
+    'number and email uniqueness must stay within a team',
+  );
+  const bobAthlete = (await bobResponse.json()).athlete;
+  globalThis.privateTestIdentity = alice;
+  for (const changes of [
+    { attendancePercent: null },
+    { installPercent: 'NaN' },
+    { attendancePercent: -1 },
+    { installPercent: 101 },
+    { status: 'Unknown' },
+    { staffNote: {} },
+  ])
+    assert.equal(
+      (await athletesApi.PATCH(request({ id: athlete.id, ...changes }))).status,
+      400,
+    );
+  const updated = await athletesApi.PATCH(
+    request({
+      id: athlete.id,
+      status: 'Limited',
+      staffNote: 'Saved note',
+      attendancePercent: 75,
+    }),
+  );
+  assert.equal(updated.status, 200);
+  const reopened = (await (await athletesApi.GET()).json()).athletes.find(
+    (item) => item.id === athlete.id,
+  );
+  assert.equal(reopened.status, 'Limited');
+  assert.equal(reopened.attendance, 75);
+  assert.equal(reopened.staffNote, 'Saved note');
+  // Fixture cleanup is confined to this in-memory test database.
+  sqlite
+    .prepare('DELETE FROM athletes WHERE id IN (?, ?)')
+    .run(athlete.id, bobAthlete.id);
 });
 
 test('profile updates remain team-scoped and update the next signed-in session', async () => {

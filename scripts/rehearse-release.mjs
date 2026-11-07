@@ -13,13 +13,18 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const outputs = path.join(root, 'outputs');
 const args = process.argv.slice(2);
 const option = (name) => args[args.indexOf(name) + 1];
-if (!args.includes('--candidate') || !args.includes('--rollback'))
+const restartOnly = args.includes('--restart-only');
+if (
+  !args.includes('--candidate') ||
+  args.includes('--rollback') === restartOnly
+)
   throw new Error(
-    'Usage: node scripts/rehearse-release.mjs --candidate outputs/current.tar.gz --rollback outputs/previous.tar.gz',
+    'Usage: node scripts/rehearse-release.mjs --candidate outputs/current.tar.gz (--rollback outputs/previous.tar.gz | --restart-only)',
   );
-const archives = [option('--candidate'), option('--rollback')].map((value) =>
-  path.resolve(root, value),
-);
+const archives = [
+  option('--candidate'),
+  ...(restartOnly ? [] : [option('--rollback')]),
+].map((value) => path.resolve(root, value));
 for (const archive of archives)
   if (!archive.startsWith(outputs + path.sep) || !archive.endsWith('.tar.gz'))
     throw new Error('Use reviewed deployment archives inside outputs.');
@@ -39,6 +44,9 @@ const environment = {
   CLOUDFLARE_SEND_METRICS: 'false',
 };
 const report = {
+  mode: restartOnly
+    ? 'candidate restart only - no rollback approval'
+    : 'candidate rollback and forward',
   startedAt: new Date().toISOString(),
   directory: runDirectory,
   storage,
@@ -274,6 +282,22 @@ const media = Buffer.from(
 );
 let fixture;
 async function verifySaved(label) {
+  const ownAthlete = (await api('/api/athletes')).athletes.find(
+    (athlete) => athlete.id === fixture.athlete,
+  );
+  assert.equal(ownAthlete.staffNote, 'Private rehearsal note');
+  const foreignAthlete = await api(
+    '/api/athletes',
+    'b',
+    { id: fixture.athlete, status: 'Out' },
+    'PATCH',
+    404,
+  );
+  assert.equal(
+    foreignAthlete.athlete,
+    undefined,
+    'A failed foreign write must not reveal an athlete',
+  );
   const a = await api('/api/session');
   assert.equal(a.team.id, fixture.team);
   assert.equal(
@@ -378,6 +402,22 @@ try {
       'Authenticated blank onboarding, anonymous rejection and cross-origin write rejection verified',
     verifiedAt: new Date().toISOString(),
   });
+  const athlete = await api(
+    '/api/athletes',
+    'a',
+    {
+      firstName: 'Local',
+      lastName: 'Rehearsal',
+      position: 'DB',
+      unit: 'Defence',
+      graduationYear: 12,
+      weightLb: 180,
+      email: 'local-rehearsal@example.test',
+      staffNote: 'Private rehearsal note',
+    },
+    'POST',
+    201,
+  );
   const book = await api(
     '/api/playbooks',
     'a',
@@ -443,6 +483,7 @@ try {
   });
   assert.equal(uploaded.status, 200, await uploaded.text());
   fixture = {
+    athlete: athlete.athlete.id,
     team: (await api('/api/session')).team.id,
     play: play.createdId,
     install: install.package.id,
@@ -450,8 +491,11 @@ try {
   };
   await verifySaved('candidate');
   await stop();
-  await start(snapshots[1], 'rollback');
-  await verifySaved('rollback');
+  await start(
+    snapshots[1] ?? snapshots[0],
+    restartOnly ? 'candidate restart' : 'rollback',
+  );
+  await verifySaved(restartOnly ? 'candidate restart' : 'rollback');
   await stop();
   await start(snapshots[0], 'forward again');
   await verifySaved('forward again');
