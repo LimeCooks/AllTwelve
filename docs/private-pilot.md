@@ -28,6 +28,8 @@ Viewport checks do not prove physical iPhone/iPad touch behaviour. Sign-in, back
 
 ## Remaining handoff gates
 
+Home now checks successful, complete calendar/install responses before showing counts. Failed reads show a retry state instead of an apparently empty team; returning Home reloads the overview. Team settings must load before the workspace opens, so a failed settings read cannot expose editable default values. Automated checks cover empty, populated, failed, malformed and retry responses; local browser checks confirmed the original profile and saved play remain visible. Browser fault injection and physical-device checks remain outstanding.
+
 1. Confirm authenticated first-time onboarding on the hosted URL after the owner signs in. Do not create a team using an agent/service identity; the owner should see the actual first-time screen.
 2. Continue auditing remaining module-specific prototype copy and incomplete controls. Staff/player invitations and account-to-athlete linking require real membership roles before external users can join.
 3. Verify every persisted module and uploaded file across two browser sessions/devices. Handle failed requests honestly; do not replace failures with apparent empty success.

@@ -1,4 +1,25 @@
 export type AthleteStatus = 'Active' | 'Limited' | 'Out';
+export type InstallItemRecord = {
+  id: string;
+  playId?: string | null;
+  type: string;
+  title: string;
+  group: string;
+  due: string;
+  complete: number;
+};
+export type InstallReview = {
+  id: string;
+  itemId: string;
+  athleteId: string;
+  initials: string;
+  name: string;
+  position: string;
+  reviewed: boolean;
+  assignment: boolean;
+  note: boolean;
+  acknowledged: boolean;
+};
 export type AthleteUnit = 'Offence' | 'Defence' | 'Special teams';
 
 export type AthleteRecord = {
@@ -50,7 +71,10 @@ export type AthletePayload = {
   staffNote?: string;
 };
 
-export type DepthRosterAthlete = Pick<AthleteRecord, 'id' | 'no' | 'name' | 'position' | 'unit' | 'status'>;
+export type DepthRosterAthlete = Pick<
+  AthleteRecord,
+  'id' | 'no' | 'name' | 'position' | 'unit' | 'status'
+>;
 
 export type DepthAssignmentRecord = {
   id: string;
@@ -79,7 +103,14 @@ export type DepthChartPayload = {
   athletes: DepthRosterAthlete[];
 };
 
-export type CalendarEventType = 'film' | 'install' | 'practice' | 'game' | 'staff' | 'travel' | 'meeting';
+export type CalendarEventType =
+  | 'film'
+  | 'install'
+  | 'practice'
+  | 'game'
+  | 'staff'
+  | 'travel'
+  | 'meeting';
 
 export type CalendarEventRecord = {
   id: string;

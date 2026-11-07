@@ -1,5 +1,6 @@
 'use client';
 import { BackupControls } from '@/components/backup-controls';
+import { loadDashboard } from '@/lib/dashboard-load';
 import {
   WorkspaceGate,
   useWorkspaceSession,
@@ -115,6 +116,8 @@ import type {
   AthleteUnit,
   CalendarEventRecord,
   DepthChartPayload,
+  InstallItemRecord,
+  InstallReview,
 } from '@/types/domain';
 
 const primaryNavigation = [
@@ -387,6 +390,14 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [assetRevision, setAssetRevision] = useState(0);
+  const [settingsLoad, setSettingsLoad] = useState<
+    'loading' | 'ready' | 'error'
+  >('loading');
+  const [settingsRetry, setSettingsRetry] = useState(0);
+  const [dashboardLoad, setDashboardLoad] = useState<
+    'loading' | 'ready' | 'error'
+  >('loading');
+  const [dashboardRetry, setDashboardRetry] = useState(0);
   const [dashboardEvents, setDashboardEvents] = useState<CalendarEventRecord[]>(
     [],
   );
@@ -475,32 +486,41 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
   }, [profileMenuOpen, teamMenuOpen]);
 
   useEffect(() => {
-    fetch('/api/calendar-events')
-      .then(
-        async (response) =>
-          (await response.json()) as { events?: CalendarEventRecord[] },
-      )
-      .then((data) => setDashboardEvents(data.events ?? []))
-      .catch(() => setDashboardEvents([]));
-    fetch('/api/install')
-      .then(
-        async (response) =>
-          (await response.json()) as {
-            items?: InstallItemRecord[];
-            reviews?: InstallReview[];
-          },
-      )
-      .then((data) =>
-        setDashboardInstall({
-          items: data.items ?? [],
-          reviews: data.reviews ?? [],
-        }),
-      )
-      .catch(() => setDashboardInstall({ items: [], reviews: [] }));
+    let cancelled = false;
     loadWorkspaceState('team-settings', initialTeamSettings)
-      .then((saved) => setTeamSettings({ ...initialTeamSettings, ...saved }))
-      .catch(() => setTeamSettings(initialTeamSettings));
-  }, []);
+      .then((saved) => {
+        if (cancelled) return;
+        setTeamSettings({ ...initialTeamSettings, ...saved });
+        setSettingsLoad('ready');
+      })
+      .catch(() => {
+        if (!cancelled) setSettingsLoad('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsRetry]);
+
+  useEffect(() => {
+    if (activeView !== 'Home') return;
+    let cancelled = false;
+    const load = async () => {
+      await Promise.resolve();
+      if (cancelled) return;
+      setDashboardLoad('loading');
+      const { events, install } = await loadDashboard();
+      if (cancelled) return;
+      setDashboardEvents(events);
+      setDashboardInstall(install);
+      setDashboardLoad('ready');
+    };
+    void load().catch(() => {
+      if (!cancelled) setDashboardLoad('error');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, dashboardRetry]);
 
   const nextGameEvent = dashboardEvents.find(
     (event) => event.eventType === 'game',
@@ -623,6 +643,38 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
       : currentHour < 17
         ? 'Good afternoon, Coach.'
         : 'Good evening, Coach.';
+
+  if (settingsLoad !== 'ready')
+    return (
+      <main className="workspace-welcome">
+        <section aria-busy={settingsLoad === 'loading'}>
+          <span className="eyebrow">ChalkTalk · Your workspace</span>
+          <h1>
+            {settingsLoad === 'error'
+              ? 'Unable to load your team settings.'
+              : 'Opening your team…'}
+          </h1>
+          {settingsLoad === 'error' ? (
+            <>
+              <p role="alert">
+                Your saved settings could not be loaded. Retry before making
+                changes.
+              </p>
+              <Button
+                onClick={() => {
+                  setSettingsLoad('loading');
+                  setSettingsRetry((value) => value + 1);
+                }}
+              >
+                Retry
+              </Button>
+            </>
+          ) : (
+            <output>Loading your saved team profile.</output>
+          )}
+        </section>
+      </main>
+    );
 
   return (
     <main
@@ -824,9 +876,13 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
           </div>
           <strong>{teamSettings.season}</strong>
           <span>
-            {nextGameEvent
-              ? `Next: ${new Date(nextGameEvent.startsAt).toLocaleDateString([], { weekday: 'short' })} · ${new Date(nextGameEvent.startsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
-              : 'No game scheduled'}
+            {dashboardLoad !== 'ready'
+              ? dashboardLoad === 'error'
+                ? 'Schedule unavailable'
+                : 'Loading schedule…'
+              : nextGameEvent
+                ? `Next: ${new Date(nextGameEvent.startsAt).toLocaleDateString([], { weekday: 'short' })} · ${new Date(nextGameEvent.startsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+                : 'No game scheduled'}
           </span>
           <small>
             {teamShortName} · {programLabel}
@@ -1025,7 +1081,29 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
           }
         >
           {activeView === 'Home' ? (
-            userRole === 'Coach' ? (
+            userRole === 'Coach' && dashboardLoad !== 'ready' ? (
+              <section
+                className="module-surface"
+                aria-busy={dashboardLoad === 'loading'}
+              >
+                <h1>Team overview</h1>
+                {dashboardLoad === 'error' ? (
+                  <>
+                    <p role="alert">
+                      Your schedule and install progress could not be loaded.
+                      Your saved data has not been changed.
+                    </p>
+                    <Button
+                      onClick={() => setDashboardRetry((value) => value + 1)}
+                    >
+                      Retry overview
+                    </Button>
+                  </>
+                ) : (
+                  <output>Loading your schedule and install progress…</output>
+                )}
+              </section>
+            ) : userRole === 'Coach' ? (
               <>
                 <div className="main-column">
                   <section className="welcome-row">
@@ -7799,29 +7877,6 @@ function PracticePlansView({
     </section>
   );
 }
-
-type InstallItemRecord = {
-  id: string;
-  playId?: string | null;
-  type: string;
-  title: string;
-  group: string;
-  due: string;
-  complete: number;
-};
-
-type InstallReview = {
-  id: string;
-  itemId: string;
-  athleteId: string;
-  initials: string;
-  name: string;
-  position: string;
-  reviewed: boolean;
-  assignment: boolean;
-  note: boolean;
-  acknowledged: boolean;
-};
 
 function SettingsView({
   assetRevision,
