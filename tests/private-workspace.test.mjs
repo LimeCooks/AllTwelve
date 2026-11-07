@@ -78,6 +78,10 @@ const dbUrl = await moduleUrl('../db/client.ts', [
 ]);
 const replacements = [
   [
+    "'@/lib/conversations'",
+    JSON.stringify(await moduleUrl('../lib/conversations.ts')),
+  ],
+  [
     "'@/lib/depth-layout'",
     JSON.stringify(await moduleUrl('../lib/depth-layout.ts')),
   ],
@@ -120,6 +124,9 @@ const practicePlans = await import(
 );
 const installs = await import(
   await moduleUrl('../lib/install-api.ts', replacements)
+);
+const messagesApi = await import(
+  await moduleUrl('../app/api/messages/route.ts', replacements)
 );
 const { identityFromHeaders } = await import(identityUrl);
 const workspaceState = await import(
@@ -378,6 +385,204 @@ test('fresh hosted migration chain is empty, identity required, owners receive i
   );
   assert.equal(sqlite.prepare('SELECT count(*) AS n FROM teams').get().n, 2);
   assert.equal(sqlite.prepare('SELECT count(*) AS n FROM athletes').get().n, 0);
+});
+
+test('private conversations preserve legacy records, use trusted authors and survive concurrent saves and retries', async () => {
+  const alice = { id: 'owner-a', name: 'Coach A', email: 'a@example.test' };
+  globalThis.privateTestIdentity = null;
+  assert.equal((await messagesApi.GET()).status, 401);
+  assert.equal(
+    (
+      await messagesApi.POST(
+        request({ action: 'create', id: 'thread-a', name: 'Coaching notes' }),
+      )
+    ).status,
+    401,
+  );
+  globalThis.privateTestIdentity = alice;
+  const db = await getDatabase();
+  const legacy = JSON.stringify({
+    store: {
+      Coaches: [
+        {
+          author: 'Earlier coach',
+          time: 'Now',
+          text: 'Keep this original message',
+        },
+      ],
+    },
+    channels: ['Coaches'],
+    members: { Coaches: ['Unverified label'] },
+  });
+  const old = db.prepare(
+    'SELECT * FROM workspace_state WHERE team_id=? AND state_key=?',
+  );
+  const before = await old.bind(db.teamId, 'message-centre-v2').first();
+  await db
+    .prepare(
+      'INSERT INTO workspace_state (id,team_id,state_key,value_json,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(team_id,state_key) DO UPDATE SET value_json=excluded.value_json',
+    )
+    .bind(
+      'test-legacy-messages',
+      db.teamId,
+      'message-centre-v2',
+      legacy,
+      '2026-11-01T12:00:00Z',
+    )
+    .run();
+  assert.equal((await (await messagesApi.GET()).json()).threads.length, 0);
+  assert.equal(
+    (await (await messagesApi.GET()).json()).legacy[0].messages[0].text,
+    'Keep this original message',
+  );
+  const create = { action: 'create', id: 'thread-a', name: 'Coaching notes' };
+  assert.equal((await messagesApi.POST(request(create))).status, 200);
+  assert.equal((await messagesApi.POST(request(create))).status, 200);
+  const saves = await Promise.all(
+    ['a', 'b'].map((id) =>
+      messagesApi.POST(
+        request({
+          action: 'message',
+          id,
+          threadId: 'thread-a',
+          text: 'Message ' + id,
+          authorName: 'Impersonated',
+          createdAt: '2000-01-01',
+        }),
+      ),
+    ),
+  );
+  assert.deepEqual(
+    saves.map((response) => response.status),
+    [200, 200],
+  );
+  const saved = (await (await messagesApi.GET()).json()).threads[0];
+  assert.equal(saved.messages.length, 2);
+  assert.ok(
+    saved.messages.every(
+      (message) =>
+        message.authorName === 'Coach A' &&
+        message.authorId === alice.id &&
+        message.createdAt !== '2000-01-01',
+    ),
+  );
+  assert.equal(
+    (
+      await messagesApi.POST(
+        request({
+          action: 'message',
+          id: 'a',
+          threadId: 'thread-a',
+          text: 'Message a',
+        }),
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await messagesApi.POST(
+        request({
+          action: 'message',
+          id: 'a',
+          threadId: 'thread-a',
+          text: 'Different',
+        }),
+      )
+    ).status,
+    409,
+  );
+  assert.equal(
+    (await (await messagesApi.GET()).json()).threads[0].messages.length,
+    2,
+  );
+  assert.equal(
+    (
+      await messagesApi.POST(
+        request({ action: 'create', id: 'other', name: 'COACHING NOTES' }),
+      )
+    ).status,
+    409,
+  );
+  assert.equal(
+    (
+      await messagesApi.POST(
+        request({
+          action: 'message',
+          id: 'bad',
+          threadId: 'thread-a',
+          text: ' '.repeat(10),
+        }),
+      )
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await messagesApi.POST(
+        request({
+          action: 'message',
+          id: 'bad',
+          threadId: 'thread-a',
+          text: 'x'.repeat(4001),
+        }),
+      )
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await workspaceState.PUT(
+        request({ key: 'private-conversations-v3', value: { threads: [] } }),
+      )
+    ).status,
+    403,
+  );
+  globalThis.privateTestIdentity = {
+    id: 'owner-b',
+    name: 'Coach B',
+    email: 'b@example.test',
+  };
+  assert.equal((await (await messagesApi.GET()).json()).threads.length, 0);
+  assert.equal(
+    (
+      await messagesApi.POST(
+        request({
+          action: 'message',
+          id: 'foreign',
+          threadId: 'thread-a',
+          text: 'Not allowed',
+        }),
+      )
+    ).status,
+    404,
+  );
+  globalThis.privateTestIdentity = alice;
+  assert.equal(
+    (await old.bind(db.teamId, 'message-centre-v2').first()).value_json,
+    legacy,
+  );
+  await db
+    .prepare('DELETE FROM workspace_state WHERE team_id=? AND state_key=?')
+    .bind(db.teamId, 'private-conversations-v3')
+    .run();
+  if (before)
+    await db
+      .prepare(
+        'UPDATE workspace_state SET value_json=?,updated_at=? WHERE team_id=? AND state_key=?',
+      )
+      .bind(
+        before.value_json,
+        before.updated_at,
+        db.teamId,
+        'message-centre-v2',
+      )
+      .run();
+  else
+    await db
+      .prepare('DELETE FROM workspace_state WHERE team_id=? AND state_key=?')
+      .bind(db.teamId, 'message-centre-v2')
+      .run();
 });
 
 test('installs require identity and isolate package reads, edits, publication and deletion', async () => {

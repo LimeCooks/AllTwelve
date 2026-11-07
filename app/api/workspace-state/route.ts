@@ -66,6 +66,14 @@ export async function PUT(request: NextRequest) {
 
     const database = await getDatabase();
     const updatedAt = new Date().toISOString();
+    if (payload.key === 'private-conversations-v3')
+      return NextResponse.json(
+        {
+          error:
+            'Use the conversation service to save messages with a verified author.',
+        },
+        { status: 403 },
+      );
     const statements = [];
     if (payload.key === 'team-settings') {
       const settings = payload.value as {

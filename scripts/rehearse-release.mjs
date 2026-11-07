@@ -333,6 +333,17 @@ async function verifySaved(label) {
   assert.equal(download.status, 200);
   assert.deepEqual(Buffer.from(await download.arrayBuffer()), media);
   const notebook = await api('/api/workspace-state?key=sideline-review-v3');
+  const conversations = await api(
+    '/api/workspace-state?key=private-conversations-v3',
+  );
+  assert.equal(
+    conversations.value.threads[0].name,
+    'Private rehearsal conversation',
+  );
+  assert.equal(
+    conversations.value.threads[0].messages[0].text,
+    'Durable private rehearsal message',
+  );
   assert.equal(notebook.value.notes[0].text, 'Private bench observation');
   const depth = await api('/api/workspace-state?key=depth-layouts-v3');
   assert.equal(depth.value.Offence[0].athleteId, fixture.athlete);
@@ -484,6 +495,20 @@ try {
     'POST',
     201,
   );
+  await api('/api/messages', 'a', {
+    action: 'create',
+    id: 'rehearsal-conversation',
+    name: 'Private rehearsal conversation',
+  });
+  const privateMessage = {
+    action: 'message',
+    id: 'rehearsal-message',
+    threadId: 'rehearsal-conversation',
+    text: 'Durable private rehearsal message',
+  };
+  await api('/api/messages', 'a', privateMessage);
+  await api('/api/messages', 'a', privateMessage);
+  assert.equal((await api('/api/messages')).threads[0].messages.length, 1);
   const installRevision = {
     kind: 'package',
     packageId: install.package.id,

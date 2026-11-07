@@ -2019,3 +2019,31 @@ html { background: #f4f7fb; }
 .install-workspace :is(h1,h2,strong,p) { overflow-wrap: anywhere; }
 .install-workspace button[data-variant="default"], .install-dialog button[data-variant="default"] { background: #405d7c; background-image: none; border-color: #5b7793; color: #f4f7fb; box-shadow: none; }
 .install-workspace button[data-variant="default"]:hover, .install-dialog button[data-variant="default"]:hover { background: #4c6a89; }
+
+.private-messages-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 22px; }
+.private-messages h1 { font-size: 34px; font-weight: 750; margin: 4px 0 8px; }
+.private-messages-header p:not(.eyebrow) { font-size: 14px; color: #9bb0c5; line-height: 1.6; }
+.private-message-toolbar { display: flex; align-items: end; gap: 12px; margin-bottom: 16px; }
+.private-message-toolbar label { display: grid; gap: 7px; flex: 1; min-width: 0; font-size: 13px; }
+.private-conversation { border: 1px solid #2b4055; border-radius: 14px; background: #0d1b2b; overflow: hidden; }
+.private-conversation > header { padding: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid #2b4055; }
+.private-conversation h2 { font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
+.private-conversation > header input { max-width: 300px; }
+.private-message-list { max-height: 55vh; min-height: 150px; overflow-y: auto; padding: 0 16px; }
+.private-message-list article { padding: 18px 0; border-bottom: 1px solid #273b4e; }
+.private-message-list article header { display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: space-between; font-size: 14px; }
+.private-message-list time { color: #94a9bd; font-size: 12px; }
+.private-message-list p, .private-message-archive p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.65; margin: 12px 0; }
+.private-conversation form { padding: 16px; border-top: 1px solid #2b4055; }
+.private-conversation form label { display: block; margin-bottom: 8px; font-size: 14px; }
+.private-conversation textarea { min-height: 100px; font-size: 15px; }
+.private-conversation form footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.private-conversation small { color: #94a9bd; font-size: 12px; line-height: 1.5; }
+.private-message-archive { margin-top: 20px; padding: 14px; border: 1px solid #2b4055; border-radius: 10px; }
+.private-message-archive summary { cursor: pointer; font-size: 14px; padding: 8px 0; }
+.private-message-archive article { border-bottom: 1px solid #2b4055; padding: 12px 0; }
+.private-message-archive small { display: block; color: #94a9bd; }
+.private-message-error { border: 1px solid #b47a64; border-radius: 10px; padding: 12px; font-size: 14px; line-height: 1.6; margin-bottom: 14px; }
+.private-message-notice { display: block; color: #a5d4c3; margin: 10px 0; font-size: 14px; }
+@media (max-width: 650px) { .private-messages-header { align-items: start; flex-direction: column; }.private-message-toolbar { align-items: stretch; flex-direction: column; }.private-conversation > header { align-items: stretch; flex-direction: column; }.private-conversation > header input { max-width: none; }.private-conversation form footer { align-items: stretch; flex-direction: column; }.private-message-list { max-height: 45vh; } }
+.app-shell:not(.dark) .private-conversation { background: #f5f8fc; color: #1c3045; }
