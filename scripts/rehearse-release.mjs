@@ -310,12 +310,20 @@ async function verifySaved(label) {
     (await api(`/api/install?packageId=${fixture.install}`)).items[0].playId,
     fixture.play,
   );
-  assert.equal(
-    (await api('/api/practice-plans')).plans.find(
-      (plan) => plan.id === fixture.practice,
-    ).blocks[0][2],
-    'Rehearsal segment',
+  const savedPractice = (await api('/api/practice-plans')).plans.find(
+    (plan) => plan.id === fixture.practice,
   );
+  assert.equal(savedPractice.title, 'Corrected rehearsal practice');
+  assert.deepEqual(savedPractice.blocks, [
+    [
+      '16:00',
+      '13 min',
+      'Rehearsal segment',
+      'Corrected coaching focus',
+      'defence',
+    ],
+  ]);
+  assert.equal(savedPractice.durationMinutes, 13);
   assert.equal(
     (await api('/api/calendar-events')).events[0].title,
     'Corrected rehearsal practice',
@@ -493,6 +501,21 @@ try {
     'POST',
     201,
   );
+  const practiceRevision = {
+    ...practice.plans.find((plan) => plan.id === practice.savedPlanId),
+    title: 'Corrected rehearsal practice',
+    blocks: [
+      [
+        '16:00',
+        '13 min',
+        'Rehearsal segment',
+        'Corrected coaching focus',
+        'defence',
+      ],
+    ],
+  };
+  await api('/api/practice-plans', 'a', practiceRevision, 'PUT');
+  await api('/api/practice-plans', 'a', practiceRevision, 'PUT', 409);
   const savedEvent = await api(
     '/api/calendar-events',
     'a',

@@ -2027,7 +2027,13 @@ function ModuleView({
       />
     );
   if (view === 'Practice Plans')
-    return <PracticePlansView onNavigate={onNavigate} onNotify={onNotify} />;
+    return (
+      <PracticePlansView
+        onEditingChange={onPlayEditingChange}
+        onNavigate={onNavigate}
+        onNotify={onNotify}
+      />
+    );
   return (
     <SettingsView
       assetRevision={assetRevision}
@@ -7726,6 +7732,7 @@ function CalendarView({
 }
 
 type PracticePlanRecord = {
+  version: string;
   id: string;
   gameId: string | null;
   title: string;
@@ -7739,9 +7746,11 @@ const initialPracticeBlocks: string[][] = [];
 function PracticePlansView({
   onNavigate,
   onNotify,
+  onEditingChange,
 }: {
   onNavigate: (view: string) => void;
   onNotify: Notify;
+  onEditingChange: (editing: boolean) => void;
 }) {
   const [generated, setGenerated] = useState(false);
   const [practiceBlocks, setPracticeBlocks] = useState<string[][]>(
@@ -7752,6 +7761,14 @@ function PracticePlansView({
   const [selectedPlanId, setSelectedPlanId] = useState('');
   const [newPlanOpen, setNewPlanOpen] = useState(false);
   const [newSegmentOpen, setNewSegmentOpen] = useState(false);
+  const [editingSegment, setEditingSegment] = useState<number | null>(null);
+  const [editingPlan, setEditingPlan] = useState(false);
+  const [practiceFormDirty, setPracticeFormDirty] = useState(false);
+  const [discardPracticeForm, setDiscardPracticeForm] = useState(false);
+  const [confirmPracticeDelete, setConfirmPracticeDelete] = useState(false);
+  const [practiceConflict, setPracticeConflict] = useState(false);
+  const [confirmPracticeReload, setConfirmPracticeReload] = useState(false);
+  const practiceFormRef = useRef<HTMLFormElement>(null);
   const [practiceLoad, setPracticeLoad] = useState<
     'loading' | 'ready' | 'error'
   >('loading');
@@ -7759,6 +7776,31 @@ function PracticePlansView({
   const [practiceBusy, setPracticeBusy] = useState(false);
   const [replacePracticeOpen, setReplacePracticeOpen] = useState(false);
   const practiceLock = useRef(false);
+  useEffect(() => {
+    onEditingChange(practiceFormDirty || practiceBusy);
+    const guard = (event: BeforeUnloadEvent) => {
+      if (practiceFormDirty || practiceBusy) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', guard);
+    return () => {
+      onEditingChange(false);
+      window.removeEventListener('beforeunload', guard);
+    };
+  }, [practiceFormDirty, practiceBusy, onEditingChange]);
+  const closePracticeForm = () => {
+    if (practiceBusy) return;
+    if (practiceFormDirty) {
+      setDiscardPracticeForm(true);
+      return;
+    }
+    setNewPlanOpen(false);
+    setNewSegmentOpen(false);
+    setEditingPlan(false);
+    setEditingSegment(null);
+  };
   const mutatePractice = async (action: () => Promise<void>) => {
     if (practiceLock.current || practiceLoad !== 'ready') return;
     practiceLock.current = true;
@@ -7772,6 +7814,18 @@ function PracticePlansView({
   };
   const selectedPlan =
     practicePlans.find((plan) => plan.id === selectedPlanId) ?? null;
+  const timedBlocks = practiceBlocks.filter((block) =>
+    /^(?:[01]?\d|2[0-3]):[0-5]\d$/.test(block[0]),
+  );
+  const timeMinutes = (time: string) => {
+    const [hours, minutes] = time.split(':').map(Number);
+    return hours * 60 + minutes;
+  };
+  const timesOutOfOrder = timedBlocks.some(
+    (block, index) =>
+      index > 0 &&
+      timeMinutes(block[0]) < timeMinutes(timedBlocks[index - 1][0]),
+  );
   const durationMinutes = practiceBlocks.reduce(
     (total, block) => total + (Number.parseInt(block[1], 10) || 0),
     0,
@@ -7792,7 +7846,8 @@ function PracticePlansView({
         if (cancelled) return;
         const plans = data.plans;
         setPracticePlans(plans);
-        const plan = plans[0];
+        const plan =
+          plans.find((item) => item.id === selectedPlanId) ?? plans[0];
         setSelectedPlanId(plan?.id ?? '');
         setGenerated(plan?.generated ?? false);
         setPracticeBlocks(plan?.blocks ?? []);
@@ -7809,6 +7864,7 @@ function PracticePlansView({
   const savePractice = async (
     blocks = practiceBlocks,
     isGenerated = generated,
+    metadata?: { title: string; practiceDate: string },
   ) => {
     const response = await fetch('/api/practice-plans', {
       method: selectedPlan ? 'PUT' : 'POST',
@@ -7817,8 +7873,9 @@ function PracticePlansView({
         selectedPlan
           ? {
               id: selectedPlan.id,
-              title: selectedPlan.title,
-              practiceDate: selectedPlan.practiceDate,
+              version: selectedPlan.version,
+              title: metadata?.title ?? selectedPlan.title,
+              practiceDate: metadata?.practiceDate ?? selectedPlan.practiceDate,
               blocks,
               generated: isGenerated,
             }
@@ -7835,8 +7892,10 @@ function PracticePlansView({
       savedPlanId?: string;
       error?: string;
     };
-    if (!response.ok)
+    if (!response.ok) {
+      if (response.status === 409) setPracticeConflict(true);
       throw new Error(data.error ?? 'Unable to save the practice plan.');
+    }
     const plans = data.plans;
     const saved = plans?.find((plan) => plan.id === data.savedPlanId);
     if (!saved || (selectedPlan && saved.id !== selectedPlan.id))
@@ -7847,6 +7906,8 @@ function PracticePlansView({
     setSelectedPlanId(saved.id);
     setPracticeBlocks(saved.blocks);
     setGenerated(saved.generated);
+    setPracticeFormDirty(false);
+    setPracticeConflict(false);
   };
 
   const createPractice = async (event: SyntheticEvent<HTMLFormElement>) => {
@@ -7855,6 +7916,13 @@ function PracticePlansView({
     const title = formText(fields, 'practiceTitle').trim();
     const practiceDate = formText(fields, 'practiceDate').trim();
     if (!title || !practiceDate) return;
+    if (editingPlan) {
+      await savePractice(practiceBlocks, generated, { title, practiceDate });
+      setNewPlanOpen(false);
+      setEditingPlan(false);
+      onNotify('Practice details saved.');
+      return;
+    }
     const response = await fetch('/api/practice-plans', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -7882,11 +7950,23 @@ function PracticePlansView({
     setPracticeBlocks(plan.blocks);
     setGenerated(false);
     setNewPlanOpen(false);
+    setPracticeFormDirty(false);
     onNotify(`${title} created.`);
   };
 
   const generatePractice = async () => {
-    const gameplan = await loadGameplan();
+    const [gameplan, playbook] = await Promise.all([
+      loadGameplan(),
+      loadPlaybookData(),
+    ]);
+    for (const reference of gameplan.callBuckets.flatMap(
+      (bucket) => bucket.plays,
+    )) {
+      if (!resolveGameplanPlay(reference, playbook.plays))
+        throw new Error(
+          'A gameplan play is unavailable or ambiguous. Repair the call sheet before generating practice.',
+        );
+    }
     const generatedBlocks = [
       ...gameplan.objectives.map((objective) => [
         'TBD',
@@ -7901,7 +7981,12 @@ function PracticePlansView({
           'TBD',
           '15 min',
           bucket.name,
-          `${bucket.plays.length} saved plays`,
+          bucket.plays
+            .map(
+              (reference) =>
+                resolveGameplanPlay(reference, playbook.plays)!.name,
+            )
+            .join('; '),
           gameplan.unit === 'Special teams'
             ? 'teams'
             : gameplan.unit.toLowerCase(),
@@ -7923,33 +8008,42 @@ function PracticePlansView({
     const title = formText(fields, 'segmentTitle').trim();
     if (!title) return;
     const start = formText(fields, 'segmentStart').trim() || 'TBD';
-    const minutes = Math.max(
-      1,
-      Number.parseInt(formText(fields, 'segmentMinutes', '10'), 10) || 10,
-    );
+    const minutes = Number(formText(fields, 'segmentMinutes', '10'));
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 600)
+      throw new Error('Choose a whole duration between 1 and 600 minutes.');
     const focus = formText(fields, 'segmentFocus').trim();
     const group =
       formText(fields, 'segmentGroup', 'team').trim().toLowerCase() || 'team';
-    const next = [
-      ...practiceBlocks,
-      [start, `${minutes} min`, title, focus, group],
-    ];
-    await savePractice(next);
-    onNotify('Practice segment added.');
+    const block = [start, `${minutes} min`, title, focus, group];
+    const next =
+      editingSegment === null
+        ? [...practiceBlocks, block]
+        : practiceBlocks.map((old, index) =>
+            index === editingSegment ? block : old,
+          );
+    await savePractice(next, false);
+    onNotify(
+      editingSegment === null
+        ? 'Practice segment added.'
+        : 'Practice segment updated.',
+    );
     setNewSegmentOpen(false);
+    setEditingSegment(null);
   };
   const deletePractice = async () => {
     if (!selectedPlan) return;
     const response = await fetch(
-      `/api/practice-plans?id=${encodeURIComponent(selectedPlan.id)}`,
+      `/api/practice-plans?id=${encodeURIComponent(selectedPlan.id)}&version=${encodeURIComponent(selectedPlan.version)}`,
       { method: 'DELETE' },
     );
     const data = (await response.json()) as {
       plans?: PracticePlanRecord[];
       error?: string;
     };
-    if (!response.ok)
+    if (!response.ok) {
+      if (response.status === 409) setPracticeConflict(true);
       throw new Error(data.error ?? 'Unable to delete the practice plan.');
+    }
     const plans = data.plans ?? [];
     const next = plans[0];
     setPracticePlans(plans);
@@ -7957,7 +8051,41 @@ function PracticePlansView({
     setPracticeBlocks(next?.blocks ?? []);
     setGenerated(next?.generated ?? false);
     onNotify(`${selectedPlan.title} deleted.`);
+    setConfirmPracticeDelete(false);
   };
+  const conflictNotice = practiceConflict ? (
+    <div role="alert" className="practice-conflict">
+      <p>
+        This plan changed on another device. Your saved plan has not been
+        overwritten. Keep this draft or reload the latest version.
+      </p>
+      <Button
+        onClick={() => {
+          const fields = practiceFormRef.current
+            ? Object.fromEntries(new FormData(practiceFormRef.current))
+            : null;
+          downloadText(
+            'practice-draft.json',
+            JSON.stringify(
+              {
+                plan: selectedPlan,
+                blocks: practiceBlocks,
+                draftFields: fields,
+              },
+              null,
+              2,
+            ),
+            'application/json',
+          );
+        }}
+      >
+        Download draft
+      </Button>
+      <Button onClick={() => setConfirmPracticeReload(true)}>
+        Reload latest plan
+      </Button>
+    </div>
+  ) : null;
   if (practiceLoad !== 'ready')
     return (
       <section className="module-surface">
@@ -8003,7 +8131,14 @@ function PracticePlansView({
         >
           <Zap /> View gameplan
         </Button>
-        <Button onClick={() => setNewPlanOpen(true)} variant="outline">
+        <Button
+          onClick={() => {
+            setEditingPlan(false);
+            setPracticeFormDirty(false);
+            setNewPlanOpen(true);
+          }}
+          variant="outline"
+        >
           <Plus /> New plan
         </Button>
         <Button
@@ -8048,21 +8183,27 @@ function PracticePlansView({
         </NativeSelect>
         <Button
           disabled={!selectedPlan}
-          onClick={() =>
-            void mutatePractice(deletePractice).catch((error: unknown) =>
-              onNotify(
-                error instanceof Error
-                  ? error.message
-                  : 'Unable to delete the plan.',
-                'error',
-              ),
-            )
-          }
-          variant="ghost"
+          onClick={() => {
+            setEditingPlan(true);
+            setPracticeFormDirty(false);
+            setNewPlanOpen(true);
+          }}
+          variant="outline"
         >
-          <Trash2 /> Delete plan
+          <Pencil /> Edit plan details
         </Button>
+        <details className="practice-options">
+          <summary>Plan options</summary>
+          <Button
+            disabled={!selectedPlan}
+            onClick={() => setConfirmPracticeDelete(true)}
+            variant="ghost"
+          >
+            <Trash2 /> Delete plan
+          </Button>
+        </details>
       </div>
+      {!newPlanOpen && !newSegmentOpen ? conflictNotice : null}
       <div className="practice-overview">
         <div>
           <p className="eyebrow">
@@ -8112,13 +8253,13 @@ function PracticePlansView({
             onNotify(
               playerView
                 ? 'Coach practice view restored.'
-                : 'Player practice view enabled.',
+                : 'Read-only practice preview enabled.',
               'info',
             );
           }}
           variant="outline"
         >
-          <Eye /> {playerView ? 'Coach view' : 'Player view'}
+          <Eye /> {playerView ? 'Exit preview' : 'Read-only preview'}
         </Button>
       </div>
       <div className="practice-layout">
@@ -8133,13 +8274,23 @@ function PracticePlansView({
             </div>
             <Button
               disabled={!selectedPlan}
-              onClick={() => setNewSegmentOpen(true)}
+              onClick={() => {
+                setEditingSegment(null);
+                setPracticeFormDirty(false);
+                setNewSegmentOpen(true);
+              }}
               size="sm"
               variant="outline"
             >
               <Plus /> Add segment
             </Button>
           </div>
+          {timesOutOfOrder ? (
+            <p className="practice-time-warning" role="status">
+              Segment order differs from the entered start times. Edit start
+              times as needed.
+            </p>
+          ) : null}
           <div className="practice-timeline">
             {practiceBlocks.map((block, index) => (
               <article
@@ -8160,29 +8311,79 @@ function PracticePlansView({
                     <Users /> {block[4] || 'Team'}
                   </span>
                 </div>
-                <Button
-                  aria-label={'Remove ' + block[2]}
-                  onClick={() => {
-                    const next = practiceBlocks.filter(
-                      (_, itemIndex) => itemIndex !== index,
-                    );
-                    void mutatePractice(async () => {
-                      await savePractice(next);
-                      onNotify(`${block[2]} removed from practice.`);
-                    }).catch((error: unknown) =>
-                      onNotify(
-                        error instanceof Error
-                          ? error.message
-                          : 'Unable to remove the segment.',
-                        'error',
-                      ),
-                    );
-                  }}
-                  size="icon-sm"
-                  variant="ghost"
-                >
-                  <Trash2 />
-                </Button>
+                {!playerView ? (
+                  <div className="practice-segment-actions">
+                    <Button
+                      aria-label={'Edit ' + block[2]}
+                      onClick={() => {
+                        setEditingSegment(index);
+                        setPracticeFormDirty(false);
+                        setNewSegmentOpen(true);
+                      }}
+                      size="sm"
+                      variant="ghost"
+                    >
+                      <Pencil /> Edit
+                    </Button>
+                    <details>
+                      <summary aria-label={'More actions for ' + block[2]}>
+                        More
+                      </summary>
+                      {[-1, 1].map((direction) => (
+                        <Button
+                          key={direction}
+                          disabled={
+                            index + direction < 0 ||
+                            index + direction >= practiceBlocks.length
+                          }
+                          onClick={() => {
+                            const next = [...practiceBlocks];
+                            [next[index], next[index + direction]] = [
+                              next[index + direction],
+                              next[index],
+                            ];
+                            void mutatePractice(() =>
+                              savePractice(next, false),
+                            ).catch((error: unknown) =>
+                              onNotify(
+                                error instanceof Error
+                                  ? error.message
+                                  : 'Unable to reorder segments.',
+                                'error',
+                              ),
+                            );
+                          }}
+                          variant="ghost"
+                        >
+                          {direction < 0 ? 'Move earlier' : 'Move later'}
+                        </Button>
+                      ))}
+                      <Button
+                        onClick={() => {
+                          void mutatePractice(async () => {
+                            await savePractice(
+                              practiceBlocks.filter(
+                                (_, itemIndex) => itemIndex !== index,
+                              ),
+                              false,
+                            );
+                            onNotify('Segment removed.');
+                          }).catch((error: unknown) =>
+                            onNotify(
+                              error instanceof Error
+                                ? error.message
+                                : 'Unable to remove segment.',
+                              'error',
+                            ),
+                          );
+                        }}
+                        variant="ghost"
+                      >
+                        Remove segment
+                      </Button>
+                    </details>
+                  </div>
+                ) : null}
               </article>
             ))}
             {!practiceBlocks.length ? (
@@ -8198,47 +8399,50 @@ function PracticePlansView({
           </div>
         </div>
         <aside className="practice-rail">
-          <section className="analytics-card">
-            <div className="analytics-head">
-              <div>
-                <p className="eyebrow">Plan summary</p>
-                <h3>{selectedPlan?.title ?? 'No plan selected'}</h3>
+          <details>
+            <summary>Plan details</summary>
+            <section className="analytics-card">
+              <div className="analytics-head">
+                <div>
+                  <p className="eyebrow">Plan summary</p>
+                  <h3>{selectedPlan?.title ?? 'No plan selected'}</h3>
+                </div>
+                <strong className="health-score">{durationMinutes}</strong>
               </div>
-              <strong className="health-score">{durationMinutes}</strong>
-            </div>
-            <div className="plan-checks">
-              <span className={practiceBlocks.length ? '' : 'pending'}>
-                {practiceBlocks.length ? <CheckCircle2 /> : <AlertCircle />}{' '}
-                {practiceBlocks.length} timeline segments
-              </span>
-              <span className={generated ? '' : 'pending'}>
-                {generated ? <CheckCircle2 /> : <AlertCircle />}{' '}
-                {generated ? 'Generated from saved gameplan' : 'Manual plan'}
-              </span>
-              <span className={durationMinutes ? '' : 'pending'}>
-                {durationMinutes ? <CheckCircle2 /> : <AlertCircle />}{' '}
-                {durationMinutes} total minutes
-              </span>
-            </div>
-            <Button
-              className="w-full"
-              onClick={() => onNavigate('Install')}
-              variant="outline"
+              <div className="plan-checks">
+                <span className={practiceBlocks.length ? '' : 'pending'}>
+                  {practiceBlocks.length ? <CheckCircle2 /> : <AlertCircle />}{' '}
+                  {practiceBlocks.length} timeline segments
+                </span>
+                <span className={generated ? '' : 'pending'}>
+                  {generated ? <CheckCircle2 /> : <AlertCircle />}{' '}
+                  {generated ? 'Generated from saved gameplan' : 'Manual plan'}
+                </span>
+                <span className={durationMinutes ? '' : 'pending'}>
+                  {durationMinutes ? <CheckCircle2 /> : <AlertCircle />}{' '}
+                  {durationMinutes} total minutes
+                </span>
+              </div>
+              <Button
+                className="w-full"
+                onClick={() => onNavigate('Install')}
+                variant="outline"
+              >
+                Review install load
+              </Button>
+            </section>
+            <section
+              className={
+                generated ? 'generation-note visible' : 'generation-note'
+              }
             >
-              Review install load
-            </Button>
-          </section>
-          <section
-            className={
-              generated ? 'generation-note visible' : 'generation-note'
-            }
-          >
-            <Sparkles />
-            <div>
-              <strong>Generated from real plan data</strong>
-              <p>Only saved objectives and call-sheet sections were used.</p>
-            </div>
-          </section>
+              <Sparkles />
+              <div>
+                <strong>Generated from real plan data</strong>
+                <p>Only saved objectives and call-sheet sections were used.</p>
+              </div>
+            </section>
+          </details>
         </aside>
       </div>
       <Dialog
@@ -8287,12 +8491,14 @@ function PracticePlansView({
       </Dialog>
       <Dialog
         onOpenChange={(open) => {
-          if (!practiceBusy) setNewPlanOpen(open);
+          if (!open) closePracticeForm();
         }}
         open={newPlanOpen}
       >
         <DialogContent className="athlete-dialog sm:max-w-[500px]">
           <form
+            ref={practiceFormRef}
+            onChange={() => setPracticeFormDirty(true)}
             inert={practiceBusy}
             onSubmit={(event) => {
               event.preventDefault();
@@ -8308,7 +8514,9 @@ function PracticePlansView({
             }}
           >
             <DialogHeader>
-              <DialogTitle>New practice plan</DialogTitle>
+              <DialogTitle>
+                {editingPlan ? 'Edit practice plan' : 'New practice plan'}
+              </DialogTitle>
               <DialogDescription>
                 Name the plan and choose its real practice date.
               </DialogDescription>
@@ -8317,6 +8525,8 @@ function PracticePlansView({
               <label htmlFor="practice-plan-title">
                 Plan name
                 <Input
+                  defaultValue={editingPlan ? selectedPlan?.title : ''}
+                  maxLength={120}
                   id="practice-plan-title"
                   name="practiceTitle"
                   placeholder="Example: Tuesday team practice"
@@ -8326,7 +8536,11 @@ function PracticePlansView({
               <label htmlFor="practice-plan-date">
                 Practice date
                 <Input
-                  defaultValue={localDateKey(new Date())}
+                  defaultValue={
+                    editingPlan
+                      ? selectedPlan?.practiceDate
+                      : localDateKey(new Date())
+                  }
                   id="practice-plan-date"
                   name="practiceDate"
                   required
@@ -8334,16 +8548,22 @@ function PracticePlansView({
                 />
               </label>
             </div>
+            {conflictNotice}
             <DialogFooter>
               <Button
-                onClick={() => setNewPlanOpen(false)}
+                onClick={closePracticeForm}
                 type="button"
                 variant="outline"
               >
                 Cancel
               </Button>
               <Button type="submit">
-                {practiceBusy ? 'Saving…' : 'Create plan'} <Plus />
+                {practiceBusy
+                  ? 'Saving…'
+                  : editingPlan
+                    ? 'Save details'
+                    : 'Create plan'}{' '}
+                <Plus />
               </Button>
             </DialogFooter>
           </form>
@@ -8351,12 +8571,14 @@ function PracticePlansView({
       </Dialog>
       <Dialog
         onOpenChange={(open) => {
-          if (!practiceBusy) setNewSegmentOpen(open);
+          if (!open) closePracticeForm();
         }}
         open={newSegmentOpen}
       >
         <DialogContent className="athlete-dialog sm:max-w-[560px]">
           <form
+            ref={practiceFormRef}
+            onChange={() => setPracticeFormDirty(true)}
             inert={practiceBusy}
             onSubmit={(event) => {
               event.preventDefault();
@@ -8372,7 +8594,11 @@ function PracticePlansView({
             }}
           >
             <DialogHeader>
-              <DialogTitle>Add practice segment</DialogTitle>
+              <DialogTitle>
+                {editingSegment === null
+                  ? 'Add practice segment'
+                  : 'Edit practice segment'}
+              </DialogTitle>
               <DialogDescription>
                 Add a real block to {selectedPlan?.title ?? 'this plan'}.
               </DialogDescription>
@@ -8381,6 +8607,12 @@ function PracticePlansView({
               <label htmlFor="practice-segment-title">
                 Segment name
                 <Input
+                  defaultValue={
+                    editingSegment === null
+                      ? ''
+                      : practiceBlocks[editingSegment]?.[2]
+                  }
+                  maxLength={4000}
                   id="practice-segment-title"
                   name="segmentTitle"
                   required
@@ -8389,6 +8621,12 @@ function PracticePlansView({
               <label htmlFor="practice-segment-start">
                 Start time
                 <Input
+                  defaultValue={
+                    editingSegment === null ||
+                    practiceBlocks[editingSegment]?.[0] === 'TBD'
+                      ? ''
+                      : practiceBlocks[editingSegment]?.[0]?.padStart(5, '0')
+                  }
                   id="practice-segment-start"
                   name="segmentStart"
                   type="time"
@@ -8397,7 +8635,14 @@ function PracticePlansView({
               <label htmlFor="practice-segment-minutes">
                 Minutes
                 <Input
-                  defaultValue="10"
+                  defaultValue={
+                    editingSegment === null
+                      ? '10'
+                      : Number.parseInt(practiceBlocks[editingSegment]?.[1], 10)
+                  }
+                  max={600}
+                  step={1}
+                  required
                   id="practice-segment-minutes"
                   min="1"
                   name="segmentMinutes"
@@ -8407,10 +8652,24 @@ function PracticePlansView({
               <label htmlFor="practice-segment-group">
                 Group
                 <NativeSelect
-                  defaultValue="team"
+                  defaultValue={
+                    editingSegment === null
+                      ? 'team'
+                      : practiceBlocks[editingSegment]?.[4]
+                  }
                   id="practice-segment-group"
                   name="segmentGroup"
                 >
+                  {editingSegment !== null &&
+                  !['team', 'offence', 'defence', 'teams'].includes(
+                    practiceBlocks[editingSegment]?.[4],
+                  ) ? (
+                    <NativeSelectOption
+                      value={practiceBlocks[editingSegment]?.[4]}
+                    >
+                      {practiceBlocks[editingSegment]?.[4]}
+                    </NativeSelectOption>
+                  ) : null}
                   <NativeSelectOption value="team">Team</NativeSelectOption>
                   <NativeSelectOption value="offence">
                     Offence
@@ -8425,22 +8684,143 @@ function PracticePlansView({
               </label>
               <label className="full" htmlFor="practice-segment-focus">
                 Coaching focus
-                <Textarea id="practice-segment-focus" name="segmentFocus" />
+                <Textarea
+                  defaultValue={
+                    editingSegment === null
+                      ? ''
+                      : practiceBlocks[editingSegment]?.[3]
+                  }
+                  maxLength={4000}
+                  id="practice-segment-focus"
+                  name="segmentFocus"
+                />
               </label>
             </div>
+            {conflictNotice}
             <DialogFooter>
               <Button
-                onClick={() => setNewSegmentOpen(false)}
+                onClick={closePracticeForm}
                 type="button"
                 variant="outline"
               >
                 Cancel
               </Button>
               <Button type="submit">
-                {practiceBusy ? 'Saving…' : 'Add segment'} <Plus />
+                {practiceBusy
+                  ? 'Saving…'
+                  : editingSegment === null
+                    ? 'Add segment'
+                    : 'Save segment'}{' '}
+                <Plus />
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={discardPracticeForm} onOpenChange={setDiscardPracticeForm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard unsaved practice changes?</DialogTitle>
+            <DialogDescription>
+              Your saved plan will remain unchanged.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              onClick={() => setDiscardPracticeForm(false)}
+              variant="outline"
+            >
+              Keep editing
+            </Button>
+            <Button
+              onClick={() => {
+                setPracticeFormDirty(false);
+                setDiscardPracticeForm(false);
+                setNewPlanOpen(false);
+                setNewSegmentOpen(false);
+                setEditingPlan(false);
+                setEditingSegment(null);
+              }}
+            >
+              Discard draft
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={confirmPracticeReload}
+        onOpenChange={setConfirmPracticeReload}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reload the latest saved plan?</DialogTitle>
+            <DialogDescription>
+              This discards the open form. Download the draft first if you want
+              to keep a copy.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              onClick={() => setConfirmPracticeReload(false)}
+              variant="outline"
+            >
+              Keep draft
+            </Button>
+            <Button
+              onClick={() => {
+                setConfirmPracticeReload(false);
+                setPracticeFormDirty(false);
+                setNewPlanOpen(false);
+                setNewSegmentOpen(false);
+                setPracticeConflict(false);
+                setPracticeLoad('loading');
+                setPracticeRetry((value) => value + 1);
+              }}
+            >
+              Discard draft and reload
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={confirmPracticeDelete}
+        onOpenChange={(open) => {
+          if (!practiceBusy) setConfirmPracticeDelete(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete {selectedPlan?.title}?</DialogTitle>
+            <DialogDescription>
+              This removes this practice plan and its segments. Other plans are
+              unchanged.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              onClick={() => setConfirmPracticeDelete(false)}
+              variant="outline"
+              disabled={practiceBusy}
+            >
+              Keep plan
+            </Button>
+            <Button
+              disabled={practiceBusy}
+              onClick={() =>
+                void mutatePractice(deletePractice).catch((error: unknown) =>
+                  onNotify(
+                    error instanceof Error
+                      ? error.message
+                      : 'Unable to delete plan.',
+                    'error',
+                  ),
+                )
+              }
+              variant="destructive"
+            >
+              Delete practice plan
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </section>

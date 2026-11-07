@@ -20,6 +20,10 @@ function failure(error: unknown) {
   );
 }
 function details(body: Record<string, unknown>) {
+  if (!body || typeof body !== 'object' || Array.isArray(body))
+    throw new PracticeInputError('Enter valid practice details.');
+  if (body.generated !== undefined && typeof body.generated !== 'boolean')
+    throw new PracticeInputError('The generation flag must be true or false.');
   const title = text(body.title);
   const date = text(body.practiceDate);
   if (!title || title.length > 120)
@@ -43,6 +47,9 @@ function details(body: Record<string, unknown>) {
           (value) => typeof value !== 'string' || value.length > 4000,
         ) ||
         !block[2].trim() ||
+        !(
+          block[0] === 'TBD' || /^(?:[01]?\d|2[0-3]):[0-5]\d$/.test(block[0])
+        ) ||
         !/^\d{1,3} min$/.test(block[1]) ||
         Number.parseInt(block[1], 10) < 1 ||
         Number.parseInt(block[1], 10) > 600,
@@ -76,7 +83,19 @@ function blocks(value: unknown): string[][] {
     .map((block) => block.slice(0, 5).map((item) => String(item ?? '')));
 }
 
-function present(row: PlanRow) {
+async function version(row: PlanRow) {
+  const bytes = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(
+      JSON.stringify([row.title, row.practice_date, row.plan_json]),
+    ),
+  );
+  return Array.from(new Uint8Array(bytes), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('');
+}
+
+async function present(row: PlanRow) {
   const plan = JSON.parse(row.plan_json) as {
     blocks?: unknown;
     generated?: unknown;
@@ -100,6 +119,7 @@ function present(row: PlanRow) {
     durationMinutes: row.duration_minutes,
     blocks: blocks(plan.blocks),
     generated: Boolean(plan.generated),
+    version: await version(row),
   };
 }
 
@@ -110,13 +130,15 @@ async function payload(database: TeamDatabase) {
     )
     .bind(database.teamId)
     .all<PlanRow>();
-  return { plans: result.results.map(present) };
+  return { plans: await Promise.all(result.results.map(present)) };
 }
 
 export async function GET() {
   try {
     const database = await getDatabase();
-    return Response.json(await payload(database));
+    return Response.json(await payload(database), {
+      headers: { 'cache-control': 'private, no-store' },
+    });
   } catch (error) {
     return failure(error);
   }
@@ -170,17 +192,27 @@ export async function PUT(request: Request) {
     );
     const database = await getDatabase();
     const existing = await database
-      .prepare('SELECT id FROM practice_plans WHERE id = ? AND team_id = ?')
+      .prepare(`${planSelect} WHERE id = ? AND team_id = ?`)
       .bind(id, database.teamId)
-      .first();
+      .first<PlanRow>();
     if (!existing)
       return Response.json(
         { error: 'Practice plan not found.' },
         { status: 404 },
       );
-    await database
+    if (!body.version || typeof body.version !== 'string')
+      throw new PracticeInputError('Reload the plan before saving changes.');
+    if (body.version !== (await version(existing)))
+      return Response.json(
+        {
+          error:
+            'This practice plan changed on another device. Your changes have not been saved. Reload the latest plan before retrying.',
+        },
+        { status: 409 },
+      );
+    const updated = await database
       .prepare(
-        `UPDATE practice_plans SET title = ?, practice_date = ?, duration_minutes = ?, plan_json = ? WHERE id = ? AND team_id = ?`,
+        `UPDATE practice_plans SET title = ?, practice_date = ?, duration_minutes = ?, plan_json = ? WHERE id = ? AND team_id = ? AND title = ? AND practice_date = ? AND plan_json = ? RETURNING id`,
       )
       .bind(
         title,
@@ -192,8 +224,19 @@ export async function PUT(request: Request) {
         }),
         id,
         database.teamId,
+        existing.title,
+        existing.practice_date,
+        existing.plan_json,
       )
-      .run();
+      .first();
+    if (!updated)
+      return Response.json(
+        {
+          error:
+            'This practice plan changed while saving. Reload the latest plan before retrying.',
+        },
+        { status: 409 },
+      );
     return Response.json({ ...(await payload(database)), savedPlanId: id });
   } catch (error) {
     return failure(error);
@@ -206,18 +249,42 @@ export async function DELETE(request: Request) {
     if (!id) throw new PracticeInputError('Choose a practice plan to delete.');
     const database = await getDatabase();
     const existing = await database
-      .prepare('SELECT id FROM practice_plans WHERE id = ? AND team_id = ?')
+      .prepare(`${planSelect} WHERE id = ? AND team_id = ?`)
       .bind(id, database.teamId)
-      .first();
+      .first<PlanRow>();
     if (!existing)
       return Response.json(
         { error: 'Practice plan not found.' },
         { status: 404 },
       );
-    await database
-      .prepare('DELETE FROM practice_plans WHERE id = ? AND team_id = ?')
-      .bind(id, database.teamId)
-      .run();
+    const expectedVersion = new URL(request.url).searchParams.get('version');
+    if (!expectedVersion)
+      throw new PracticeInputError('Reload the plan before deleting it.');
+    if (expectedVersion !== (await version(existing)))
+      return Response.json(
+        {
+          error:
+            'This plan changed on another device. Reload before deleting it.',
+        },
+        { status: 409 },
+      );
+    const deleted = await database
+      .prepare(
+        'DELETE FROM practice_plans WHERE id = ? AND team_id = ? AND title = ? AND practice_date = ? AND plan_json = ? RETURNING id',
+      )
+      .bind(
+        id,
+        database.teamId,
+        existing.title,
+        existing.practice_date,
+        existing.plan_json,
+      )
+      .first();
+    if (!deleted)
+      return Response.json(
+        { error: 'This plan changed while deleting. Reload before retrying.' },
+        { status: 409 },
+      );
     return Response.json(await payload(database));
   } catch (error) {
     return failure(error);

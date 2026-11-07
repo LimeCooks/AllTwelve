@@ -1989,3 +1989,22 @@ html { background: #f4f7fb; }
 .reports-data-table th, .reports-data-table td { padding: 13px 12px; border-bottom: 1px solid #344758; vertical-align: top; }
 .reports-data-table thead th { color: #a7bdcf; font-size: 12px; }
 .report-method, .report-scope { font-size: 13px; line-height: 1.6; color: #a7bdcf; margin: 12px 0; }
+
+/* Keep practice focused on the editable timeline. */
+.practice-layout { grid-template-columns: minmax(0, 1fr); }
+.practice-rail > details > summary, .practice-options > summary, .practice-segment-actions summary { cursor: pointer; padding: 10px; font-size: 13px; font-weight: 600; }
+.practice-rail > details > .analytics-card { margin-top: 10px; }
+.practice-block { grid-template-columns: 66px 4px minmax(0,1fr) auto auto; gap: 12px; }
+.practice-segment-actions { display: flex; align-items: flex-start; gap: 5px; }
+.practice-segment-actions details[open] { display: flex; flex-direction: column; border: 1px solid #344758; border-radius: 8px; }
+.practice-segment-actions details button { display: block; width: 100%; text-align: left; }
+.practice-conflict { border: 1px solid #c89747; padding: 12px; border-radius: 10px; margin: 12px 0; font-size: 14px; }
+.practice-conflict button { margin: 5px 5px 0 0; }
+@media (max-width: 650px) {
+ .practice-block { grid-template-columns: 52px 3px minmax(0,1fr); }
+ .practice-segment-actions { grid-column: 3; flex-wrap: wrap; }
+ .practice-copy p { overflow-wrap: anywhere; }
+ .practice-options { width: 100%; }
+}
+.practice-time-warning { margin: 8px 16px; color: #d9b577; font-size: 13px; line-height: 1.5; }
+.practice-surface.player-preview .module-actions, .practice-surface.player-preview .planning-toolbar > button, .practice-surface.player-preview .planning-toolbar > details { display: none; }

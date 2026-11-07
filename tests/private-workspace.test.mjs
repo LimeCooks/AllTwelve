@@ -399,9 +399,24 @@ test('practice saves return the exact plan, reject invalid updates, and isolate 
   const update = {
     ...body,
     id: b.savedPlanId,
+    version: b.plans.find((plan) => plan.id === b.savedPlanId).version,
     blocks: [...body.blocks, ['4:10', '15 min', 'Coverage', '', 'defence']],
   };
   assert.equal((await practicePlans.PUT(request(update))).status, 200);
+  assert.equal((await practicePlans.PUT(request(update))).status, 409);
+  assert.equal(
+    (
+      await practicePlans.DELETE(
+        new Request(
+          'https://pilot.test/api/practice-plans?id=' +
+            b.savedPlanId +
+            '&version=' +
+            update.version,
+        ),
+      )
+    ).status,
+    409,
+  );
   for (const invalid of [
     { ...update, practiceDate: '2026-02-30' },
     { ...update, blocks: [['TBD', '-5 min', 'Bad', '', 'team']] },
@@ -414,6 +429,55 @@ test('practice saves return the exact plan, reject invalid updates, and isolate 
   );
   assert.equal(reopened.durationMinutes, 25);
   assert.deepEqual(reopened.blocks, update.blocks);
+  const competing = await Promise.all(
+    ['Coach A revision', 'Coach B revision'].map((title) =>
+      practicePlans.PUT(
+        request({
+          ...update,
+          version: reopened.version,
+          title,
+          practiceDate: '2026-11-08',
+          blocks: [...update.blocks].reverse(),
+        }),
+      ),
+    ),
+  );
+  assert.deepEqual(
+    competing.map((response) => response.status).sort(),
+    [200, 409],
+  );
+  const latest = (await (await practicePlans.GET()).json()).plans.find(
+    (plan) => plan.id === b.savedPlanId,
+  );
+  assert.ok(['Coach A revision', 'Coach B revision'].includes(latest.title));
+  assert.equal(latest.practiceDate, '2026-11-08');
+  assert.deepEqual(latest.blocks, [...update.blocks].reverse());
+  assert.equal(latest.durationMinutes, 25);
+  assert.equal(
+    (await practicePlans.PUT(request({ ...update, version: undefined })))
+      .status,
+    400,
+  );
+  assert.equal(
+    (
+      await practicePlans.PUT(
+        request({ ...update, version: latest.version, generated: 'false' }),
+      )
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await practicePlans.PUT(
+        request({
+          ...update,
+          version: latest.version,
+          blocks: [['25:00', '10 min', 'Invalid time', '', 'team']],
+        }),
+      )
+    ).status,
+    400,
+  );
   globalThis.privateTestIdentity = {
     id: 'owner-b',
     name: 'Coach B',
@@ -432,11 +496,14 @@ test('practice saves return the exact plan, reject invalid updates, and isolate 
     404,
   );
   globalThis.privateTestIdentity = alice;
+  const currentPlans = (await (await practicePlans.GET()).json()).plans;
   for (const id of [a.savedPlanId, b.savedPlanId])
     assert.equal(
       (
         await practicePlans.DELETE(
-          new Request(`https://pilot.test/api/practice-plans?id=${id}`),
+          new Request(
+            `https://pilot.test/api/practice-plans?id=${id}&version=${currentPlans.find((plan) => plan.id === id).version}`,
+          ),
         )
       ).status,
       200,
