@@ -228,4 +228,4 @@ export const filmClips = sqliteTable('film_clips', {
   yardLine: text('yard_line'),
   result: text('result'),
   tagsJson: text('tags_json').notNull().default('[]'),
-}, (table) => [index('idx_film_clips_asset_number').on(table.filmAssetId, table.clipNumber)]);
+}, (table) => [uniqueIndex('idx_film_clip_number_unique').on(table.filmAssetId, table.clipNumber)]);

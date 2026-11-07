@@ -22,6 +22,8 @@ The first private deployment succeeded. The hosting policy was checked: owner on
 
 Follow-up work removed simulated invitations, disconnected notification/schedule controls, and hard-coded account identity from Settings. Phone (390 × 844) and tablet (820 × 1180) browser checks verified the full section menu, Settings and Playbook library. A tablet-only empty sidebar gap was corrected. Profile saves update both workspace settings and team/session identity atomically, with an isolation test.
 
+The first-time film workflow was hardened after real browser checks exposed a missing sample-game dependency, fixed-key overwrites, an inert library selector, an unsafe New clip fallback, and a framework upload-size interception. The fixes and remaining verification limits are documented in [film-hardening.md](film-hardening.md).
+
 Viewport checks do not prove physical iPhone/iPad touch behaviour. Sign-in, backup recovery, cross-device persistence and real coaching workflows still require verification before handoff.
 
 ## Remaining handoff gates

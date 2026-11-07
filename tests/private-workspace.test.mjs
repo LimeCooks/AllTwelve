@@ -110,6 +110,21 @@ const workspaceState = await import(
   ])
 );
 const objects = new Map();
+globalThis.FixedLengthStream = class extends TransformStream {
+  constructor(length) {
+    let bytes = 0;
+    super({
+      transform(chunk, controller) {
+        bytes += chunk.byteLength;
+        if (bytes > length) throw new Error('Too many bytes');
+        controller.enqueue(chunk);
+      },
+      flush() {
+        if (bytes !== length) throw new Error('Incomplete upload');
+      },
+    });
+  }
+};
 globalThis.privateTestBucket = {
   async put(key, body, options) {
     objects.set(key, {
@@ -144,6 +159,16 @@ globalThis.privateTestBucket = {
   },
   async delete(key) {
     objects.delete(key);
+  },
+  async head(key) {
+    const object = objects.get(key);
+    return object
+      ? {
+          key,
+          size: object.bytes.byteLength,
+          httpMetadata: object.options?.httpMetadata,
+        }
+      : null;
   },
   async list({ prefix = '', cursor = '' } = {}) {
     const matches = [...objects.entries()]
@@ -185,6 +210,16 @@ const { backupTables, createTeamBackup, backupJobKey } = await import(
   backupUrl
 );
 const { backupZip } = await import(zipUrl);
+const films = await import(
+  await moduleUrl('../app/api/film/route.ts', [
+    [
+      "import { env } from 'cloudflare:workers';",
+      'const env = { MEDIA: globalThis.privateTestBucket };',
+    ],
+    ["'@/lib/team-backup'", JSON.stringify(backupUrl)],
+    ...replacements,
+  ])
+);
 const media = await import(
   await moduleUrl('../app/api/media/route.ts', [
     [
@@ -377,6 +412,280 @@ test('same media key is isolated per team and anonymous media access is rejected
   assert.equal((await media.POST(upload('intrusion'))).status, 401);
   assert.equal(
     (await media.DELETE(new Request(url, { method: 'DELETE' }))).status,
+    401,
+  );
+});
+
+test('raw file uploads stream above 1 MB, enforce declared sizes, and preserve previous files on failure', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'owner-a',
+    name: 'Coach A',
+    email: 'a@example.test',
+  };
+  const a = await getDatabase(),
+    bytes = new Uint8Array(1_100_000).fill(19);
+  const upload = (body, declared = body.byteLength, type = 'video/mp4') =>
+    new Request('https://pilot.test/api/media?key=raw-upload-test', {
+      method: 'POST',
+      headers: {
+        'content-type': type,
+        'x-chalktalk-upload-size': String(declared),
+        'x-chalktalk-filename': encodeURIComponent('Practice vidéo.mp4'),
+      },
+      body,
+    });
+  assert.equal((await media.POST(upload(bytes))).status, 200);
+  assert.equal(
+    objects.get(`teams/${a.teamId}/raw-upload-test`).bytes.byteLength,
+    bytes.byteLength,
+  );
+  assert.equal(
+    objects.get(`teams/${a.teamId}/raw-upload-test`).options.customMetadata
+      .originalName,
+    'Practice vidéo.mp4',
+  );
+  assert.equal((await media.POST(upload(new Uint8Array(10), 5))).status, 400);
+  assert.equal((await media.POST(upload(new Uint8Array(10), 20))).status, 400);
+  assert.equal(
+    objects.get(`teams/${a.teamId}/raw-upload-test`).bytes.byteLength,
+    bytes.byteLength,
+    'failed overwrites must preserve the previous complete file',
+  );
+  assert.equal(
+    (await media.POST(upload(new Uint8Array(1), 251 * 1024 * 1024))).status,
+    413,
+  );
+  assert.equal(
+    (await media.POST(upload(new Uint8Array(1), 1, 'application/javascript')))
+      .status,
+    415,
+  );
+  await globalThis.privateTestBucket.delete(
+    `teams/${a.teamId}/raw-upload-test`,
+  );
+});
+
+test('blank teams can register multiple films, select independent clips, and cannot alter another owner’s film', async () => {
+  const alice = { id: 'owner-a', name: 'Coach A', email: 'a@example.test' },
+    bob = { id: 'owner-b', name: 'Coach B', email: 'b@example.test' };
+  globalThis.privateTestIdentity = alice;
+  const a = await getDatabase();
+  assert.equal(
+    sqlite
+      .prepare('SELECT count(*) AS n FROM games WHERE team_id = ?')
+      .get(a.teamId).n,
+    0,
+  );
+  for (const key of ['film-one', 'film-two'])
+    await globalThis.privateTestBucket.put(
+      `teams/${a.teamId}/${key}`,
+      `video bytes ${key}`,
+      { httpMetadata: { contentType: 'video/mp4' } },
+    );
+  const oneResponse = await films.POST(
+    request({
+      action: 'register',
+      storageKey: 'film-one',
+      title: 'First film',
+    }),
+  );
+  assert.equal(oneResponse.status, 201, await oneResponse.clone().text());
+  const one = (await oneResponse.json()).asset;
+  assert.equal(one.gameId, null);
+  const two = (
+    await (
+      await films.POST(
+        request({
+          action: 'register',
+          storageKey: 'film-two',
+          title: 'Second film',
+        }),
+      )
+    ).json()
+  ).asset;
+  assert.notEqual(one.id, two.id);
+  const get = (id) =>
+    films.GET(new Request(`https://pilot.test/api/film?assetId=${id}`));
+  const chart = (assetId, extra) =>
+    films.POST(
+      request({
+        action: 'upsertClip',
+        assetId,
+        startSeconds: 0,
+        endSeconds: 5,
+        ...extra,
+      }),
+    );
+  const first = await chart(one.id, { note: 'First note', concept: 'Cover 3' });
+  assert.equal(first.status, 201);
+  const firstData = await first.json(),
+    firstId = firstData.clips[0].id;
+  assert.throws(
+    () =>
+      sqlite
+        .prepare(
+          'INSERT INTO film_clips (id, film_asset_id, clip_number, start_seconds, end_seconds) VALUES (?, ?, 1, 0, 1)',
+        )
+        .run('duplicate-film-clip', one.id),
+    /UNIQUE constraint/,
+  );
+  assert.equal(
+    firstData.asset.id,
+    one.id,
+    'saving in an older film must not switch to the latest upload',
+  );
+  const second = await chart(one.id, {
+    startSeconds: 5,
+    endSeconds: 10,
+    note: 'Second note',
+  });
+  const secondData = await second.json(),
+    secondId = secondData.clips[1].id;
+  assert.equal(secondData.clips.length, 2);
+  assert.notEqual(firstId, secondId);
+  assert.equal(secondData.clips[0].note, 'First note');
+  assert.equal((await (await get(two.id)).json()).clips.length, 0);
+  assert.equal((await chart(one.id, { clipNumber: 1 })).status, 400);
+  assert.equal((await chart(one.id, { endSeconds: 0 })).status, 400);
+  assert.equal((await chart(one.id, { startSeconds: 'bad' })).status, 400);
+  assert.equal((await chart(one.id, { startSeconds: -1 })).status, 400);
+  assert.equal((await chart(one.id, { clipNumber: 1.5 })).status, 400);
+  assert.equal((await chart(one.id, { note: 'x'.repeat(281) })).status, 400);
+  const removed = await films.DELETE(
+    new Request(`https://pilot.test/api/film?clipId=${firstId}`, {
+      method: 'DELETE',
+    }),
+  );
+  assert.equal((await removed.json()).asset.id, one.id);
+  const thirdData = await (await chart(one.id, { note: 'Third note' })).json();
+  assert.deepEqual(
+    thirdData.clips.map((c) => c.clipNumber),
+    [2, 3],
+  );
+  await films.POST(
+    request({
+      action: 'register',
+      storageKey: 'film-one',
+      title: 'First film renamed',
+    }),
+  );
+  assert.equal(
+    (await (await get(one.id)).json()).clips.length,
+    2,
+    'registration retry must preserve clips',
+  );
+  assert.equal(
+    (
+      await films.POST(
+        request({ action: 'register', storageKey: 'missing-video' }),
+      )
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await films.POST(
+        request({ action: 'register', storageKey: '../../film-one' }),
+      )
+    ).status,
+    400,
+  );
+  globalThis.privateTestIdentity = bob;
+  const b = await getDatabase();
+  await globalThis.privateTestBucket.put(
+    `teams/${b.teamId}/film-one`,
+    'B video',
+    { httpMetadata: { contentType: 'video/mp4' } },
+  );
+  const bAsset = (
+    await (
+      await films.POST(
+        request({
+          action: 'register',
+          storageKey: 'film-one',
+          title: 'B private film',
+        }),
+      )
+    ).json()
+  ).asset;
+  assert.notEqual(bAsset.id, one.id);
+  assert.equal((await get(one.id)).status, 404);
+  assert.equal((await chart(one.id, { id: secondId })).status, 404);
+  assert.equal(
+    (
+      await films.DELETE(
+        new Request(`https://pilot.test/api/film?clipId=${secondId}`, {
+          method: 'DELETE',
+        }),
+      )
+    ).status,
+    404,
+  );
+  assert.equal(
+    (
+      await films.DELETE(
+        new Request(`https://pilot.test/api/film?assetId=${one.id}`, {
+          method: 'DELETE',
+        }),
+      )
+    ).status,
+    404,
+  );
+  sqlite
+    .prepare(
+      "INSERT INTO games (id, team_id, opponent, kickoff_at, venue, status, home_away) VALUES ('foreign-film-game', ?, 'B opponent', '', '', 'scheduled', 'home')",
+    )
+    .run(b.teamId);
+  sqlite
+    .prepare(
+      "INSERT INTO plays (id, team_id, name, unit, family, concept, diagram_json, created_at, updated_at) VALUES ('foreign-film-play', ?, 'B secret play', 'Defence', 'Coverage', '', '{}', '', '')",
+    )
+    .run(b.teamId);
+  globalThis.privateTestIdentity = alice;
+  assert.equal(
+    (
+      await films.POST(
+        request({
+          action: 'register',
+          storageKey: 'film-one',
+          gameId: 'foreign-film-game',
+        }),
+      )
+    ).status,
+    400,
+  );
+  assert.equal(
+    (await chart(one.id, { playId: 'foreign-film-play' })).status,
+    400,
+  );
+  assert.equal((await (await get(one.id)).json()).clips.length, 2);
+  for (const id of [one.id, two.id])
+    assert.equal(
+      (
+        await films.DELETE(
+          new Request(`https://pilot.test/api/film?assetId=${id}`, {
+            method: 'DELETE',
+          }),
+        )
+      ).status,
+      200,
+    );
+  for (const key of ['film-one', 'film-two'])
+    await globalThis.privateTestBucket.delete(`teams/${a.teamId}/${key}`);
+  globalThis.privateTestIdentity = bob;
+  await films.DELETE(
+    new Request(`https://pilot.test/api/film?assetId=${bAsset.id}`, {
+      method: 'DELETE',
+    }),
+  );
+  await globalThis.privateTestBucket.delete(`teams/${b.teamId}/film-one`);
+  sqlite.prepare("DELETE FROM games WHERE id = 'foreign-film-game'").run();
+  sqlite.prepare("DELETE FROM plays WHERE id = 'foreign-film-play'").run();
+  globalThis.privateTestIdentity = null;
+  assert.equal((await get(one.id)).status, 401);
+  assert.equal(
+    (await films.POST(request({ action: 'register', storageKey: 'film-one' })))
+      .status,
     401,
   );
 });

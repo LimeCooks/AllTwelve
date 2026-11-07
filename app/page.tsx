@@ -236,20 +236,35 @@ function mediaUrl(key: string, revision = 0) {
 }
 
 async function uploadMedia(key: string, file: File) {
-  const data = new FormData();
-  data.set('file', file);
+  if (!file.size) throw new Error('Choose a file that is not empty.');
+  if (file.size > 250 * 1024 * 1024)
+    throw new Error('Choose a file smaller than 250 MB.');
   const response = await fetch(`/api/media?key=${encodeURIComponent(key)}`, {
     method: 'POST',
-    body: data,
+    headers: {
+      'content-type': file.type || 'application/octet-stream',
+      'x-chalktalk-upload-size': String(file.size),
+      'x-chalktalk-filename': encodeURIComponent(file.name),
+    },
+    body: file,
   });
-  const body = (await response.json()) as {
+  if (response.status === 413)
+    throw new Error(
+      'This file is larger than the server currently accepts. Choose a smaller file.',
+    );
+  const body = (await response.json().catch(() => ({
+    error: 'The upload service did not respond correctly. Please retry.',
+  }))) as {
     error?: string;
     key?: string;
     contentType?: string;
     size?: number;
     uploadedAt?: string;
   };
-  if (!response.ok) throw new Error(body.error ?? 'Unable to upload media.');
+  if (!response.ok || body.error || body.key !== key || body.size !== file.size)
+    throw new Error(
+      body.error ?? 'The upload could not be confirmed. Please retry.',
+    );
   return body;
 }
 
@@ -303,12 +318,14 @@ function MediaUploadControl({
   label,
   onUploaded,
   onNotify,
+  disabled = false,
 }: {
-  assetKey: string;
+  assetKey: string | (() => string);
   accept?: string;
   label: string;
-  onUploaded: (file?: File) => void;
+  onUploaded: (file?: File, storageKey?: string) => void | Promise<void>;
   onNotify: Notify;
+  disabled?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const upload = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -317,9 +334,10 @@ function MediaUploadControl({
     if (!file) return;
     setBusy(true);
     try {
-      await uploadMedia(assetKey, file);
-      onUploaded(file);
-      onNotify(`${label} uploaded.`);
+      const storageKey = typeof assetKey === 'function' ? assetKey() : assetKey;
+      await uploadMedia(storageKey, file);
+      await onUploaded(file, storageKey);
+      onNotify(`${file.name} uploaded.`);
     } catch (error) {
       onNotify(
         error instanceof Error
@@ -334,7 +352,12 @@ function MediaUploadControl({
   return (
     <label className={`media-upload-control${busy ? ' busy' : ''}`}>
       <Upload /> <span>{busy ? 'Uploading…' : label}</span>
-      <input accept={accept} disabled={busy} onChange={upload} type="file" />
+      <input
+        accept={accept}
+        disabled={busy || disabled}
+        onChange={upload}
+        type="file"
+      />
     </label>
   );
 }
@@ -1521,9 +1544,9 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
       >
         <DialogContent className="athlete-dialog">
           <DialogHeader>
-            <DialogTitle>Leave the play editor?</DialogTitle>
+            <DialogTitle>Leave the editor?</DialogTitle>
             <DialogDescription>
-              Your unsaved changes will be discarded. Save the play first to
+              Your unsaved changes will be discarded. Save your work first to
               keep them.
             </DialogDescription>
           </DialogHeader>
@@ -1555,21 +1578,49 @@ function HomeFilmPreview({
   onOpen: () => void;
   revision: number;
 }) {
-  const source = mediaUrl('film-hamilton-week-5', revision);
+  const [film, setFilm] = useState<FilmAssetRecord | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [failedSource, setFailedSource] = useState('');
+  useEffect(() => {
+    let active = true;
+    readFilmData()
+      .then((data) => {
+        if (active) {
+          setFilm(data.asset);
+          setError('');
+        }
+      })
+      .catch(() => {
+        if (active) setError('The saved film library could not be loaded.');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [revision]);
+  const source = film?.storageKey ? mediaUrl(film.storageKey, revision) : '';
   const [readySource, setReadySource] = useState('');
-  const available = readySource === source;
+  const available = Boolean(source && readySource === source);
   return (
     <div
       className={`film-preview real-media-preview${available ? ' available' : ''}`}
     >
-      <video
-        aria-label="Uploaded team film"
-        muted
-        onCanPlay={() => setReadySource(source)}
-        onError={() => setReadySource('')}
-        preload="metadata"
-        src={source}
-      />
+      {source ? (
+        <video
+          aria-label="Uploaded team film"
+          muted
+          onCanPlay={() => setReadySource(source)}
+          onError={() => {
+            setReadySource('');
+            setFailedSource(source);
+          }}
+          preload="metadata"
+          src={source}
+        />
+      ) : null}
       {available ? (
         <button
           aria-label="Open team film"
@@ -1582,8 +1633,20 @@ function HomeFilmPreview({
       ) : (
         <button className="real-media-empty" onClick={onOpen} type="button">
           <Film />
-          <strong>No film uploaded</strong>
-          <span>Add real game footage in Film Room</span>
+          <strong>
+            {error || (source && failedSource === source)
+              ? 'Film unavailable'
+              : loading || source
+                ? 'Loading film…'
+                : 'No film uploaded'}
+          </strong>
+          <span>
+            {error || (source && failedSource === source)
+              ? 'Open Film Room to retry'
+              : source
+                ? film?.title
+                : 'Add game footage in Film Room'}
+          </span>
         </button>
       )}
     </div>
@@ -1592,14 +1655,31 @@ function HomeFilmPreview({
 
 function HomePlayPreview({ onOpen }: { onOpen: () => void }) {
   const [play, setPlay] = useState<StudioPlay | null>(null);
+  const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let active = true;
     loadPlaybookData()
       .then((saved) => {
-        if (active) setPlay(saved.plays[0] ?? null);
+        if (active)
+          setPlay(
+            saved.plays.find(
+              (item) =>
+                (item.players?.length ?? 0) +
+                  (item.routes?.length ?? 0) +
+                  (item.zones?.length ?? 0) +
+                  (item.labels?.length ?? 0) >
+                0,
+            ) ??
+              saved.plays[0] ??
+              null,
+          );
       })
       .catch(() => {
-        if (active) setPlay(null);
+        if (active) setError(true);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
       });
     return () => {
       active = false;
@@ -1613,7 +1693,8 @@ function HomePlayPreview({ onOpen }: { onOpen: () => void }) {
       type="button"
     >
       {play &&
-      (play.routes?.length ?? 0) +
+      (play.players?.length ?? 0) +
+        (play.routes?.length ?? 0) +
         (play.zones?.length ?? 0) +
         (play.labels?.length ?? 0) >
         0 ? (
@@ -1621,8 +1702,18 @@ function HomePlayPreview({ onOpen }: { onOpen: () => void }) {
       ) : (
         <span className="real-media-empty">
           <BookOpen />
-          <strong>No diagram saved</strong>
-          <span>Open Playbook to create the first real play</span>
+          <strong>
+            {error
+              ? 'Playbook unavailable'
+              : loading
+                ? 'Loading saved plays…'
+                : 'No diagram saved'}
+          </strong>
+          <span>
+            {error
+              ? 'Open Playbook to retry'
+              : 'Open Playbook to create a play'}
+          </span>
         </span>
       )}
     </button>
@@ -1750,6 +1841,7 @@ function ModuleView({
         onNavigate={onNavigate}
         onNotify={onNotify}
         onToggleFocus={onToggleFocus}
+        onEditingChange={onPlayEditingChange}
       />
     );
   if (
@@ -1905,6 +1997,17 @@ type FilmPayload = {
   error?: string;
 };
 
+async function readFilmData(assetId = ''): Promise<FilmPayload> {
+  const response = await fetch(
+    `/api/film${assetId ? `?assetId=${encodeURIComponent(assetId)}` : ''}`,
+    { cache: 'no-store' },
+  );
+  const data = (await response.json()) as FilmPayload;
+  if (!response.ok || !Array.isArray(data.assets) || !Array.isArray(data.clips))
+    throw new Error(data.error ?? 'Saved film could not be loaded.');
+  return data;
+}
+
 function clipLabel(clip: FilmClipRecord) {
   return clip.playName || clip.concept || `Clip ${clip.clipNumber}`;
 }
@@ -1916,6 +2019,7 @@ function FilmRoomView({
   onNavigate,
   onNotify,
   onToggleFocus,
+  onEditingChange,
 }: {
   assetRevision: number;
   focusMode: boolean;
@@ -1923,22 +2027,41 @@ function FilmRoomView({
   onNavigate: (view: string) => void;
   onNotify: Notify;
   onToggleFocus: () => void;
+  onEditingChange: (editing: boolean) => void;
 }) {
   const [filmAsset, setFilmAsset] = useState<FilmAssetRecord | null>(null);
   const [filmAssets, setFilmAssets] = useState<FilmAssetRecord[]>([]);
   const [filmClips, setFilmClips] = useState<FilmClipRecord[]>([]);
   const [selectedClip, setSelectedClip] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [filmLoading, setFilmLoading] = useState(true);
+  const [filmLoadError, setFilmLoadError] = useState('');
+  const [filmPlaybackError, setFilmPlaybackError] = useState('');
+  const [filmSaving, setFilmSaving] = useState(false);
+  const [clipDirty, setClipDirty] = useState(false);
+  const [pendingSelection, setPendingSelection] = useState<
+    { type: 'film'; id: string } | { type: 'clip'; number: number } | null
+  >(null);
+  useEffect(() => {
+    onEditingChange(clipDirty || filmSaving);
+    return () => onEditingChange(false);
+  }, [clipDirty, filmSaving, onEditingChange]);
+  useEffect(() => {
+    if (!clipDirty && !filmSaving) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [clipDirty, filmSaving]);
   const [note, setNote] = useState('');
   const [filmSearch, setFilmSearch] = useState('');
   const [libraryTab, setLibraryTab] = useState<'Games' | 'Clips'>('Games');
-  const [libraryCollapsed, setLibraryCollapsed] = useState(false);
+  const [libraryCollapsed, setLibraryCollapsed] = useState(true);
   const [readyFilmSource, setReadyFilmSource] = useState('');
   const videoRef = useRef<HTMLVideoElement>(null);
   const activeClip =
-    filmClips.find((clip) => clip.clipNumber === selectedClip) ??
-    filmClips[0] ??
-    null;
+    filmClips.find((clip) => clip.clipNumber === selectedClip) ?? null;
+  const nextClipNumber =
+    Math.max(0, ...filmClips.map((clip) => clip.clipNumber)) + 1;
   const visibleClips = filmClips.filter((clip) =>
     `${clipLabel(clip)} ${clip.odk} ${clip.quarter} ${clip.tags.join(' ')}`
       .toLowerCase()
@@ -1964,10 +2087,49 @@ function FilmRoomView({
         );
         setNote(data.clips[0]?.note ?? '');
       })
-      .catch(() => onNotify('Saved film data could not be loaded.', 'warning'));
+      .catch(() =>
+        setFilmLoadError('Saved film could not be loaded. Try again.'),
+      )
+      .finally(() => setFilmLoading(false));
   }, [onNotify]);
 
-  const chooseClip = (clipId: number) => {
+  const openFilm = async (assetId: string, discard = false) => {
+    if (filmSaving) return;
+    if (clipDirty && !discard) {
+      setPendingSelection({ type: 'film', id: assetId });
+      return;
+    }
+    videoRef.current?.pause();
+    setFilmLoading(true);
+    setFilmLoadError('');
+    setFilmPlaybackError('');
+    try {
+      const data = await readFilmData(assetId);
+      setFilmAsset(data.asset);
+      setFilmAssets(data.assets);
+      setFilmClips(data.clips);
+      setSelectedClip(data.clips[0]?.clipNumber ?? 0);
+      setNote(data.clips[0]?.note ?? '');
+      setReadyFilmSource('');
+      setIsPlaying(false);
+      setClipDirty(false);
+      if (assetId === filmAsset?.id) videoRef.current?.load();
+    } catch {
+      setFilmLoadError(
+        'This film could not be opened. Your current film is still selected. Try again.',
+      );
+    } finally {
+      setFilmLoading(false);
+    }
+  };
+
+  const chooseClip = (clipId: number, discard = false) => {
+    if (filmSaving) return;
+    if (clipDirty && !discard) {
+      setPendingSelection({ type: 'clip', number: clipId });
+      return;
+    }
+    setClipDirty(false);
     setSelectedClip(clipId);
     const clip = filmClips.find((item) => item.clipNumber === clipId);
     setNote(clip?.note ?? '');
@@ -1988,6 +2150,7 @@ function FilmRoomView({
   };
 
   const saveBreakdown = async (advance = false) => {
+    if (filmSaving || filmLoading) return;
     if (!filmAsset) {
       onNotify('Upload film before charting clips.', 'info');
       return;
@@ -1999,6 +2162,7 @@ function FilmRoomView({
           | HTMLSelectElement
           | null
       )?.value ?? '';
+    setFilmSaving(true);
     try {
       const response = await fetch('/api/film', {
         method: 'POST',
@@ -2007,7 +2171,7 @@ function FilmRoomView({
           action: 'upsertClip',
           assetId: filmAsset.id,
           id: activeClip?.id,
-          clipNumber: activeClip?.clipNumber ?? filmClips.length + 1,
+          clipNumber: activeClip?.clipNumber,
           startSeconds: value('film-start'),
           endSeconds: value('film-end'),
           odk: value('film-unit'),
@@ -2039,7 +2203,8 @@ function FilmRoomView({
         setSelectedClip(saved.clipNumber);
         setNote(saved.note);
       }
-      onNotify(`Clip ${saved?.clipNumber ?? filmClips.length + 1} saved.`);
+      onNotify(`Clip ${saved?.clipNumber ?? nextClipNumber} saved.`);
+      setClipDirty(false);
       if (advance) {
         setSelectedClip(0);
         setNote('');
@@ -2051,39 +2216,45 @@ function FilmRoomView({
           : 'The clip breakdown could not be saved.',
         'error',
       );
+    } finally {
+      setFilmSaving(false);
     }
   };
 
-  const registerFilm = async (file?: File) => {
-    try {
-      const response = await fetch('/api/film', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          action: 'register',
-          storageKey: 'film-hamilton-week-5',
-          title: file?.name || 'Uploaded game film',
-        }),
-      });
-      const data = (await response.json()) as FilmPayload;
-      if (!response.ok)
-        throw new Error(data.error ?? 'Unable to register the uploaded film.');
-      setFilmAsset(data.asset);
-      setFilmAssets(data.assets);
-      setFilmClips(data.clips);
-      onAssetsChanged();
-    } catch (error) {
-      onNotify(
-        error instanceof Error
-          ? error.message
-          : 'Unable to register the uploaded film.',
-        'error',
+  const registerFilm = async (file?: File, storageKey?: string) => {
+    if (!file || !storageKey) throw new Error('Choose a video to upload.');
+    const response = await fetch('/api/film', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action: 'register',
+        storageKey,
+        title: file.name,
+      }),
+    });
+    const data = (await response.json()) as FilmPayload;
+    if (!response.ok)
+      throw new Error(
+        data.error ??
+          'The video uploaded, but its library record could not be saved. Try again.',
       );
-    }
+    setFilmAsset(data.asset);
+    setFilmAssets(data.assets);
+    setFilmClips(data.clips);
+    setSelectedClip(data.clips[0]?.clipNumber ?? 0);
+    setNote(data.clips[0]?.note ?? '');
+    setReadyFilmSource('');
+    setFilmLoadError('');
+    setFilmPlaybackError('');
+    onAssetsChanged();
   };
 
   const deleteChartedClip = async () => {
     if (!activeClip) return;
+    if (filmSaving || filmLoading || clipDirty) {
+      onNotify('Save or discard your clip changes before removing it.', 'info');
+      return;
+    }
     try {
       const response = await fetch(
         `/api/film?clipId=${encodeURIComponent(activeClip.id)}`,
@@ -2102,6 +2273,45 @@ function FilmRoomView({
       onNotify(
         error instanceof Error ? error.message : 'Unable to remove the clip.',
         'error',
+      );
+    }
+  };
+
+  const saveFilmDuration = async () => {
+    const asset = filmAsset,
+      duration = videoRef.current?.duration;
+    if (
+      !asset ||
+      !duration ||
+      !Number.isFinite(duration) ||
+      Math.round(duration) === asset.durationSeconds
+    )
+      return;
+    try {
+      const response = await fetch('/api/film', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: 'metadata',
+          assetId: asset.id,
+          durationSeconds: duration,
+        }),
+      });
+      const data = (await response.json()) as FilmPayload;
+      if (!response.ok) throw new Error();
+      setFilmAsset((current) =>
+        current?.id === asset.id
+          ? {
+              ...current,
+              durationSeconds:
+                data.asset?.durationSeconds ?? current.durationSeconds,
+            }
+          : current,
+      );
+    } catch {
+      onNotify(
+        'The film can play, but its duration could not be saved. Reopen it to retry.',
+        'warning',
       );
     }
   };
@@ -2135,22 +2345,31 @@ function FilmRoomView({
         <FocusModeButton focused={focusMode} onToggle={onToggleFocus} />
         <MediaUploadControl
           accept="video/*"
-          assetKey="film-hamilton-week-5"
-          label={filmAsset ? 'Replace film' : 'Upload film'}
+          assetKey={() => `film-${crypto.randomUUID()}`}
+          label="Upload film"
+          disabled={clipDirty || filmLoading || filmSaving}
           onNotify={onNotify}
-          onUploaded={(file) => void registerFilm(file)}
+          onUploaded={registerFilm}
         />
         <Button
           className="module-primary"
-          disabled={!filmAsset}
-          onClick={() => {
-            setSelectedClip(0);
-            setNote('');
-          }}
+          disabled={!filmAsset || filmLoading || filmSaving}
+          onClick={() => chooseClip(0)}
         >
           <Plus /> New clip
         </Button>
       </ModuleHeader>
+      {filmLoadError ? (
+        <div className="pd-error" role="alert">
+          {filmLoadError}
+          <Button
+            variant="outline"
+            onClick={() => void openFilm(filmAsset?.id ?? '')}
+          >
+            Retry
+          </Button>
+        </div>
+      ) : null}
 
       <div
         className={
@@ -2158,7 +2377,13 @@ function FilmRoomView({
         }
       >
         <span className="sync-dot" />
-        <strong>{filmAsset ? 'Film saved locally' : 'No film uploaded'}</strong>
+        <strong>
+          {filmLoading
+            ? 'Loading film library…'
+            : filmAsset
+              ? 'Film saved'
+              : 'No film uploaded'}
+        </strong>
         <small>
           {filmClips.length} charted {filmClips.length === 1 ? 'clip' : 'clips'}
         </small>
@@ -2168,33 +2393,13 @@ function FilmRoomView({
         <div className="toolbar-search">
           <Search />
           <Input
-            aria-label="Search game film"
+            aria-label="Search charted clips"
             onChange={(event) => setFilmSearch(event.target.value)}
-            placeholder="Search snaps, formations, concepts, athletes…"
+            placeholder="Search clips, concepts, units or tags…"
             value={filmSearch}
           />
         </div>
-        <Button
-          disabled={!activeClip}
-          onClick={async () => {
-            if (!activeClip) return;
-            const cutups = await loadWorkspaceState<
-              { name: string; clips: string[]; updatedAt: string }[]
-            >('film-cutups', []);
-            await saveWorkspaceState('film-cutups', [
-              ...cutups,
-              {
-                name: clipLabel(activeClip),
-                clips: [activeClip.id],
-                updatedAt: new Date().toISOString(),
-              },
-            ]);
-            onNotify('Cut-up saved from the selected clip.');
-          }}
-          variant="outline"
-        >
-          <Plus /> Add to cut-up
-        </Button>
+
         <Button onClick={() => onNavigate('Reports')} variant="outline">
           <SlidersHorizontal /> Reports
         </Button>
@@ -2239,11 +2444,8 @@ function FilmRoomView({
                 <div>
                   <Button
                     aria-label="Add clip"
-                    disabled={!filmAsset}
-                    onClick={() => {
-                      setSelectedClip(0);
-                      setNote('');
-                    }}
+                    disabled={!filmAsset || filmLoading || filmSaving}
+                    onClick={() => chooseClip(0)}
                     size="icon-sm"
                     variant="ghost"
                   >
@@ -2281,14 +2483,8 @@ function FilmRoomView({
                     <button
                       className={filmAsset?.id === asset.id ? 'active' : ''}
                       key={asset.id}
-                      onClick={() =>
-                        onNotify(
-                          asset.id === filmAsset?.id
-                            ? `${asset.title} is open.`
-                            : 'Open this film from its saved session.',
-                          'info',
-                        )
-                      }
+                      disabled={filmLoading || filmSaving}
+                      onClick={() => void openFilm(asset.id)}
                       type="button"
                     >
                       <span>
@@ -2362,11 +2558,8 @@ function FilmRoomView({
                   </div>
                   <button
                     className="add-clips"
-                    disabled={!filmAsset}
-                    onClick={() => {
-                      setSelectedClip(0);
-                      setNote('');
-                    }}
+                    disabled={!filmAsset || filmLoading || filmSaving}
+                    onClick={() => chooseClip(0)}
                     type="button"
                   >
                     <Plus /> Chart another clip
@@ -2377,7 +2570,13 @@ function FilmRoomView({
           )}
         </aside>
 
-        <div className="film-stage">
+        <div
+          className="film-stage"
+          onChangeCapture={(event) => {
+            if ((event.target as HTMLElement).id.startsWith('film-'))
+              setClipDirty(true);
+          }}
+        >
           <div className="viewer">
             <div className="viewer-field">
               {filmSource ? (
@@ -2387,8 +2586,14 @@ function FilmRoomView({
                     filmAvailable ? 'film-video available' : 'film-video'
                   }
                   onCanPlay={() => setReadyFilmSource(filmSource)}
+                  onLoadedMetadata={() => void saveFilmDuration()}
                   onEnded={() => setIsPlaying(false)}
-                  onError={() => setReadyFilmSource('')}
+                  onError={() => {
+                    setReadyFilmSource('');
+                    setFilmPlaybackError(
+                      'This saved film could not be played in this browser.',
+                    );
+                  }}
                   onPause={() => setIsPlaying(false)}
                   onPlay={() => setIsPlaying(true)}
                   playsInline
@@ -2427,17 +2632,22 @@ function FilmRoomView({
               ) : (
                 <div className="viewer-empty-state">
                   <Film />
-                  <strong>No game film uploaded</strong>
+                  <strong>
+                    {filmPlaybackError ||
+                      (filmSource ? 'Loading film…' : 'No film uploaded')}
+                  </strong>
                   <span>
-                    Add footage from this computer. ChalkTalk will never invent
-                    a preview.
+                    {filmSource
+                      ? 'Open another saved film or upload a compatible video.'
+                      : 'Upload a video to begin reviewing and charting clips.'}
                   </span>
                   <MediaUploadControl
                     accept="video/*"
-                    assetKey="film-hamilton-week-5"
+                    assetKey={() => `film-${crypto.randomUUID()}`}
                     label="Choose video"
+                    disabled={clipDirty || filmLoading || filmSaving}
                     onNotify={onNotify}
-                    onUploaded={(file) => void registerFilm(file)}
+                    onUploaded={registerFilm}
                   />
                 </div>
               )}
@@ -2530,15 +2740,6 @@ function FilmRoomView({
                 </div>
                 <div className="timeline-tools">
                   <Button
-                    onClick={() =>
-                      onNotify('Telestration layer enabled.', 'info')
-                    }
-                    size="sm"
-                    variant="ghost"
-                  >
-                    <Pencil /> Telestrate
-                  </Button>
-                  <Button
                     disabled={!activeClip}
                     onClick={() =>
                       document.getElementById('film-tags')?.focus()
@@ -2547,13 +2748,6 @@ function FilmRoomView({
                     variant="ghost"
                   >
                     <Tag /> Edit tags
-                  </Button>
-                  <Button
-                    onClick={() => onNavigate('Install')}
-                    size="sm"
-                    variant="ghost"
-                  >
-                    <Users /> Assign
                   </Button>
                 </div>
               </div>
@@ -2594,13 +2788,14 @@ function FilmRoomView({
               <div className="panel-title">
                 <div>
                   <strong>Teaching notes</strong>
-                  <span>Visible to offence</span>
+                  <span>Saved with this clip</span>
                 </div>
                 <Eye />
               </div>
               <Textarea
                 aria-label="Teaching note"
                 id="film-note"
+                maxLength={280}
                 onChange={(event) => setNote(event.target.value)}
                 placeholder="Add a coaching point for this clip…"
                 value={note}
@@ -2608,11 +2803,11 @@ function FilmRoomView({
               <div className="notes-actions">
                 <span>{note.length}/280</span>
                 <Button
-                  disabled={!filmAsset}
+                  disabled={!filmAsset || filmLoading || filmSaving}
                   onClick={() => void saveBreakdown(false)}
                   size="sm"
                 >
-                  Save with clip
+                  {filmSaving ? 'Saving…' : 'Save with clip'}
                 </Button>
               </div>
             </aside>
@@ -2625,7 +2820,7 @@ function FilmRoomView({
                 <h3>
                   {activeClip
                     ? `Editing clip ${activeClip.clipNumber}`
-                    : `Chart clip ${filmClips.length + 1}`}
+                    : `Chart clip ${nextClipNumber}`}
                 </h3>
               </div>
               <span>
@@ -2655,7 +2850,7 @@ function FilmRoomView({
                 <strong>
                   {activeClip
                     ? String(activeClip.clipNumber).padStart(2, '0')
-                    : `+${filmClips.length + 1}`}
+                    : `+${nextClipNumber}`}
                 </strong>
                 <NativeSelect
                   aria-label="Unit"
@@ -2739,7 +2934,7 @@ function FilmRoomView({
                 <div className="film-sheet-actions">
                   <Button
                     aria-label="Save clip"
-                    disabled={!filmAsset}
+                    disabled={!filmAsset || filmLoading || filmSaving}
                     onClick={() => void saveBreakdown(false)}
                     size="icon-sm"
                   >
@@ -2747,7 +2942,7 @@ function FilmRoomView({
                   </Button>
                   <Button
                     aria-label="Save and start a new clip"
-                    disabled={!filmAsset}
+                    disabled={!filmAsset || filmLoading || filmSaving}
                     onClick={() => void saveBreakdown(true)}
                     size="icon-sm"
                     variant="outline"
@@ -2810,6 +3005,38 @@ function FilmRoomView({
           </section>
         </div>
       </div>
+      <Dialog
+        open={Boolean(pendingSelection)}
+        onOpenChange={(open) => {
+          if (!open) setPendingSelection(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Leave this clip?</DialogTitle>
+            <DialogDescription>
+              Your unsaved clip changes will be discarded. Save the clip first
+              to keep them.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingSelection(null)}>
+              Keep editing
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                const next = pendingSelection;
+                setPendingSelection(null);
+                if (next?.type === 'film') void openFilm(next.id, true);
+                else if (next?.type === 'clip') chooseClip(next.number, true);
+              }}
+            >
+              Discard and continue
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

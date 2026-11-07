@@ -189,6 +189,7 @@ const bootstrapStatements = [
     tags_json TEXT NOT NULL DEFAULT '[]'
   )`,
   'CREATE INDEX IF NOT EXISTS idx_film_clips_asset_number ON film_clips(film_asset_id, clip_number)',
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_film_clip_number_unique ON film_clips(film_asset_id, clip_number)',
   `CREATE TABLE IF NOT EXISTS workspace_state (
     id TEXT PRIMARY KEY NOT NULL,
     team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
