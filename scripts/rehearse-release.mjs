@@ -285,6 +285,7 @@ async function verifySaved(label) {
   const ownAthlete = (await api('/api/athletes')).athletes.find(
     (athlete) => athlete.id === fixture.athlete,
   );
+  assert.equal(ownAthlete.firstName, 'Corrected');
   assert.equal(ownAthlete.staffNote, 'Private rehearsal note');
   const foreignAthlete = await api(
     '/api/athletes',
@@ -418,6 +419,29 @@ try {
     'POST',
     201,
   );
+  const editedAthlete = await api(
+    '/api/athletes',
+    'a',
+    {
+      id: athlete.athlete.id,
+      firstName: 'Corrected',
+      lastName: 'Rehearsal',
+      number: 0,
+      position: 'FC',
+      unit: 'Defence',
+      graduationYear: 11,
+      weightLb: 185,
+      height: '6 ft',
+      email: 'local-rehearsal@example.test',
+      phone: '555-0100',
+      staffNote: 'Must not replace saved note',
+      status: 'Out',
+    },
+    'PUT',
+  );
+  assert.equal(editedAthlete.athlete.id, athlete.athlete.id);
+  assert.equal(editedAthlete.athlete.staffNote, 'Private rehearsal note');
+  assert.equal(editedAthlete.athlete.status, 'Active');
   const book = await api(
     '/api/playbooks',
     'a',

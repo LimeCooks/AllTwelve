@@ -3772,6 +3772,11 @@ function AthletesView({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [profileFormDirty, setProfileFormDirty] = useState(false);
+  const [profileLeaveOpen, setProfileLeaveOpen] = useState(false);
+  const [profileEditor, setProfileEditor] = useState<AthleteRecord | null>(
+    null,
+  );
   const [dataMessage, setDataMessage] = useState('Loading your roster…');
   const [rosterLoadError, setRosterLoadError] = useState(false);
   const [rosterRetry, setRosterRetry] = useState(0);
@@ -3783,17 +3788,17 @@ function AthletesView({
   const rosterWriteLock = useRef(false);
   const noteDirty = Boolean(selected && noteDraft !== selected.staffNote);
   useEffect(() => {
-    onEditingChange(noteDirty || saving);
+    onEditingChange(noteDirty || profileFormDirty || saving);
     return () => onEditingChange(false);
-  }, [noteDirty, saving, onEditingChange]);
+  }, [noteDirty, profileFormDirty, saving, onEditingChange]);
   useEffect(() => {
-    if (!noteDirty) return;
+    if (!noteDirty && !profileFormDirty) return;
     const warn = (event: BeforeUnloadEvent) => {
       event.preventDefault();
     };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [noteDirty]);
+  }, [noteDirty, profileFormDirty]);
   const visibleAthletes = useMemo(
     () =>
       roster.filter((athlete) => {
@@ -3860,7 +3865,9 @@ function AthletesView({
     rosterWriteLock.current = true;
     setRosterSaveError('');
     setSaving(true);
-    setDataMessage('Saving athlete…');
+    setDataMessage(
+      profileEditor ? 'Saving athlete profile…' : 'Saving athlete…',
+    );
     const fields = new FormData(event.currentTarget);
     const textField = (name: string) => {
       const value = fields.get(name);
@@ -3881,9 +3888,12 @@ function AthletesView({
     };
     try {
       const response = await fetch('/api/athletes', {
-        method: 'POST',
+        method: profileEditor ? 'PUT' : 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          ...payload,
+          ...(profileEditor ? { id: profileEditor.id } : {}),
+        }),
       });
       const data = (await response.json()) as {
         athlete?: AthleteRecord;
@@ -3893,7 +3903,12 @@ function AthletesView({
       if (!response.ok || !data.athlete || !data.metrics)
         throw new Error(data.error ?? 'Unable to add athlete.');
       setRoster((items) =>
-        [...items, data.athlete!].sort(
+        (profileEditor
+          ? items.map((item) =>
+              item.id === data.athlete!.id ? data.athlete! : item,
+            )
+          : [...items, data.athlete!]
+        ).sort(
           (a, b) =>
             (a.no ?? Number.MAX_SAFE_INTEGER) -
             (b.no ?? Number.MAX_SAFE_INTEGER),
@@ -3903,8 +3918,14 @@ function AthletesView({
       setSelected(data.athlete);
       setNoteDraft(data.athlete.staffNote);
       setAddOpen(false);
-      setDataMessage(`${data.athlete.name} added to the roster`);
-      onNotify(`${data.athlete.name} added to the roster.`);
+      setProfileFormDirty(false);
+      setProfileEditor(null);
+      setDataMessage(
+        `${data.athlete.name} ${profileEditor ? 'updated' : 'added to the roster'}`,
+      );
+      onNotify(
+        `${data.athlete.name} ${profileEditor ? 'updated' : 'added to the roster'}.`,
+      );
     } catch (error) {
       setRosterSaveError(
         error instanceof Error ? error.message : 'Unable to add athlete.',
@@ -4060,6 +4081,8 @@ function AthletesView({
           disabled={saving || noteDirty}
           onClick={() => {
             setRosterSaveError('');
+            setProfileEditor(null);
+            setProfileFormDirty(false);
             setAddOpen(true);
           }}
         >
@@ -4195,7 +4218,15 @@ function AthletesView({
                         : 'Your roster table will fill this workspace once athletes are added.'}
                     </span>
                     {!roster.length ? (
-                      <Button onClick={() => setAddOpen(true)} size="sm">
+                      <Button
+                        onClick={() => {
+                          setProfileEditor(null);
+                          setProfileFormDirty(false);
+                          setRosterSaveError('');
+                          setAddOpen(true);
+                        }}
+                        size="sm"
+                      >
                         <UserPlus /> Add first athlete
                       </Button>
                     ) : null}
@@ -4298,6 +4329,20 @@ function AthletesView({
                   {selected.unit} · Grade {selected.year}
                 </p>
               </div>
+              <Button
+                aria-label="Edit athlete profile"
+                disabled={saving || noteDirty}
+                onClick={() => {
+                  setRosterSaveError('');
+                  setProfileEditor(selected);
+                  setProfileFormDirty(false);
+                  setAddOpen(true);
+                }}
+                size="icon-sm"
+                variant="outline"
+              >
+                <Pencil />
+              </Button>
             </div>
             <div className="contact-actions">
               <Button
@@ -4430,6 +4475,35 @@ function AthletesView({
         ) : null}
       </div>
 
+      <Dialog open={profileLeaveOpen} onOpenChange={setProfileLeaveOpen}>
+        <DialogContent className="athlete-dialog">
+          <DialogHeader>
+            <DialogTitle>Discard profile changes?</DialogTitle>
+            <DialogDescription>
+              Your last saved athlete profile will be kept.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setProfileLeaveOpen(false)}
+            >
+              Keep editing
+            </Button>
+            <Button
+              onClick={() => {
+                setProfileLeaveOpen(false);
+                setProfileFormDirty(false);
+                setAddOpen(false);
+                setProfileEditor(null);
+                setRosterSaveError('');
+              }}
+            >
+              Discard profile changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={Boolean(pendingAthlete)}
         onOpenChange={(open) => {
@@ -4464,6 +4538,10 @@ function AthletesView({
       <Dialog
         onOpenChange={(open) => {
           if (!saving) {
+            if (!open && profileFormDirty) {
+              setProfileLeaveOpen(true);
+              return;
+            }
             setAddOpen(open);
             setRosterSaveError('');
           }
@@ -4471,12 +4549,21 @@ function AthletesView({
         open={addOpen}
       >
         <DialogContent className="athlete-dialog sm:max-w-[620px]">
-          <form inert={saving} onSubmit={createAthlete}>
+          <form
+            key={profileEditor?.id ?? 'new-athlete'}
+            onChangeCapture={() => setProfileFormDirty(true)}
+            inert={saving}
+            onSubmit={createAthlete}
+          >
             {rosterSaveError ? <p role="alert">{rosterSaveError}</p> : null}
             <DialogHeader>
-              <DialogTitle>Add athlete</DialogTitle>
+              <DialogTitle>
+                {profileEditor ? 'Edit athlete profile' : 'Add athlete'}
+              </DialogTitle>
               <DialogDescription>
-                Add an athlete to your team’s saved roster.
+                {profileEditor
+                  ? 'Correct this athlete’s details. Notes, availability, assignments and history stay with the same athlete.'
+                  : 'Add an athlete to your team’s saved roster.'}
               </DialogDescription>
             </DialogHeader>
             <div className="athlete-form-grid">
@@ -4487,7 +4574,13 @@ function AthletesView({
                     *
                   </b>
                 </span>
-                <Input id="new-athlete-first-name" name="firstName" required />
+                <Input
+                  id="new-athlete-first-name"
+                  name="firstName"
+                  defaultValue={profileEditor?.firstName ?? ''}
+                  maxLength={80}
+                  required
+                />
               </label>
               <label htmlFor="new-athlete-last-name">
                 <span>
@@ -4496,12 +4589,19 @@ function AthletesView({
                     *
                   </b>
                 </span>
-                <Input id="new-athlete-last-name" name="lastName" required />
+                <Input
+                  id="new-athlete-last-name"
+                  name="lastName"
+                  defaultValue={profileEditor?.lastName ?? ''}
+                  maxLength={80}
+                  required
+                />
               </label>
               <label htmlFor="new-athlete-number">
                 Jersey number
                 <Input
                   id="new-athlete-number"
+                  defaultValue={profileEditor?.no ?? ''}
                   max="99"
                   min="0"
                   name="number"
@@ -4512,6 +4612,7 @@ function AthletesView({
                 Position
                 <Input
                   id="new-athlete-position"
+                  defaultValue={profileEditor?.position ?? ''}
                   maxLength={8}
                   name="position"
                   placeholder="ATH"
@@ -4520,7 +4621,7 @@ function AthletesView({
               <label htmlFor="new-athlete-unit">
                 Unit
                 <NativeSelect
-                  defaultValue="Offence"
+                  defaultValue={profileEditor?.unit ?? 'Offence'}
                   id="new-athlete-unit"
                   name="unit"
                 >
@@ -4538,7 +4639,7 @@ function AthletesView({
               <label htmlFor="new-athlete-grade">
                 Grade
                 <NativeSelect
-                  defaultValue="12"
+                  defaultValue={profileEditor?.year ?? '12'}
                   id="new-athlete-grade"
                   name="graduationYear"
                 >
@@ -4553,6 +4654,12 @@ function AthletesView({
                 Height
                 <Input
                   id="new-athlete-height"
+                  defaultValue={
+                    profileEditor?.height === '—'
+                      ? ''
+                      : (profileEditor?.height ?? '')
+                  }
+                  maxLength={40}
                   name="height"
                   placeholder={"6'1″"}
                 />
@@ -4561,6 +4668,7 @@ function AthletesView({
                 Weight (lb)
                 <Input
                   id="new-athlete-weight"
+                  defaultValue={profileEditor?.weightLb || ''}
                   max="450"
                   min="0"
                   name="weightLb"
@@ -4576,6 +4684,8 @@ function AthletesView({
                 </span>
                 <Input
                   id="new-athlete-email"
+                  defaultValue={profileEditor?.email ?? ''}
+                  maxLength={254}
                   name="email"
                   required
                   type="email"
@@ -4583,20 +4693,33 @@ function AthletesView({
               </label>
               <label htmlFor="new-athlete-phone">
                 Phone
-                <Input id="new-athlete-phone" name="phone" type="tel" />
-              </label>
-              <label className="full" htmlFor="new-athlete-note">
-                Initial staff note
-                <Textarea
-                  id="new-athlete-note"
-                  name="staffNote"
-                  placeholder="Health, development, or role context…"
+                <Input
+                  id="new-athlete-phone"
+                  name="phone"
+                  defaultValue={profileEditor?.phone ?? ''}
+                  maxLength={80}
+                  type="tel"
                 />
               </label>
+              {!profileEditor ? (
+                <label className="full" htmlFor="new-athlete-note">
+                  Initial staff note
+                  <Textarea
+                    id="new-athlete-note"
+                    name="staffNote"
+                    placeholder="Health, development, or role context…"
+                  />
+                </label>
+              ) : null}
             </div>
             <DialogFooter>
               <Button disabled={saving} type="submit">
-                {saving ? 'Saving…' : 'Add to roster'} <UserPlus />
+                {saving
+                  ? 'Saving…'
+                  : profileEditor
+                    ? 'Save profile'
+                    : 'Add to roster'}{' '}
+                {profileEditor ? <Check /> : <UserPlus />}
               </Button>
             </DialogFooter>
           </form>

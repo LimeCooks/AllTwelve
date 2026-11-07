@@ -208,7 +208,9 @@ export async function GET() {
   try {
     const database = await getDatabase();
     const result = await database
-      .prepare(`${athleteSelect} WHERE team_id = ? ORDER BY number`)
+      .prepare(
+        `${athleteSelect} WHERE team_id = ? ORDER BY number IS NULL, number, last_name, first_name, id`,
+      )
       .bind(database.teamId)
       .all<AthleteRow>();
     return Response.json({
@@ -331,6 +333,87 @@ export async function PATCH(request: Request) {
         `UPDATE athletes SET ${updates.join(', ')} WHERE id = ? AND team_id = ?`,
       )
       .bind(...values, id, database.teamId)
+      .run();
+    const row = await database
+      .prepare(`${athleteSelect} WHERE id = ? AND team_id = ?`)
+      .bind(id, database.teamId)
+      .first<AthleteRow>();
+    if (!row)
+      return Response.json({ error: 'Athlete not found.' }, { status: 404 });
+    return Response.json({
+      athlete: present(row),
+      metrics: await metrics(database),
+    });
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function PUT(request: Request) {
+  try {
+    const database = await getDatabase();
+    const body = (await request.json()) as Record<string, unknown>;
+    if (!body || typeof body !== 'object' || Array.isArray(body))
+      throw new AthleteInputError('Athlete details are required.');
+    const id = asText(body.id);
+    const existing = await database
+      .prepare(`${athleteSelect} WHERE id = ? AND team_id = ?`)
+      .bind(id, database.teamId)
+      .first<AthleteRow>();
+    if (!existing)
+      return Response.json({ error: 'Athlete not found.' }, { status: 404 });
+    // Profile edits must not overwrite a note, availability or progress saved
+    // elsewhere while the profile form was open.
+    const payload = parsePayload({
+      ...body,
+      status: existing.status,
+      staffNote: '',
+      attendancePercent: existing.attendance_percent,
+      installPercent: existing.install_percent,
+    });
+    const duplicateEmail = await database
+      .prepare(
+        'SELECT id FROM athletes WHERE team_id = ? AND lower(email) = ? AND id != ?',
+      )
+      .bind(database.teamId, payload.email, id)
+      .first();
+    if (duplicateEmail)
+      return Response.json(
+        { error: 'An athlete with that email already exists.' },
+        { status: 409 },
+      );
+    if (payload.number !== null) {
+      const duplicateNumber = await database
+        .prepare(
+          'SELECT id FROM athletes WHERE team_id = ? AND number = ? AND id != ?',
+        )
+        .bind(database.teamId, payload.number, id)
+        .first();
+      if (duplicateNumber)
+        return Response.json(
+          { error: 'That jersey number is already in use.' },
+          { status: 409 },
+        );
+    }
+    await database
+      .prepare(
+        `UPDATE athletes SET number = ?, first_name = ?, last_name = ?, position = ?, unit = ?, graduation_year = ?, height = ?, weight_lb = ?, email = ?, phone = ?, updated_at = ? WHERE id = ? AND team_id = ?`,
+      )
+      .bind(
+        payload.number,
+        payload.firstName,
+        payload.lastName,
+        payload.position,
+        payload.unit,
+        payload.graduationYear,
+        payload.height,
+        payload.weightLb,
+        payload.email,
+        payload.phone,
+        new Date().toISOString(),
+        id,
+        database.teamId,
+      )
       .run();
     const row = await database
       .prepare(`${athleteSelect} WHERE id = ? AND team_id = ?`)

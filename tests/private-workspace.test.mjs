@@ -534,10 +534,99 @@ test('roster create/update responses cannot reveal another owner’s athlete or 
   assert.equal(reopened.status, 'Limited');
   assert.equal(reopened.attendance, 75);
   assert.equal(reopened.staffNote, 'Saved note');
+  globalThis.privateTestIdentity = bob;
+  const foreignProfile = await athletesApi.PUT(
+    request({ ...body, id: athlete.id, firstName: 'Wrong owner' }),
+  );
+  assert.equal(foreignProfile.status, 404);
+  assert.equal((await foreignProfile.json()).athlete, undefined);
+  globalThis.privateTestIdentity = alice;
+  const corrected = await athletesApi.PUT(
+    request({
+      ...body,
+      id: athlete.id,
+      firstName: 'Corrected',
+      number: 0,
+      unit: 'Offence',
+      graduationYear: 11,
+      email: 'CORRECTED@example.test',
+      phone: '555-0100',
+      status: 'Out',
+      attendancePercent: 0,
+      installPercent: 99,
+      staffNote: 'Stale form note',
+    }),
+  );
+  assert.equal(corrected.status, 200);
+  const profile = (await corrected.json()).athlete;
+  assert.equal(profile.id, athlete.id);
+  assert.equal(profile.firstName, 'Corrected');
+  assert.equal(profile.no, 0);
+  assert.equal(profile.unit, 'Offence');
+  assert.equal(profile.year, '11');
+  assert.equal(profile.email, 'corrected@example.test');
+  assert.equal(profile.phone, '555-0100');
+  assert.equal(profile.staffNote, 'Saved note');
+  assert.equal(profile.status, 'Limited');
+  assert.equal(profile.attendance, 75);
+  assert.equal(profile.install, 0);
+  const spareResponse = await athletesApi.POST(
+    request({ ...body, number: 13, email: 'spare@example.test' }),
+  );
+  assert.equal(spareResponse.status, 201);
+  const spare = (await spareResponse.json()).athlete;
+  assert.equal(
+    (await athletesApi.PUT(request({ ...body, id: athlete.id, number: 13 })))
+      .status,
+    409,
+  );
+  assert.equal(
+    (
+      await athletesApi.PUT(
+        request({ ...body, id: athlete.id, email: 'spare@example.test' }),
+      )
+    ).status,
+    409,
+  );
+  assert.equal(
+    (
+      await athletesApi.PUT(
+        request({ ...body, id: athlete.id, email: 'invalid' }),
+      )
+    ).status,
+    400,
+  );
+  assert.equal(
+    (await (await athletesApi.GET()).json()).athletes.find(
+      (item) => item.id === athlete.id,
+    ).firstName,
+    'Corrected',
+  );
+  globalThis.privateTestIdentity = null;
+  assert.equal(
+    (await athletesApi.PUT(request({ ...body, id: athlete.id }))).status,
+    401,
+  );
+  globalThis.privateTestIdentity = alice;
+  const clearedNumber = await athletesApi.PUT(
+    request({
+      ...body,
+      id: spare.id,
+      number: null,
+      email: 'spare@example.test',
+    }),
+  );
+  assert.equal(clearedNumber.status, 200);
+  assert.equal((await clearedNumber.json()).athlete.no, null);
+  assert.deepEqual(
+    (await (await athletesApi.GET()).json()).athletes.map((item) => item.id),
+    [athlete.id, spare.id],
+    'number zero sorts before unassigned jerseys after reopening',
+  );
   // Fixture cleanup is confined to this in-memory test database.
   sqlite
-    .prepare('DELETE FROM athletes WHERE id IN (?, ?)')
-    .run(athlete.id, bobAthlete.id);
+    .prepare('DELETE FROM athletes WHERE id IN (?, ?, ?)')
+    .run(athlete.id, bobAthlete.id, spare.id);
 });
 
 test('profile updates remain team-scoped and update the next signed-in session', async () => {
