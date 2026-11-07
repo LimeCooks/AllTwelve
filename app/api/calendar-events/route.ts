@@ -97,12 +97,22 @@ export async function GET() {
   }
 }
 
-export async function POST(request: Request) {
+async function saveEvent(request: Request, update: boolean) {
   try {
     const database = await getDatabase();
     const body = (await request.json()) as Record<string, unknown>;
     if (!body || typeof body !== 'object' || Array.isArray(body))
       throw new CalendarInputError('Enter valid event details.');
+    const id = update ? text(body.id) : crypto.randomUUID();
+    if (update) {
+      if (!id) throw new CalendarInputError('Event id is required.');
+      const existing = await database
+        .prepare(`${eventSelect} WHERE id = ? AND team_id = ?`)
+        .bind(id, database.teamId)
+        .first<CalendarEventRow>();
+      if (!existing)
+        return Response.json({ error: 'Event not found.' }, { status: 404 });
+    }
     const title = text(body.title);
     const eventType = body.eventType;
     const startsAt = timestamp(body.startsAt);
@@ -119,31 +129,57 @@ export async function POST(request: Request) {
       throw new CalendarInputError('Use a shorter location or event note.');
     if (Date.parse(endsAt) <= Date.parse(startsAt))
       throw new CalendarInputError('The event must end after it starts.');
-    const id = crypto.randomUUID();
-    await database
-      .prepare(
-        `INSERT INTO calendar_events (id, team_id, game_id, title, event_type, starts_at, ends_at, location, notes)
+    if (update) {
+      await database
+        .prepare(
+          `UPDATE calendar_events SET title = ?, event_type = ?, starts_at = ?, ends_at = ?, location = ?, notes = ? WHERE id = ? AND team_id = ?`,
+        )
+        .bind(
+          title,
+          eventType,
+          startsAt,
+          endsAt,
+          location,
+          notes,
+          id,
+          database.teamId,
+        )
+        .run();
+    } else
+      await database
+        .prepare(
+          `INSERT INTO calendar_events (id, team_id, game_id, title, event_type, starts_at, ends_at, location, notes)
        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        id,
-        database.teamId,
-        title,
-        eventType,
-        startsAt,
-        endsAt,
-        location,
-        notes,
-      )
-      .run();
+        )
+        .bind(
+          id,
+          database.teamId,
+          title,
+          eventType,
+          startsAt,
+          endsAt,
+          location,
+          notes,
+        )
+        .run();
     const row = await database
       .prepare(`${eventSelect} WHERE id = ? AND team_id = ?`)
       .bind(id, database.teamId)
       .first<CalendarEventRow>();
-    return Response.json({ event: row ? present(row) : null }, { status: 201 });
+    return Response.json(
+      { event: row ? present(row) : null },
+      { status: update ? 200 : 201 },
+    );
   } catch (error) {
     return failure(error);
   }
+}
+
+export async function POST(request: Request) {
+  return saveEvent(request, false);
+}
+export async function PUT(request: Request) {
+  return saveEvent(request, true);
 }
 
 export async function DELETE(request: Request) {

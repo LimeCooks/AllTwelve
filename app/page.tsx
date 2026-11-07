@@ -7,7 +7,8 @@ import {
   calendarClock,
   calendarDate,
   calendarExport,
-  localEventTime,
+  calendarEditInstant,
+  calendarTimeInput,
 } from '@/lib/calendar-time';
 import {
   GAMEPLAN_KEY,
@@ -1968,6 +1969,7 @@ function ModuleView({
   if (view === 'Calendar')
     return (
       <CalendarView
+        onEditingChange={onPlayEditingChange}
         onNavigate={onNavigate}
         onNotify={onNotify}
         teamSettings={teamSettings}
@@ -6938,10 +6940,12 @@ function eventPlacement(
 }
 
 function CalendarView({
+  onEditingChange,
   onNavigate,
   onNotify,
   teamSettings,
 }: {
+  onEditingChange: (editing: boolean) => void;
   onNavigate: (view: string) => void;
   onNotify: Notify;
   teamSettings: TeamSettings;
@@ -6951,6 +6955,15 @@ function CalendarView({
     [],
   );
   const [eventOpen, setEventOpen] = useState(false);
+  const [eventEditor, setEventEditor] = useState<CalendarEventRecord | null>(
+    null,
+  );
+  const [eventDirty, setEventDirty] = useState(false);
+  const [eventLeaveOpen, setEventLeaveOpen] = useState(false);
+  const [eventStartDate, setEventStartDate] = useState(
+    localDateKey(new Date()),
+  );
+  const [eventEndDate, setEventEndDate] = useState(localDateKey(new Date()));
   const [selectedEvent, setSelectedEvent] =
     useState<CalendarEventRecord | null>(null);
   const [weekOffset, setWeekOffset] = useState(0);
@@ -6968,6 +6981,16 @@ function CalendarView({
   const [calendarRoster, setCalendarRoster] =
     useState<AthleteMetrics>(fallbackMetrics);
   const [newEventLocation, setNewEventLocation] = useState('');
+  useEffect(() => {
+    onEditingChange(eventDirty || eventSaving);
+    return () => onEditingChange(false);
+  }, [eventDirty, eventSaving, onEditingChange]);
+  useEffect(() => {
+    if (!eventDirty && !eventSaving) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [eventDirty, eventSaving]);
   const weekDates = useMemo(() => calendarWeekDates(weekOffset), [weekOffset]);
   const weekEvents = useMemo(
     () =>
@@ -7078,13 +7101,22 @@ function CalendarView({
     const date = value('date');
     try {
       const response = await fetch('/api/calendar-events', {
-        method: 'POST',
+        method: eventEditor ? 'PUT' : 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
+          ...(eventEditor ? { id: eventEditor.id } : {}),
           title: value('title'),
           eventType: value('eventType'),
-          startsAt: localEventTime(date, value('startTime')),
-          endsAt: localEventTime(date, value('endTime')),
+          startsAt: calendarEditInstant(
+            eventEditor?.startsAt,
+            date,
+            value('startTime'),
+          ),
+          endsAt: calendarEditInstant(
+            eventEditor?.endsAt,
+            value('endDate'),
+            value('endTime'),
+          ),
           location: value('location'),
           notes: value('notes'),
         }),
@@ -7094,21 +7126,27 @@ function CalendarView({
         error?: string;
       };
       if (!response.ok || !data.event)
-        throw new Error(data.error ?? 'Unable to create the event.');
+        throw new Error(data.error ?? 'Unable to save the event.');
       setCalendarEvents((events) =>
-        [...events, data.event!].sort(
-          (a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt),
-        ),
+        [
+          ...events.filter((item) => item.id !== data.event!.id),
+          data.event!,
+        ].sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt)),
       );
-      setCalendarMessage(`${data.event.title} added to the shared schedule`);
+      setCalendarMessage(`${data.event.title} saved to the shared schedule`);
       setEventOpen(false);
-      onNotify(`${data.event.title} added to the calendar.`);
+      setEventDirty(false);
+      if (eventEditor) setSelectedEvent(data.event);
+      setEventEditor(null);
+      onNotify(
+        `${data.event.title} ${eventEditor ? 'updated' : 'added to the calendar'}.`,
+      );
     } catch (error) {
       setCalendarEventError(
-        error instanceof Error ? error.message : 'Unable to create the event.',
+        error instanceof Error ? error.message : 'Unable to save the event.',
       );
       setCalendarMessage(
-        error instanceof Error ? error.message : 'Unable to create the event.',
+        error instanceof Error ? error.message : 'Unable to save the event.',
       );
     } finally {
       calendarWriteLock.current = false;
@@ -7174,6 +7212,10 @@ function CalendarView({
       ? setMonthOffset((offset) => offset + direction)
       : setWeekOffset((offset) => offset + direction);
   const openNewEvent = () => {
+    setEventEditor(null);
+    setEventDirty(false);
+    setEventStartDate(localDateKey(new Date()));
+    setEventEndDate(localDateKey(new Date()));
     setCalendarEventError('');
     setNewEventLocation(
       teamSettings.practiceFacility ||
@@ -7448,17 +7490,26 @@ function CalendarView({
 
       <Dialog
         onOpenChange={(open) => {
-          if (!eventSaving) setEventOpen(open);
+          if (eventSaving) return;
+          if (!open && eventDirty) setEventLeaveOpen(true);
+          else setEventOpen(open);
         }}
         open={eventOpen}
       >
         <DialogContent className="athlete-dialog sm:max-w-[620px]">
-          <form inert={eventSaving} onSubmit={createCalendarEvent}>
+          <form
+            key={eventEditor?.id ?? 'new-event'}
+            inert={eventSaving}
+            onChangeCapture={() => setEventDirty(true)}
+            onSubmit={createCalendarEvent}
+          >
             {calendarEventError ? (
               <p role="alert">{calendarEventError}</p>
             ) : null}
             <DialogHeader>
-              <DialogTitle>Add calendar event</DialogTitle>
+              <DialogTitle>
+                {eventEditor ? 'Edit calendar event' : 'Add calendar event'}
+              </DialogTitle>
               <DialogDescription>
                 Times use this device’s time zone (
                 {new Intl.DateTimeFormat().resolvedOptions().timeZone}). The
@@ -7473,12 +7524,18 @@ function CalendarView({
                     *
                   </b>
                 </span>
-                <Input id="calendar-event-title" name="title" required />
+                <Input
+                  id="calendar-event-title"
+                  name="title"
+                  required
+                  maxLength={200}
+                  defaultValue={eventEditor?.title ?? ''}
+                />
               </label>
               <label htmlFor="calendar-event-type">
                 Type
                 <NativeSelect
-                  defaultValue="practice"
+                  defaultValue={eventEditor?.eventType ?? 'practice'}
                   id="calendar-event-type"
                   name="eventType"
                 >
@@ -7505,7 +7562,12 @@ function CalendarView({
                   </b>
                 </span>
                 <Input
-                  defaultValue={localDateKey(new Date())}
+                  value={eventStartDate}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    if (eventEndDate === eventStartDate) setEventEndDate(next);
+                    setEventStartDate(next);
+                  }}
                   id="calendar-event-date"
                   name="date"
                   required
@@ -7520,11 +7582,26 @@ function CalendarView({
                   </b>
                 </span>
                 <Input
-                  defaultValue="16:00"
+                  defaultValue={
+                    eventEditor
+                      ? calendarTimeInput(eventEditor.startsAt)
+                      : '16:00'
+                  }
                   id="calendar-event-start"
                   name="startTime"
                   required
                   type="time"
+                />
+              </label>
+              <label htmlFor="calendar-event-end-date">
+                End date
+                <Input
+                  id="calendar-event-end-date"
+                  name="endDate"
+                  required
+                  type="date"
+                  value={eventEndDate}
+                  onChange={(event) => setEventEndDate(event.target.value)}
                 />
               </label>
               <label htmlFor="calendar-event-end">
@@ -7535,7 +7612,11 @@ function CalendarView({
                   </b>
                 </span>
                 <Input
-                  defaultValue="17:30"
+                  defaultValue={
+                    eventEditor
+                      ? calendarTimeInput(eventEditor.endsAt)
+                      : '17:30'
+                  }
                   id="calendar-event-end"
                   name="endTime"
                   required
@@ -7552,6 +7633,7 @@ function CalendarView({
                       setNewEventLocation(event.target.value)
                     }
                     placeholder="Choose a saved location or type one"
+                    maxLength={500}
                     value={newEventLocation}
                   />
                   <NativeSelect
@@ -7584,16 +7666,48 @@ function CalendarView({
                 <Textarea
                   id="calendar-event-notes"
                   name="notes"
+                  defaultValue={eventEditor?.notes ?? ''}
+                  maxLength={10000}
                   placeholder="Equipment, objectives, or arrival details…"
                 />
               </label>
             </div>
             <DialogFooter>
               <Button disabled={eventSaving} type="submit">
-                {eventSaving ? 'Saving…' : 'Add to calendar'} <CalendarDays />
+                {eventSaving
+                  ? 'Saving…'
+                  : eventEditor
+                    ? 'Save event'
+                    : 'Add to calendar'}{' '}
+                <CalendarDays />
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={eventLeaveOpen} onOpenChange={setEventLeaveOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard event changes?</DialogTitle>
+            <DialogDescription>
+              Your saved schedule will stay as it was.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEventLeaveOpen(false)}>
+              Keep editing
+            </Button>
+            <Button
+              onClick={() => {
+                setEventLeaveOpen(false);
+                setEventOpen(false);
+                setEventDirty(false);
+                setEventEditor(null);
+              }}
+            >
+              Discard changes
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
       <Dialog
@@ -7607,7 +7721,7 @@ function CalendarView({
             <DialogTitle>{selectedEvent?.title}</DialogTitle>
             <DialogDescription>
               {selectedEvent
-                ? `${selectedEvent.startsAt.slice(0, 10)} · ${eventClock(selectedEvent.startsAt).label} · ${selectedEvent.location}`
+                ? `${calendarDate(selectedEvent.startsAt)} · ${eventClock(selectedEvent.startsAt).label} – ${calendarDate(selectedEvent.endsAt)} · ${eventClock(selectedEvent.endsAt).label} · ${selectedEvent.location}`
                 : ''}
             </DialogDescription>
           </DialogHeader>
@@ -7618,12 +7732,32 @@ function CalendarView({
           <DialogFooter>
             <Button
               disabled={eventSaving}
+              onClick={() => {
+                if (!selectedEvent) return;
+                setEventEditor(selectedEvent);
+                setNewEventLocation(selectedEvent.location);
+                setEventStartDate(calendarDate(selectedEvent.startsAt));
+                setEventEndDate(calendarDate(selectedEvent.endsAt));
+                setCalendarEventError('');
+                setEventDirty(false);
+                setSelectedEvent(null);
+                setEventOpen(true);
+              }}
+            >
+              <Pencil /> Edit event
+            </Button>
+            <Button
+              disabled={eventSaving}
               onClick={() => void deleteCalendarEvent()}
               variant="ghost"
             >
               <Trash2 /> Remove
             </Button>
-            <Button onClick={() => setSelectedEvent(null)} variant="outline">
+            <Button
+              disabled={eventSaving}
+              onClick={() => setSelectedEvent(null)}
+              variant="outline"
+            >
               Close
             </Button>
             <Button

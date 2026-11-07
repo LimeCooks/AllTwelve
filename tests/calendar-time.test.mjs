@@ -38,6 +38,27 @@ test('local event times respect Atlantic winter/summer offsets and reject skippe
   });
 });
 
+test('editing details preserves the original repeated DST occurrence and sub-minute precision', () => {
+  const result = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import {calendarEditInstant,calendarTimeInput} from ${JSON.stringify(url)};
+    const original='2026-11-01T05:30:45.123Z';
+    console.log(JSON.stringify({clock:calendarTimeInput(original),unchanged:calendarEditInstant(original,'2026-11-01','01:30'),changed:calendarEditInstant(original,'2026-11-02','01:30')}));`,
+      ],
+      { encoding: 'utf8', env: { ...process.env, TZ: 'America/Halifax' } },
+    ),
+  );
+  assert.deepEqual(result, {
+    clock: '01:30',
+    unchanged: '2026-11-01T05:30:45.123Z',
+    changed: '2026-11-02T05:30:00.000Z',
+  });
+});
+
 test('calendar export preserves instants, escapes user text, and folds Unicode lines safely', () => {
   const title = 'Practice, defence; notes\\ ' + 'é'.repeat(70);
   const exported = calendarExport(

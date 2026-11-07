@@ -427,12 +427,48 @@ test('calendar preserves real instants, rejects invalid input, and isolates save
   globalThis.privateTestIdentity = null;
   assert.equal((await calendarEvents.GET()).status, 401);
   assert.equal((await calendarEvents.POST(request(body))).status, 401);
+  assert.equal(
+    (await calendarEvents.PUT(request({ ...body, id: 'unknown' }))).status,
+    401,
+  );
   globalThis.privateTestIdentity = alice;
   const created = await calendarEvents.POST(request(body));
   assert.equal(created.status, 201);
   const saved = (await created.json()).event;
   assert.equal(saved.startsAt, '2026-11-06T20:00:00.000Z');
   assert.equal(saved.endsAt, '2026-11-06T21:30:00.000Z');
+  const correction = {
+    ...body,
+    id: saved.id,
+    title: 'Corrected travel',
+    eventType: 'travel',
+    startsAt: '2026-11-06T23:30:00-04:00',
+    endsAt: '2026-11-07T02:15:00-04:00',
+    location: 'Away field',
+    notes: 'Updated arrival details',
+  };
+  const correctedResponse = await calendarEvents.PUT(request(correction));
+  assert.equal(correctedResponse.status, 200);
+  const corrected = (await correctedResponse.json()).event;
+  assert.equal(corrected.id, saved.id);
+  assert.equal(corrected.title, correction.title);
+  assert.equal(corrected.startsAt, '2026-11-07T03:30:00.000Z');
+  assert.equal(corrected.endsAt, '2026-11-07T06:15:00.000Z');
+  assert.equal(corrected.notes, correction.notes);
+  assert.equal(corrected.location, correction.location);
+  for (const invalid of [
+    { ...correction, endsAt: correction.startsAt },
+    { ...correction, id: '' },
+    { ...correction, eventType: 'fake' },
+    { ...correction, startsAt: '2026-02-30T16:00:00Z' },
+    { ...correction, title: '' },
+    null,
+  ]) {
+    assert.equal((await calendarEvents.PUT(request(invalid))).status, 400);
+    assert.deepEqual((await (await calendarEvents.GET()).json()).events, [
+      corrected,
+    ]);
+  }
   for (const invalid of [
     { ...body, startsAt: '2026-11-06T16:00:00' },
     { ...body, startsAt: '2026-02-30T16:00:00Z' },
@@ -449,6 +485,9 @@ test('calendar preserves real instants, rejects invalid input, and isolates save
     email: 'b@example.test',
   };
   assert.equal((await (await calendarEvents.GET()).json()).events.length, 0);
+  const foreignUpdate = await calendarEvents.PUT(request(correction));
+  assert.equal(foreignUpdate.status, 404);
+  assert.equal((await foreignUpdate.json()).event, undefined);
   assert.equal(
     (
       await calendarEvents.DELETE(
@@ -458,6 +497,9 @@ test('calendar preserves real instants, rejects invalid input, and isolates save
     404,
   );
   globalThis.privateTestIdentity = alice;
+  assert.deepEqual((await (await calendarEvents.GET()).json()).events, [
+    corrected,
+  ]);
   assert.equal(
     (
       await calendarEvents.DELETE(

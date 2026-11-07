@@ -318,7 +318,7 @@ async function verifySaved(label) {
   );
   assert.equal(
     (await api('/api/calendar-events')).events[0].title,
-    'Rehearsal practice',
+    'Corrected rehearsal practice',
   );
   const download = await fetch(`${origin}/api/media?key=team-logo`, {
     headers: ownerHeaders('a'),
@@ -480,7 +480,7 @@ try {
     'POST',
     201,
   );
-  await api(
+  const savedEvent = await api(
     '/api/calendar-events',
     'a',
     {
@@ -494,6 +494,33 @@ try {
     'POST',
     201,
   );
+  const correctedEvent = {
+    id: savedEvent.event.id,
+    title: 'Corrected rehearsal practice',
+    eventType: 'practice',
+    startsAt: '2026-11-06T20:30:00Z',
+    endsAt: '2026-11-06T21:45:00Z',
+    location: 'Corrected rehearsal field',
+    notes: 'Corrected rehearsal note',
+  };
+  const foreignEvent = await api(
+    '/api/calendar-events',
+    'b',
+    correctedEvent,
+    'PUT',
+    404,
+  );
+  assert.equal(foreignEvent.event, undefined);
+  const editedEvent = await api(
+    '/api/calendar-events',
+    'a',
+    correctedEvent,
+    'PUT',
+    200,
+  );
+  assert.equal(editedEvent.event.id, savedEvent.event.id);
+  assert.equal(editedEvent.event.startsAt, '2026-11-06T20:30:00.000Z');
+  assert.equal(editedEvent.event.notes, correctedEvent.notes);
   const uploaded = await fetch(`${origin}/api/media?key=team-logo`, {
     method: 'POST',
     headers: {

@@ -31,6 +31,24 @@ export function calendarClock(iso: string) {
   };
 }
 
+export function calendarTimeInput(iso: string) {
+  const { hour, minute } = calendarClock(iso);
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+// Keep the original occurrence of a repeated DST clock time when unchanged.
+export function calendarEditInstant(
+  original: string | undefined,
+  day: string,
+  time: string,
+) {
+  return original &&
+    calendarDate(original) === day &&
+    calendarTimeInput(original) === time
+    ? original
+    : localEventTime(day, time);
+}
+
 export function calendarExport(
   events: CalendarEventRecord[],
   now = new Date(),
