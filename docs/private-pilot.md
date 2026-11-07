@@ -18,7 +18,7 @@ A private, authenticated ChalkTalk workspace usable on laptop, iPhone and tablet
 
 The isolated tests apply the actual hosted SQL to a fresh database, verify that domain tables are empty, exercise unauthenticated rejection and first-time onboarding, create two owners, prove team-specific Playbook reads and attempted cross-team modification rejection, and prove team-prefixed media read/write/delete isolation. The earlier Playbook/Install tests continue exercising the actual handlers against the prototype fixture.
 
-The first private deployment succeeded. The hosting policy was checked: owner only, no other visitors. The deployed database has all 20 expected tables and each was read back as empty. Browser verification reached the real ChatGPT sign-in gate; authenticated onboarding awaits the owner signing in.
+The first private deployment succeeded. The hosting policy was checked: owner only, no other visitors. Initially the deployed database's 20 expected tables were read back as empty. Browser verification reached the real ChatGPT sign-in gate. On November 7 the owner reported seeing “Create your team” after signing in, confirming the intended first-team screen. Actual team creation and cross-device persistence remain to be verified; the initial empty-table observation is not a statement about today's hosted records.
 
 Follow-up work removed simulated invitations, disconnected notification/schedule controls, and hard-coded account identity from Settings. Phone (390 × 844) and tablet (820 × 1180) browser checks verified the full section menu, Settings and Playbook library. A tablet-only empty sidebar gap was corrected. Profile saves update both workspace settings and team/session identity atomically, with an isolation test.
 

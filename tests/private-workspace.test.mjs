@@ -105,6 +105,9 @@ const athletesApi = await import(
 const calendarEvents = await import(
   await moduleUrl('../app/api/calendar-events/route.ts', replacements)
 );
+const sideline = await import(
+  await moduleUrl('../app/api/sideline/route.ts', replacements)
+);
 const practicePlans = await import(
   await moduleUrl('../app/api/practice-plans/route.ts', replacements)
 );
@@ -152,7 +155,14 @@ globalThis.privateTestBucket = {
       return {};
     return object
       ? {
-          body: new Response(object.bytes).body,
+          body: new Response(
+            options?.range
+              ? object.bytes.slice(
+                  options.range.offset,
+                  options.range.offset + options.range.length,
+                )
+              : object.bytes,
+          ).body,
           async json() {
             return JSON.parse(new TextDecoder().decode(object.bytes));
           },
@@ -175,6 +185,21 @@ globalThis.privateTestBucket = {
       ? {
           key,
           size: object.bytes.byteLength,
+          etag: createHash('md5')
+            .update(new Uint8Array(object.bytes))
+            .digest('hex'),
+          httpEtag:
+            '"' +
+            createHash('md5')
+              .update(new Uint8Array(object.bytes))
+              .digest('hex') +
+            '"',
+          writeHttpMetadata(headers) {
+            headers.set(
+              'content-type',
+              object.options.httpMetadata.contentType,
+            );
+          },
           httpMetadata: object.options?.httpMetadata,
         }
       : null;
@@ -1320,4 +1345,283 @@ test('complete backup restores all team tables and file bytes offline without to
       .status,
     401,
   );
+});
+
+test('sideline notes survive flags, competing devices, retries and owner boundaries without rewriting legacy work', async () => {
+  const alice = { id: 'owner-a', name: 'Coach A', email: 'a@example.test' },
+    bob = { id: 'owner-b', name: 'Coach B', email: 'b@example.test' };
+  globalThis.privateTestIdentity = null;
+  assert.equal((await sideline.GET()).status, 401);
+  assert.equal(
+    (await sideline.POST(request({ action: 'note', id: 'n', text: 'Private' })))
+      .status,
+    401,
+  );
+  const createClip = async (owner, key) => {
+    globalThis.privateTestIdentity = owner;
+    const db = await getDatabase();
+    await globalThis.privateTestBucket.put(
+      'teams/' + db.teamId + '/' + key,
+      'video',
+      { httpMetadata: { contentType: 'video/mp4' } },
+    );
+    const asset = (
+      await (
+        await films.POST(
+          request({ action: 'register', storageKey: key, title: key }),
+        )
+      ).json()
+    ).asset;
+    const result = await films.POST(
+      request({
+        action: 'upsertClip',
+        assetId: asset.id,
+        startSeconds: 0,
+        endSeconds: 5,
+      }),
+    );
+    assert.equal(result.status, 201);
+    return { teamId: db.teamId, clip: (await result.json()).clips[0] };
+  };
+  const a = await createClip(alice, 'sideline-a'),
+    b = await createClip(bob, 'sideline-b');
+  assert.equal(a.clip.clipNumber, b.clip.clipNumber);
+  globalThis.privateTestIdentity = alice;
+  const legacy = {
+    flagged: [1],
+    notes: ['Earlier private note'],
+    cameraCount: 0,
+  };
+  assert.equal(
+    (
+      await workspaceState.PUT(
+        request({
+          key: 'sideline-session-v2',
+          value: legacy,
+        }),
+      )
+    ).status,
+    200,
+  );
+  assert.deepEqual((await (await sideline.GET()).json()).notes, []);
+  assert.deepEqual(
+    (await (await sideline.GET()).json()).legacyNotes,
+    legacy.notes,
+  );
+  const note = {
+    action: 'note',
+    id: 'sideline-note-a',
+    clipId: a.clip.id,
+    text: 'First bench observation',
+  };
+  assert.equal((await sideline.POST(request(note))).status, 200);
+  const concurrent = await Promise.all([
+    sideline.POST(
+      request({ action: 'flag', clipId: a.clip.id, flagged: true }),
+    ),
+    sideline.POST(
+      request({
+        action: 'note',
+        id: 'sideline-note-b',
+        clipId: a.clip.id,
+        text: 'Second device observation',
+      }),
+    ),
+  ]);
+  assert.deepEqual(
+    concurrent.map((r) => r.status),
+    [200, 200],
+  );
+  assert.equal((await sideline.POST(request(note))).status, 200);
+  assert.equal(
+    (await sideline.POST(request({ ...note, text: 'Different content' })))
+      .status,
+    409,
+  );
+  let saved = await (await sideline.GET()).json();
+  assert.equal(saved.notes.length, 2);
+  assert.deepEqual(saved.flaggedClipIds, [a.clip.id]);
+  assert.equal(
+    (
+      await sideline.POST(
+        request({ action: 'flag', clipId: a.clip.id, flagged: true }),
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await sideline.POST(
+        request({ action: 'flag', clipId: a.clip.id, flagged: false }),
+      )
+    ).status,
+    200,
+  );
+  saved = await (await sideline.GET()).json();
+  assert.equal(saved.notes.length, 2);
+  assert.deepEqual(saved.flaggedClipIds, []);
+  for (const body of [
+    null,
+    { action: 'fake' },
+    { action: 'note', id: 'bad', text: '' },
+    { ...note, text: 'x'.repeat(1001) },
+    { action: 'flag', clipId: a.clip.id, flagged: 'true' },
+    { action: 'note', id: 'bad', text: 'Invalid', clipId: {} },
+  ])
+    assert.equal((await sideline.POST(request(body))).status, 400);
+  assert.equal(
+    (
+      await sideline.POST(
+        request({ ...note, id: 'foreign', clipId: b.clip.id }),
+      )
+    ).status,
+    404,
+  );
+  const raw = sqlite
+    .prepare(
+      'SELECT value_json FROM workspace_state WHERE team_id=? AND state_key=?',
+    )
+    .get(a.teamId, 'sideline-review-v3').value_json;
+  sqlite
+    .prepare(
+      'UPDATE workspace_state SET value_json=? WHERE team_id=? AND state_key=?',
+    )
+    .run('{broken', a.teamId, 'sideline-review-v3');
+  assert.equal((await sideline.GET()).status, 500);
+  assert.equal((await sideline.POST(request(note))).status, 500);
+  assert.equal(
+    sqlite
+      .prepare(
+        'SELECT value_json FROM workspace_state WHERE team_id=? AND state_key=?',
+      )
+      .get(a.teamId, 'sideline-review-v3').value_json,
+    '{broken',
+  );
+  sqlite
+    .prepare(
+      'UPDATE workspace_state SET value_json=? WHERE team_id=? AND state_key=?',
+    )
+    .run(raw, a.teamId, 'sideline-review-v3');
+  assert.deepEqual(
+    JSON.parse(
+      sqlite
+        .prepare(
+          'SELECT value_json FROM workspace_state WHERE team_id=? AND state_key=?',
+        )
+        .get(a.teamId, 'sideline-session-v2').value_json,
+    ),
+    legacy,
+  );
+  globalThis.privateTestIdentity = bob;
+  assert.deepEqual((await (await sideline.GET()).json()).notes, []);
+  assert.deepEqual((await (await sideline.GET()).json()).legacyNotes, []);
+  assert.equal(
+    (
+      await sideline.POST(
+        request({ action: 'flag', clipId: a.clip.id, flagged: true }),
+      )
+    ).status,
+    404,
+  );
+  assert.equal(
+    (await sideline.POST(request({ ...note, clipId: b.clip.id }))).status,
+    200,
+  );
+  assert.equal((await (await sideline.GET()).json()).notes.length, 1);
+  globalThis.privateTestIdentity = alice;
+  assert.equal((await (await sideline.GET()).json()).notes.length, 2);
+});
+
+test('media serves seekable byte ranges and metadata with owner isolation, validators and unsatisfiable-range handling', async () => {
+  const alice = { id: 'owner-a', name: 'Coach A', email: 'a@example.test' },
+    bob = { id: 'owner-b', name: 'Coach B', email: 'b@example.test' };
+  const key = 'range-test',
+    url = 'https://pilot.test/api/media?key=' + key;
+  globalThis.privateTestIdentity = null;
+  assert.equal(
+    (await media.HEAD(new Request(url, { method: 'HEAD' }))).status,
+    401,
+  );
+  const bytes = Uint8Array.from({ length: 16 }, (_, i) => i);
+  globalThis.privateTestIdentity = alice;
+  const a = await getDatabase();
+  await globalThis.privateTestBucket.put(
+    'teams/' + a.teamId + '/' + key,
+    bytes,
+    { httpMetadata: { contentType: 'video/mp4' } },
+  );
+  const get = (range, ifRange) =>
+    media.GET(
+      new Request(url, {
+        headers: {
+          ...(range ? { range } : {}),
+          ...(ifRange ? { 'if-range': ifRange } : {}),
+        },
+      }),
+    );
+  const head = await media.HEAD(
+    new Request(url, { method: 'HEAD', headers: { range: 'bytes=2-5' } }),
+  );
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('content-length'), '16');
+  assert.equal(head.headers.get('accept-ranges'), 'bytes');
+  assert.equal(await head.text(), '');
+  const whole = await get();
+  assert.equal(whole.status, 200);
+  assert.equal(whole.headers.get('content-length'), '16');
+  assert.equal(whole.headers.get('cache-control'), 'private, no-store');
+  assert.deepEqual(new Uint8Array(await whole.arrayBuffer()), bytes);
+  for (const [range, first, last] of [
+    ['bytes=2-5', 2, 5],
+    ['bytes=12-', 12, 15],
+    ['bytes=-3', 13, 15],
+    ['bytes=14-99', 14, 15],
+  ]) {
+    const response = await get(range);
+    assert.equal(response.status, 206);
+    assert.equal(
+      response.headers.get('content-range'),
+      'bytes ' + first + '-' + last + '/16',
+    );
+    assert.equal(
+      Number(response.headers.get('content-length')),
+      last - first + 1,
+    );
+    assert.deepEqual(
+      new Uint8Array(await response.arrayBuffer()),
+      bytes.slice(first, last + 1),
+    );
+  }
+  for (const range of [
+    'bytes=16-',
+    'bytes=9-3',
+    'bytes=-0',
+    'bytes=9007199254740992-',
+  ]) {
+    const response = await get(range);
+    assert.equal(response.status, 416);
+    assert.equal(response.headers.get('content-range'), 'bytes */16');
+    assert.equal(await response.text(), '');
+  }
+  assert.equal((await get('bytes=2-5', head.headers.get('etag'))).status, 206);
+  assert.equal((await get('bytes=2-5', '"outdated"')).status, 200);
+  assert.equal((await get('bytes=0-1,3-4')).status, 200);
+  globalThis.privateTestIdentity = bob;
+  assert.equal((await get('bytes=2-5')).status, 404);
+  assert.equal(
+    (await media.HEAD(new Request(url, { method: 'HEAD' }))).status,
+    404,
+  );
+  const b = await getDatabase();
+  await globalThis.privateTestBucket.put(
+    'teams/' + b.teamId + '/' + key,
+    Uint8Array.from([99, 98, 97]),
+    { httpMetadata: { contentType: 'video/mp4' } },
+  );
+  assert.deepEqual(
+    new Uint8Array(await (await get('bytes=1-2')).arrayBuffer()),
+    Uint8Array.from([98, 97]),
+  );
+  await globalThis.privateTestBucket.delete('teams/' + a.teamId + '/' + key);
+  await globalThis.privateTestBucket.delete('teams/' + b.teamId + '/' + key);
 });

@@ -1,0 +1,21 @@
+# Sideline review
+
+The old screen loaded clip names but displayed only a camera preview. Its Play button changed an icon, the timeline stayed at zero, angle tabs claimed three nonexistent cameras, and Draw displayed an empty overlay. Send to unit reported delivery without sending anything. The cut-up control wrote JSON with no retrieval flow. Flagging a play wrote `notes: []`, erasing saved notes, and flags used clip numbers shared by unrelated films.
+
+Sideline now reviews an actual saved recording using native video controls, a saved-film selector, and stable clip IDs. Previous/Next seek to the selected clip's stored start; playback pauses at its end. Film/clips, Notebook and Camera preview panels default collapsed. Focus mode hides website navigation. Camera preview is retained separately, explicitly labeled as preview without recording or replay, with tracks stopped on disconnect or unmount. Unsupported angle, drawing, cut-up and delivery controls were removed; their earlier stored JSON is retained.
+
+Notes and flags use `/api/sideline`, scoped by the authenticated team. The notebook is stored in the existing backed-up `workspace_state` table. Appends and flag updates use compare-and-swap with bounded retries, preserving competing device updates. Client-generated note IDs make a retry idempotent; conflicting reuse is rejected. Clip ownership is checked before every write. Corrupt saved JSON fails visibly without replacement. The earlier notebook remains untouched; its notes are displayed separately, while ambiguous clip-number flags are not guessed onto another film.
+
+Writes are confirmed before changing the visible notebook. Failed saves retain the draft, pending writes prevent duplicate submission, and draft guards cover clip/film switches, website navigation and page unload. Failed film or notebook reads show errors and Retry instead of apparent emptiness. The prototype's earlier notes and flags are not erased or migrated silently.
+
+## Media seeking
+
+Browser QA found that the media route streamed whole files without their content length or byte-range support. The browser consequently exposed a zero-length seekable range even while the video played. Media now supplies authenticated HEAD metadata and bounded/open/suffix single-range reads with correct 206, Content-Range and Content-Length headers. Unsatisfiable ranges return 416. Stale If-Range validators receive the full file; a changed R2 ETag between metadata/body reads fails rather than mixing versions. Private no-store caching avoids reusing a prior account's same-key response. Object bodies remain streamed. Implementation follows the [R2 Worker API](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/).
+
+## Evidence and remaining limits
+
+All 32 tests pass. Actual-handler tests verify simultaneous note/flag writes, retry idempotency, two owners with the same clip number, cross-owner rejection, unchanged legacy state, corrupt-state preservation, byte-range boundaries, validators, HEAD metadata and range isolation. The packaged release rehearsal additionally checks real Worker HEAD/range responses and retains the notebook row through rollback/forward using the existing workspace-state endpoint; older releases do not display the new notebook.
+
+Local browser QA used two disposable public sample films with two clips each. A saved note survived flagging and reload, flags remained specific to one film's clip ID, Keep editing retained the draft and Discard switched clips. After the media fix the video reported a seekable 0–5.055-second range, selected clip 2 sought to 1 second, played, then paused at exactly 2 seconds. At 390 × 844 the player and controls fit, and Focus mode hid navigation while retaining Exit focus. The exact QA films/clips/files and notebook additions were verified then removed; the original notebook row and film-library response were restored. No hosted test records were created and camera permissions were not requested.
+
+Physical iPhone/iPad codecs, real camera preview, network-failure browser injection, live camera recording/instant replay, multi-angle feeds, persistent telestration, cut-up playlists and actual unit delivery remain unimplemented or unverified. These changes establish recorded-film review, not a complete live sideline replay system.

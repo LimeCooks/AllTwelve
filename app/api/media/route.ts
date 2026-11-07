@@ -35,14 +35,65 @@ async function readMedia(request: Request) {
       { error: 'A valid media key is required.' },
       { status: 400 },
     );
-  const object = await mediaBucket().get(await storageKey(key));
-  if (!object)
+  const storedKey = await storageKey(key);
+  const metadata = await mediaBucket().head(storedKey);
+  if (!metadata)
     return Response.json({ error: 'Media not found.' }, { status: 404 });
   const headers = new Headers();
-  object.writeHttpMetadata(headers);
-  headers.set('etag', object.httpEtag);
-  headers.set('cache-control', 'private, max-age=60');
-  return new Response(object.body, { headers });
+  metadata.writeHttpMetadata(headers);
+  headers.set('etag', metadata.httpEtag);
+  headers.set('cache-control', 'private, no-store');
+  headers.set('accept-ranges', 'bytes');
+  headers.set('content-length', String(metadata.size));
+  if (request.method === 'HEAD') return new Response(null, { headers });
+  let range: { offset: number; length: number } | undefined;
+  const requested = request.headers.get('range');
+  const ifRange = request.headers.get('if-range');
+  // Multipart/unknown range units are ignored. Media players request a single
+  // byte range. A stale If-Range validator receives the complete current file.
+  const match =
+    (!ifRange || ifRange === metadata.httpEtag) &&
+    requested?.match(/^bytes=(\d*)-(\d*)$/);
+  if (match) {
+    const first = match[1] ? Number(match[1]) : null;
+    const last = match[2] ? Number(match[2]) : null;
+    const start =
+      first ?? (last === null ? -1 : Math.max(0, metadata.size - last));
+    const end =
+      first === null
+        ? metadata.size - 1
+        : last === null
+          ? metadata.size - 1
+          : Math.min(last, metadata.size - 1);
+    if (
+      metadata.size === 0 ||
+      (first === null && (last === null || last === 0)) ||
+      (first !== null && !Number.isSafeInteger(first)) ||
+      (last !== null && !Number.isSafeInteger(last)) ||
+      start < 0 ||
+      start >= metadata.size ||
+      end < start
+    ) {
+      headers.set('content-range', `bytes */${metadata.size}`);
+      headers.set('content-length', '0');
+      return new Response(null, { status: 416, headers });
+    }
+    range = { offset: start, length: end - start + 1 };
+    headers.set('content-range', `bytes ${start}-${end}/${metadata.size}`);
+    headers.set('content-length', String(range.length));
+  }
+  const object = await mediaBucket().get(storedKey, {
+    onlyIf: { etagMatches: metadata.etag },
+    ...(range ? { range } : {}),
+  });
+  if (!object)
+    return Response.json({ error: 'Media not found.' }, { status: 404 });
+  if (!('body' in object))
+    return Response.json(
+      { error: 'This file changed while loading. Please retry.' },
+      { status: 409 },
+    );
+  return new Response(object.body, { status: range ? 206 : 200, headers });
 }
 
 async function uploadMedia(request: Request) {
@@ -170,6 +221,9 @@ async function handle(
   }
 }
 export async function GET(request: Request) {
+  return handle(request, readMedia);
+}
+export async function HEAD(request: Request) {
   return handle(request, readMedia);
 }
 export async function POST(request: Request) {

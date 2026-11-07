@@ -325,6 +325,12 @@ async function verifySaved(label) {
   });
   assert.equal(download.status, 200);
   assert.deepEqual(Buffer.from(await download.arrayBuffer()), media);
+  const notebook = await api('/api/workspace-state?key=sideline-review-v3');
+  assert.equal(notebook.value.notes[0].text, 'Private bench observation');
+  assert.equal(
+    (await api('/api/workspace-state?key=sideline-review-v3', 'b')).value,
+    null,
+  );
   assert.equal((await api('/api/playbooks', 'b')).plays.length, 0);
   const foreignMedia = await fetch(`${origin}/api/media?key=team-logo`, {
     headers: ownerHeaders('b'),
@@ -533,6 +539,32 @@ try {
     body: media,
   });
   assert.equal(uploaded.status, 200, await uploaded.text());
+  const range = await fetch(`${origin}/api/media?key=team-logo`, {
+    headers: { ...ownerHeaders('a'), range: 'bytes=1-3' },
+  });
+  assert.equal(range.status, 206);
+  assert.equal(range.headers.get('content-range'), `bytes 1-3/${media.length}`);
+  assert.deepEqual(
+    Buffer.from(await range.arrayBuffer()),
+    media.subarray(1, 4),
+  );
+  const head = await fetch(`${origin}/api/media?key=team-logo`, {
+    method: 'HEAD',
+    headers: ownerHeaders('a'),
+  });
+  assert.equal(head.status, 200);
+  assert.equal(Number(head.headers.get('content-length')), media.length);
+  await api(
+    '/api/sideline',
+    'a',
+    {
+      action: 'note',
+      id: 'rehearsal-sideline-note',
+      text: 'Private bench observation',
+    },
+    'POST',
+    200,
+  );
   fixture = {
     athlete: athlete.athlete.id,
     team: (await api('/api/session')).team.id,
