@@ -1994,6 +1994,7 @@ function ModuleView({
   if (view === 'Install')
     return (
       <InstallWorkspace<StudioPlay>
+        onEditingChange={onPlayEditingChange}
         onNavigate={onNavigate}
         playerView={userRole === 'Player'}
         renderDiagram={(play) => <StudioPlayDiagram play={play} />}

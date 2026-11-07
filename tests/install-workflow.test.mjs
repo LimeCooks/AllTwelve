@@ -67,6 +67,7 @@ const dbUrl = await moduleUrl('../db/client.ts', [
 const validatorUrl = await moduleUrl('../lib/validate-play.ts');
 const designerUrl = await moduleUrl('../lib/play-designer.ts');
 const replacements = [
+  ["'@/lib/workspace-identity'", JSON.stringify(identityUrl)],
   ["'@/db/client'", JSON.stringify(dbUrl)],
   ["'@/lib/validate-play'", JSON.stringify(validatorUrl)],
   ["'@/lib/play-designer'", JSON.stringify(designerUrl)],
@@ -178,6 +179,24 @@ test('complete package lifecycle, arbitrary cadence, isolation, publication and 
   ).package;
   assert.equal(a.dueAt, '');
   assert.equal(b.dueAt, '2026-12-01');
+  const edits = await Promise.all(
+    ['Monthly revised A', 'Monthly revised B'].map((name) =>
+      call(installs, 'PATCH', {
+        kind: 'package',
+        packageId: b.id,
+        name,
+        unit: 'Team',
+        dueAt: b.dueAt,
+        version: b.version,
+      }),
+    ),
+  );
+  assert.deepEqual(edits.map((result) => result.status).sort(), [200, 409]);
+  const currentB = ok(
+    await call(installs, 'GET', null, `?packageId=${b.id}`),
+  ).package;
+  assert.ok(['Monthly revised A', 'Monthly revised B'].includes(currentB.name));
+  assert.equal(currentB.dueAt, b.dueAt);
   assert.equal((await call(installs, 'POST', { playId: play.id })).status, 400);
   assert.equal(
     (
@@ -232,6 +251,29 @@ test('complete package lifecycle, arbitrary cadence, isolation, publication and 
     )
     .bind(TEAM_ID, now, now)
     .run();
+  // Add an unavailable play after the preflight read but before the write batch.
+  // The transaction must revalidate the current contents, not publish the old list.
+  const originalBatch = database.batch;
+  database.batch = async function (statements) {
+    database.batch = originalBatch;
+    sqlite
+      .prepare(
+        "INSERT INTO install_items (id,package_id,play_id,title,item_type,position_group,sort_order) VALUES ('late-item',?,NULL,'Unavailable','Play','Offence',99)",
+      )
+      .run(a.id);
+    return originalBatch.call(this, statements);
+  };
+  assert.equal(
+    (await call(installs, 'PATCH', { kind: 'publish', packageId: a.id }))
+      .status,
+    409,
+  );
+  const unpublished = ok(
+    await call(installs, 'GET', null, `?packageId=${a.id}`),
+  );
+  assert.equal(unpublished.package.publishedAt, null);
+  assert.equal(unpublished.reviews.length, 0);
+  sqlite.prepare("DELETE FROM install_items WHERE id='late-item'").run();
   data = ok(
     await call(installs, 'PATCH', { kind: 'publish', packageId: a.id }),
   );

@@ -2008,3 +2008,14 @@ html { background: #f4f7fb; }
 }
 .practice-time-warning { margin: 8px 16px; color: #d9b577; font-size: 13px; line-height: 1.5; }
 .practice-surface.player-preview .module-actions, .practice-surface.player-preview .planning-toolbar > button, .practice-surface.player-preview .planning-toolbar > details { display: none; }
+
+.install-core-layout { display: block; }
+.install-play-list { border-right: 0; border-bottom: 1px solid #293d52; }
+.install-list-disclosure > summary, .install-teaching-details > summary, .install-review-table > summary { cursor: pointer; font-size: 14px; font-weight: 600; padding: 12px 0; }
+.install-list-body { display: flex; flex-direction: column; gap: 8px; }
+.install-list-body > button { display: flex; gap: 10px; padding: 12px; border: 1px solid #293d52; border-radius: 8px; text-align: left; background: transparent; }
+.install-list-body > button.active { background: #1a3049; border-color: #41648d; }
+.install-review-table { overflow-x: auto; }
+.install-workspace :is(h1,h2,strong,p) { overflow-wrap: anywhere; }
+.install-workspace button[data-variant="default"], .install-dialog button[data-variant="default"] { background: #405d7c; background-image: none; border-color: #5b7793; color: #f4f7fb; box-shadow: none; }
+.install-workspace button[data-variant="default"]:hover, .install-dialog button[data-variant="default"]:hover { background: #4c6a89; }

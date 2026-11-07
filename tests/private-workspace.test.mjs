@@ -118,6 +118,9 @@ const depthCharts = await import(
 const practicePlans = await import(
   await moduleUrl('../app/api/practice-plans/route.ts', replacements)
 );
+const installs = await import(
+  await moduleUrl('../lib/install-api.ts', replacements)
+);
 const { identityFromHeaders } = await import(identityUrl);
 const workspaceState = await import(
   await moduleUrl('../app/api/workspace-state/route.ts', [
@@ -375,6 +378,79 @@ test('fresh hosted migration chain is empty, identity required, owners receive i
   );
   assert.equal(sqlite.prepare('SELECT count(*) AS n FROM teams').get().n, 2);
   assert.equal(sqlite.prepare('SELECT count(*) AS n FROM athletes').get().n, 0);
+});
+
+test('installs require identity and isolate package reads, edits, publication and deletion', async () => {
+  globalThis.privateTestIdentity = null;
+  assert.equal(
+    (await installs.GET(new Request('https://pilot.test/api/install'))).status,
+    401,
+  );
+  assert.equal(
+    (
+      await installs.POST(
+        request({ kind: 'package', name: 'Private', unit: 'Team' }),
+      )
+    ).status,
+    401,
+  );
+  globalThis.privateTestIdentity = {
+    id: 'owner-a',
+    name: 'Coach A',
+    email: 'a@example.test',
+  };
+  const created = await installs.POST(
+    request({ kind: 'package', name: 'Private install', unit: 'Team' }),
+  );
+  assert.equal(created.status, 201);
+  const { package: pack } = await created.json();
+  globalThis.privateTestIdentity = {
+    id: 'owner-b',
+    name: 'Coach B',
+    email: 'b@example.test',
+  };
+  assert.equal(
+    (
+      await (
+        await installs.GET(new Request('https://pilot.test/api/install'))
+      ).json()
+    ).packages.length,
+    0,
+  );
+  for (const [method, body] of [
+    [
+      'PATCH',
+      { kind: 'package', name: 'Other', unit: 'Team', version: pack.version },
+    ],
+    ['PATCH', { kind: 'publish' }],
+    ['DELETE', { kind: 'package' }],
+  ]) {
+    const response = await installs[method](
+      request({ ...body, packageId: pack.id }),
+    );
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).package, undefined);
+  }
+  globalThis.privateTestIdentity = {
+    id: 'owner-a',
+    name: 'Coach A',
+    email: 'a@example.test',
+  };
+  assert.equal(
+    (
+      await (
+        await installs.GET(
+          new Request('https://pilot.test/api/install?packageId=' + pack.id),
+        )
+      ).json()
+    ).package.name,
+    'Private install',
+  );
+  assert.equal(
+    (await installs.DELETE(request({ kind: 'package', packageId: pack.id })))
+      .status,
+    200,
+  );
 });
 
 test('practice saves return the exact plan, reject invalid updates, and isolate owners', async () => {

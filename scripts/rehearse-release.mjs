@@ -306,10 +306,9 @@ async function verifySaved(label) {
       .name,
     'Rehearsal defence',
   );
-  assert.equal(
-    (await api(`/api/install?packageId=${fixture.install}`)).items[0].playId,
-    fixture.play,
-  );
+  const savedInstall = await api(`/api/install?packageId=${fixture.install}`);
+  assert.equal(savedInstall.items[0].playId, fixture.play);
+  assert.equal(savedInstall.package.name, 'Corrected rehearsal install');
   const savedPractice = (await api('/api/practice-plans')).plans.find(
     (plan) => plan.id === fixture.practice,
   );
@@ -485,6 +484,16 @@ try {
     'POST',
     201,
   );
+  const installRevision = {
+    kind: 'package',
+    packageId: install.package.id,
+    name: 'Corrected rehearsal install',
+    unit: 'Defence',
+    dueAt: '',
+    version: install.package.version,
+  };
+  await api('/api/install', 'a', installRevision, 'PATCH');
+  await api('/api/install', 'a', installRevision, 'PATCH', 409);
   await api('/api/install', 'a', {
     packageId: install.package.id,
     playId: play.createdId,
