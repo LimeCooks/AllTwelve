@@ -173,6 +173,12 @@
 .sideline-notes small { color: var(--muted-foreground); }
 .sideline-review label { display: block; margin-block: 8px; }
 .sideline-review textarea { margin-bottom: 8px; }
+.depth-mobile-save { display: none; }
+@media (max-width: 900px) {
+  .depth-mobile-save { position: fixed; left: 15px; right: 15px; bottom: calc(86px + env(safe-area-inset-bottom, 0px)); z-index: 40; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--background); box-shadow: 0 5px 24px #0004; }
+  .depth-mobile-save button { min-height: 44px; }
+}
+@media print { .depth-mobile-save { display: none !important; } }
 .workspace-search-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-search-results { list-style: none; margin: 0; padding: 0; max-height: 45dvh; overflow-y: auto; }
 .workspace-search-results button { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; min-height: 52px; padding: 12px; text-align: left; border-radius: 6px; }

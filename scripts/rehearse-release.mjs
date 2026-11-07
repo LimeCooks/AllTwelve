@@ -327,6 +327,13 @@ async function verifySaved(label) {
   assert.deepEqual(Buffer.from(await download.arrayBuffer()), media);
   const notebook = await api('/api/workspace-state?key=sideline-review-v3');
   assert.equal(notebook.value.notes[0].text, 'Private bench observation');
+  const depth = await api('/api/workspace-state?key=depth-layouts-v3');
+  assert.equal(depth.value.Offence[0].athleteId, fixture.athlete);
+  assert.equal(depth.value.Offence[0].notes, 'Private role note');
+  assert.equal(
+    (await api('/api/workspace-state?key=depth-layouts-v3', 'b')).value,
+    null,
+  );
   assert.equal(
     (await api('/api/workspace-state?key=sideline-review-v3', 'b')).value,
     null,
@@ -572,6 +579,41 @@ try {
     install: install.package.id,
     practice: practice.savedPlanId,
   };
+  const depth = await api('/api/depth-charts');
+  assert.deepEqual(depth.layouts, {
+    Offence: [],
+    Defence: [],
+    'Special teams': [],
+  });
+  const layouts = {
+    Offence: [
+      {
+        id: 'rehearsal-depth-role',
+        pos: 'Boundary half',
+        athleteId: fixture.athlete,
+        x: 25,
+        y: 40,
+        notes: 'Private role note',
+      },
+    ],
+    Defence: [],
+    'Special teams': [],
+  };
+  await api(
+    '/api/depth-charts',
+    'a',
+    { layouts, version: depth.version },
+    'PUT',
+    200,
+  );
+  const foreignDepth = await api('/api/depth-charts', 'b');
+  await api(
+    '/api/depth-charts',
+    'b',
+    { layouts, version: foreignDepth.version },
+    'PUT',
+    400,
+  );
   await verifySaved('candidate');
   await stop();
   await start(

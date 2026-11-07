@@ -1,6 +1,7 @@
 'use client';
 import { BackupControls } from '@/components/backup-controls';
 import { SidelineWorkspace } from '@/components/sideline-workspace';
+import { parseDepthLayouts } from '@/lib/depth-layout';
 import {
   calendarSegments,
   eventsInCalendarPeriod,
@@ -1946,7 +1947,13 @@ function ModuleView({
         onNotify={onNotify}
       />
     );
-  if (view === 'Depth Charts') return <DepthChartsView onNotify={onNotify} />;
+  if (view === 'Depth Charts')
+    return (
+      <DepthChartsView
+        onNotify={onNotify}
+        onEditingChange={onPlayEditingChange}
+      />
+    );
   if (view === 'Messages')
     return (
       <MessagesView
@@ -4244,6 +4251,7 @@ type DepthPlayerSlot = {
   athleteId: string;
   x: number;
   y: number;
+  notes: string;
 };
 type DepthLayouts = Record<AthleteUnit, DepthPlayerSlot[]>;
 
@@ -4254,11 +4262,38 @@ const emptyDepthLayouts: DepthLayouts = {
 };
 const depthUnits: AthleteUnit[] = ['Offence', 'Defence', 'Special teams'];
 
-function DepthChartsView({ onNotify }: { onNotify: Notify }) {
+function DepthChartsView({
+  onNotify,
+  onEditingChange,
+}: {
+  onNotify: Notify;
+  onEditingChange: (editing: boolean) => void;
+}) {
   const [group, setGroup] = useState<AthleteUnit>('Offence');
   const [layouts, setLayouts] = useState<DepthLayouts>(emptyDepthLayouts);
   const [selectedId, setSelectedId] = useState('');
-  const [editing, setEditing] = useState(true);
+  const [savedLayouts, setSavedLayouts] =
+    useState<DepthLayouts>(emptyDepthLayouts);
+  const [version, setVersion] = useState('');
+  const [depthLoad, setDepthLoad] = useState<'loading' | 'ready' | 'error'>(
+    'loading',
+  );
+  const [depthRetry, setDepthRetry] = useState(0);
+  const [saveError, setSaveError] = useState('');
+  const [reloadConfirm, setReloadConfirm] = useState(false);
+  const [positionName, setPositionName] = useState('');
+  const [positionCloseConfirm, setPositionCloseConfirm] = useState(false);
+  const writeLock = useRef(false);
+  const dragRef = useRef<{
+    pointerId: number;
+    slotId: string;
+    x: number;
+    y: number;
+    clientX: number;
+    clientY: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
   const [roster, setRoster] = useState<DepthChartPayload['athletes']>([]);
   const [depthSaving, setDepthSaving] = useState(false);
   const [depthMessage, setDepthMessage] = useState('Loading saved layout…');
@@ -4267,106 +4302,162 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
   const depthBoardRef = useRef<HTMLDivElement>(null);
   const lineup = layouts[group];
   const selected = lineup.find((slot) => slot.id === selectedId) ?? null;
-  const assignedCount = lineup.filter((slot) => slot.athleteId).length;
+  const assignedCount = lineup.filter((slot) =>
+    roster.some((athlete) => athlete.id === slot.athleteId),
+  ).length;
+  const dirty = JSON.stringify(layouts) !== JSON.stringify(savedLayouts);
+  useEffect(() => {
+    onEditingChange(
+      dirty ||
+        depthSaving ||
+        Boolean(draggingId) ||
+        Boolean(positionName.trim()),
+    );
+    return () => onEditingChange(false);
+  }, [dirty, depthSaving, draggingId, positionName, onEditingChange]);
+  useEffect(() => {
+    if (!dirty && !depthSaving && !positionName.trim()) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty, depthSaving, positionName]);
 
   useEffect(() => {
     let active = true;
-    Promise.all([
-      loadWorkspaceState<DepthLayouts>('depth-layouts-v2', emptyDepthLayouts),
-      fetch('/api/depth-charts', { cache: 'no-store' }).then(
-        async (response) => {
-          const data = (await response.json()) as DepthChartPayload & {
-            error?: string;
-          };
-          if (!response.ok)
-            throw new Error(data.error ?? 'Unable to load roster choices.');
-          return data.athletes;
-        },
-      ),
-    ])
-      .then(([savedLayouts, athletes]) => {
+    fetch('/api/depth-charts', { cache: 'no-store' })
+      .then(async (response) => {
+        const data = (await response.json()) as {
+          layouts: DepthLayouts;
+          athletes: DepthChartPayload['athletes'];
+          version: string;
+          error?: string;
+        };
+        if (
+          !response.ok ||
+          !Array.isArray(data.athletes) ||
+          typeof data.version !== 'string'
+        )
+          throw new Error(
+            data.error ?? 'The saved chart response was incomplete.',
+          );
+        const next = parseDepthLayouts(data.layouts);
         if (!active) return;
-        setLayouts({ ...emptyDepthLayouts, ...savedLayouts });
-        setRoster(athletes);
-        setDepthMessage('Layout saved locally');
+        setLayouts(next);
+        setSavedLayouts(next);
+        setRoster(data.athletes);
+        setVersion(data.version);
+        setSelectedId('');
+        setDepthLoad('ready');
+        setSaveError('');
+        setDepthMessage('Saved team layout');
       })
       .catch((error: unknown) => {
-        if (active)
-          setDepthMessage(
-            error instanceof Error
-              ? error.message
-              : 'Unable to load the depth chart.',
-          );
+        if (!active) return;
+        setDepthLoad('error');
+        setDepthMessage(
+          error instanceof Error
+            ? error.message
+            : 'Unable to load saved depth charts.',
+        );
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [depthRetry]);
 
-  const persistLayouts = async (
-    next: DepthLayouts,
-    successMessage = 'Layout saved locally',
-  ) => {
-    setLayouts(next);
+  const persistLayouts = async (next: DepthLayouts) => {
+    if (writeLock.current || depthLoad !== 'ready') return;
+    writeLock.current = true;
     setDepthSaving(true);
-    setDepthMessage('Saving layout…');
+    setSaveError('');
     try {
-      await saveWorkspaceState('depth-layouts-v2', next);
-      setDepthMessage(successMessage);
+      const response = await fetch('/api/depth-charts', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ layouts: next, version }),
+      });
+      const data = (await response.json()) as {
+        layouts: DepthLayouts;
+        athletes: DepthChartPayload['athletes'];
+        version: string;
+        error?: string;
+      };
+      if (
+        !response.ok ||
+        typeof data.version !== 'string' ||
+        !Array.isArray(data.athletes)
+      )
+        throw new Error(data.error ?? 'Unable to save this chart.');
+      const saved = parseDepthLayouts(data.layouts);
+      setLayouts(saved);
+      setSavedLayouts(saved);
+      setRoster(data.athletes);
+      setVersion(data.version);
+      setDepthMessage('Saved team layout');
+      onNotify('Depth chart saved.');
     } catch (error) {
-      setDepthMessage(
-        error instanceof Error ? error.message : 'Unable to save the layout.',
+      setSaveError(
+        error instanceof Error
+          ? error.message
+          : 'Unable to save the chart. Your draft is retained.',
       );
     } finally {
+      writeLock.current = false;
       setDepthSaving(false);
     }
   };
+  const reloadSaved = () => {
+    setReloadConfirm(false);
+    setPositionName('');
+    setDepthLoad('loading');
+    setDepthRetry((n) => n + 1);
+  };
 
-  const updateSlot = (
-    id: string,
-    patch: Partial<DepthPlayerSlot>,
-    save = false,
-  ) => {
-    const next = {
-      ...layouts,
-      [group]: layouts[group].map((slot) =>
+  const updateSlot = (id: string, patch: Partial<DepthPlayerSlot>) => {
+    setLayouts((current) => ({
+      ...current,
+      [group]: current[group].map((slot) =>
         slot.id === id ? { ...slot, ...patch } : slot,
       ),
-    };
-    if (save) void persistLayouts(next);
-    else setLayouts(next);
+    }));
   };
-
-  const positionFromPointer = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    const bounds = depthBoardRef.current?.getBoundingClientRect();
-    if (!bounds) return null;
-    return {
-      x: Math.min(
-        94,
-        Math.max(6, ((event.clientX - bounds.left) / bounds.width) * 100),
-      ),
-      y: Math.min(
-        92,
-        Math.max(8, ((event.clientY - bounds.top) / bounds.height) * 100),
-      ),
-    };
-  };
-
   const movePositionCard = (
     event: ReactPointerEvent<HTMLButtonElement>,
     slot: DepthPlayerSlot,
-    save: boolean,
   ) => {
-    const position = positionFromPointer(event);
-    if (!position) return;
-    const next = {
-      ...layouts,
-      [group]: layouts[group].map((item) =>
-        item.id === slot.id ? { ...item, ...position } : item,
+    const drag = dragRef.current,
+      bounds = depthBoardRef.current?.getBoundingClientRect();
+    if (
+      !drag ||
+      !bounds ||
+      drag.pointerId !== event.pointerId ||
+      drag.slotId !== slot.id ||
+      Math.hypot(event.clientX - drag.clientX, event.clientY - drag.clientY) < 3
+    )
+      return;
+    updateSlot(slot.id, {
+      x: Math.min(
+        94,
+        Math.max(
+          6,
+          ((event.clientX - drag.offsetX - bounds.left) / bounds.width) * 100,
+        ),
       ),
-    };
-    if (save) void persistLayouts(next, `${slot.pos} position saved.`);
-    else setLayouts(next);
+      y: Math.min(
+        92,
+        Math.max(
+          8,
+          ((event.clientY - drag.offsetY - bounds.top) / bounds.height) * 100,
+        ),
+      ),
+    });
+  };
+  const cancelDrag = (pointerId: number) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== pointerId) return;
+    updateSlot(drag.slotId, { x: drag.x, y: drag.y });
+    dragRef.current = null;
+    setDraggingId('');
   };
 
   const addPosition = (event: SyntheticEvent<HTMLFormElement>) => {
@@ -4380,18 +4471,38 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
       pos,
       athleteId: '',
       x: 18 + (index % 4) * 21,
-      y: 22 + Math.floor(index / 4) * 22,
+      y: Math.min(84, 22 + Math.floor(index / 4) * 18),
+      notes: '',
     };
     const next = { ...layouts, [group]: [...lineup, slot] };
     setSelectedId(slot.id);
-    setEditing(true);
     setPositionDialogOpen(false);
-    void persistLayouts(next, `${pos} added to ${group}.`);
+    setPositionName('');
+    setLayouts(next);
   };
 
   const selectedAthlete = selected?.athleteId
     ? roster.find((athlete) => athlete.id === selected.athleteId)
     : null;
+
+  if (depthLoad !== 'ready')
+    return (
+      <section className="module-surface depth-surface">
+        <ModuleHeader
+          eyebrow="Personnel"
+          title="Depth Charts"
+          description="Your team-defined roles and assignments."
+        />
+        {depthLoad === 'loading' ? (
+          <output>Loading saved alignment…</output>
+        ) : (
+          <>
+            <p role="alert">{depthMessage}</p>
+            <Button onClick={reloadSaved}>Retry saved chart</Button>
+          </>
+        )}
+      </section>
+    );
 
   return (
     <section className="module-surface depth-surface">
@@ -4408,20 +4519,19 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
           <Download /> Print
         </Button>
         <Button
-          className="module-primary"
-          onClick={async () => {
-            if (editing) {
-              await saveWorkspaceState('depth-chart-publication', {
-                unit: group,
-                publishedAt: new Date().toISOString(),
-              });
-              onNotify(`${group} depth chart published.`);
-            }
-            setEditing((value) => !value);
-          }}
+          variant="outline"
+          disabled={depthSaving || Boolean(draggingId)}
+          onClick={() => (dirty ? setReloadConfirm(true) : reloadSaved())}
         >
-          {editing ? <Check /> : <Pencil />}{' '}
-          {editing ? 'Publish layout' : 'Edit layout'}
+          Reload saved
+        </Button>
+        <Button
+          className="module-primary"
+          disabled={!dirty || depthSaving || Boolean(draggingId)}
+          onClick={() => void persistLayouts(layouts)}
+        >
+          <Check />
+          {depthSaving ? 'Saving…' : 'Save layout'}
         </Button>
       </ModuleHeader>
 
@@ -4431,6 +4541,7 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
             <button
               className={group === item ? 'active' : ''}
               key={item}
+              disabled={depthSaving || Boolean(draggingId)}
               onClick={() => {
                 setGroup(item);
                 setSelectedId(layouts[item][0]?.id ?? '');
@@ -4441,39 +4552,41 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
             </button>
           ))}
         </div>
-        <Button onClick={() => setPositionDialogOpen(true)} variant="outline">
-          <Plus /> Add position
-        </Button>
         <Button
-          onClick={() =>
-            onNotify(
-              `${assignedCount} of ${lineup.length} positions are assigned.`,
-              'info',
-            )
-          }
+          disabled={depthSaving}
+          onClick={() => setPositionDialogOpen(true)}
           variant="outline"
         >
-          <Users /> {assignedCount} assigned
+          <Plus /> Add position
         </Button>
+        <Badge variant="secondary">
+          <Users /> {assignedCount} assigned
+        </Badge>
       </div>
       <div className="local-data-status depth-data-status">
-        <span className={depthSaving ? 'sync-dot working' : 'sync-dot'} />
-        <strong>{depthMessage}</strong>
+        <span
+          className={depthSaving || dirty ? 'sync-dot working' : 'sync-dot'}
+        />
+        <strong>
+          {depthSaving
+            ? 'Saving layout…'
+            : dirty
+              ? 'Unsaved changes · Save layout to keep them'
+              : depthMessage}
+        </strong>
         <small>
           {lineup.length} team-defined{' '}
           {lineup.length === 1 ? 'position' : 'positions'} · {roster.length}{' '}
           roster athletes
         </small>
       </div>
-
+      {saveError && <p role="alert">{saveError}</p>}
       <div className="depth-grid">
         <div className="depth-field">
           <div className="depth-field-header">
             <span>{group} alignment</span>
             <small>
-              {editing
-                ? 'Drag a position card to move it, or use the precise controls'
-                : 'Published team layout'}
+              Drag a position card to move it, or use the precise controls
             </small>
           </div>
           <div
@@ -4485,7 +4598,10 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
                 <Shirt />
                 <strong>No positions in this unit</strong>
                 <span>Create only the roles and alignment your team uses.</span>
-                <Button onClick={() => setPositionDialogOpen(true)}>
+                <Button
+                  disabled={depthSaving}
+                  onClick={() => setPositionDialogOpen(true)}
+                >
                   <Plus /> Add first position
                 </Button>
               </div>
@@ -4494,34 +4610,75 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
               const athlete = roster.find((item) => item.id === slot.athleteId);
               return (
                 <button
-                  aria-label={`${slot.pos}, ${athlete?.name ?? 'unassigned'}${editing ? '. Drag to reposition.' : ''}`}
+                  aria-label={`${slot.pos}, ${athlete?.name ?? (slot.athleteId ? 'athlete unavailable' : 'unassigned')}. Drag to reposition.`}
+                  disabled={depthSaving}
                   className={`${selectedId === slot.id ? 'depth-player selected' : 'depth-player'}${draggingId === slot.id ? ' dragging' : ''}`}
                   key={slot.id}
                   onClick={() => setSelectedId(slot.id)}
-                  onPointerCancel={() => setDraggingId('')}
+                  onPointerCancel={(event) => cancelDrag(event.pointerId)}
+                  onLostPointerCapture={(event) => cancelDrag(event.pointerId)}
                   onPointerDown={(event) => {
-                    if (!editing || event.button !== 0) return;
+                    if (
+                      depthSaving ||
+                      event.button !== 0 ||
+                      !event.isPrimary ||
+                      dragRef.current
+                    )
+                      return;
+                    const bounds =
+                      depthBoardRef.current?.getBoundingClientRect();
+                    if (!bounds) return;
                     event.preventDefault();
                     event.currentTarget.setPointerCapture(event.pointerId);
                     setSelectedId(slot.id);
                     setDraggingId(slot.id);
-                    movePositionCard(event, slot, false);
+                    dragRef.current = {
+                      pointerId: event.pointerId,
+                      slotId: slot.id,
+                      x: slot.x,
+                      y: slot.y,
+                      clientX: event.clientX,
+                      clientY: event.clientY,
+                      offsetX:
+                        event.clientX -
+                        bounds.left -
+                        (bounds.width * slot.x) / 100,
+                      offsetY:
+                        event.clientY -
+                        bounds.top -
+                        (bounds.height * slot.y) / 100,
+                    };
                   }}
                   onPointerMove={(event) => {
-                    if (editing && draggingId === slot.id)
-                      movePositionCard(event, slot, false);
+                    if (draggingId === slot.id) movePositionCard(event, slot);
                   }}
                   onPointerUp={(event) => {
-                    if (draggingId !== slot.id) return;
-                    movePositionCard(event, slot, true);
+                    if (
+                      dragRef.current?.slotId !== slot.id ||
+                      dragRef.current.pointerId !== event.pointerId
+                    )
+                      return;
+                    movePositionCard(event, slot);
+                    dragRef.current = null;
                     setDraggingId('');
+                    if (event.currentTarget.hasPointerCapture(event.pointerId))
+                      event.currentTarget.releasePointerCapture(
+                        event.pointerId,
+                      );
                   }}
-                  style={{ left: `${slot.x}%`, top: `${slot.y}%` }}
+                  style={{
+                    left: `${slot.x}%`,
+                    top: `${slot.y}%`,
+                    touchAction: 'none',
+                  }}
                   type="button"
                 >
-                  {editing ? <GripVertical aria-hidden="true" /> : null}
+                  <GripVertical aria-hidden="true" />
                   <span>{slot.pos}</span>
-                  <strong>{athlete?.name ?? 'Unassigned'}</strong>
+                  <strong>
+                    {athlete?.name ??
+                      (slot.athleteId ? 'Athlete unavailable' : 'Unassigned')}
+                  </strong>
                 </button>
               );
             })}
@@ -4541,9 +4698,9 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
               >
                 Position name
                 <Input
-                  disabled={!editing}
+                  disabled={depthSaving}
+                  maxLength={100}
                   id="depth-position-name"
-                  onBlur={() => void persistLayouts(layouts)}
                   onChange={(event) =>
                     updateSlot(selected.id, { pos: event.target.value })
                   }
@@ -4559,7 +4716,12 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
                     .join('') || '—'}
                 </span>
                 <div>
-                  <strong>{selectedAthlete?.name ?? 'Unassigned'}</strong>
+                  <strong>
+                    {selectedAthlete?.name ??
+                      (selected.athleteId
+                        ? 'Athlete unavailable'
+                        : 'Unassigned')}
+                  </strong>
                   <small>
                     {selectedAthlete
                       ? `${selectedAthlete.position || 'No roster position'} · ${selectedAthlete.status}`
@@ -4571,17 +4733,18 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
               <NativeSelect
                 aria-label={`Choose ${selected.pos} starter`}
                 className="depth-athlete-select"
-                disabled={!editing || depthSaving}
+                disabled={depthSaving}
                 onChange={(event) =>
-                  updateSlot(
-                    selected.id,
-                    { athleteId: event.target.value },
-                    true,
-                  )
+                  updateSlot(selected.id, { athleteId: event.target.value })
                 }
                 value={selected.athleteId}
               >
                 <NativeSelectOption value="">Unassigned</NativeSelectOption>
+                {selected.athleteId && !selectedAthlete && (
+                  <NativeSelectOption value={selected.athleteId}>
+                    Athlete unavailable · choose another
+                  </NativeSelectOption>
+                )}
                 {roster.map((athlete) => (
                   <NativeSelectOption key={athlete.id} value={athlete.id}>
                     {athlete.no === null ? '—' : `#${athlete.no}`} ·{' '}
@@ -4594,14 +4757,13 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
                 <label htmlFor="depth-x">
                   Horizontal position
                   <input
-                    disabled={!editing}
+                    disabled={depthSaving}
                     id="depth-x"
                     max="94"
                     min="6"
                     onChange={(event) =>
                       updateSlot(selected.id, { x: Number(event.target.value) })
                     }
-                    onPointerUp={() => void persistLayouts(layouts)}
                     type="range"
                     value={selected.x}
                   />
@@ -4609,14 +4771,13 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
                 <label htmlFor="depth-y">
                   Vertical position
                   <input
-                    disabled={!editing}
+                    disabled={depthSaving}
                     id="depth-y"
                     max="92"
                     min="8"
                     onChange={(event) =>
                       updateSlot(selected.id, { y: Number(event.target.value) })
                     }
-                    onPointerUp={() => void persistLayouts(layouts)}
                     type="range"
                     value={selected.y}
                   />
@@ -4629,26 +4790,26 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
                   <Lock />
                 </div>
                 <Textarea
+                  aria-label="Role notes"
+                  maxLength={10000}
+                  disabled={depthSaving}
+                  value={selected.notes}
+                  onChange={(event) =>
+                    updateSlot(selected.id, { notes: event.target.value })
+                  }
                   placeholder="Add a real game or role note…"
-                  onBlur={async (event) => {
-                    await saveWorkspaceState(
-                      `depth-note-${group.toLowerCase().replaceAll(' ', '-')}-${selected.id}`,
-                      event.target.value,
-                    );
-                    onNotify(`${selected.pos} note saved.`);
-                  }}
                 />
               </div>
               <Button
                 className="w-full"
-                disabled={!editing}
+                disabled={depthSaving}
                 onClick={() => {
                   const next = {
                     ...layouts,
                     [group]: lineup.filter((slot) => slot.id !== selected.id),
                   };
                   setSelectedId('');
-                  void persistLayouts(next, `${selected.pos} removed.`);
+                  setLayouts(next);
                 }}
                 variant="outline"
               >
@@ -4667,7 +4828,26 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
           )}
         </aside>
       </div>
-      <Dialog onOpenChange={setPositionDialogOpen} open={positionDialogOpen}>
+      {dirty && (
+        <div className="depth-mobile-save">
+          <span>{depthSaving ? 'Saving…' : 'Unsaved changes'}</span>
+          <Button
+            aria-label="Save depth-chart changes"
+            className="module-primary"
+            disabled={depthSaving || Boolean(draggingId)}
+            onClick={() => void persistLayouts(layouts)}
+          >
+            Save layout
+          </Button>
+        </div>
+      )}
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open && positionName.trim()) setPositionCloseConfirm(true);
+          else setPositionDialogOpen(open);
+        }}
+        open={positionDialogOpen}
+      >
         <DialogContent className="athlete-dialog sm:max-w-[460px]">
           <form onSubmit={addPosition}>
             <DialogHeader>
@@ -4682,7 +4862,9 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
                 Position name
                 <Input
                   id="depth-new-position"
-                  maxLength={24}
+                  maxLength={100}
+                  value={positionName}
+                  onChange={(event) => setPositionName(event.target.value)}
                   name="positionName"
                   placeholder="Example: Boundary half"
                   required
@@ -4691,7 +4873,10 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
             </div>
             <DialogFooter>
               <Button
-                onClick={() => setPositionDialogOpen(false)}
+                onClick={() => {
+                  setPositionName('');
+                  setPositionDialogOpen(false);
+                }}
                 type="button"
                 variant="outline"
               >
@@ -4702,6 +4887,65 @@ function DepthChartsView({ onNotify }: { onNotify: Notify }) {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={reloadConfirm} onOpenChange={setReloadConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard changes and reload?</DialogTitle>
+            <DialogDescription>
+              The latest saved chart will replace your draft. You can download
+              the draft first.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReloadConfirm(false)}>
+              Keep editing
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() =>
+                downloadText(
+                  'depth-chart-draft.json',
+                  JSON.stringify(layouts, null, 2),
+                  'application/json',
+                )
+              }
+            >
+              Download draft
+            </Button>
+            <Button onClick={reloadSaved}>Discard and reload</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={positionCloseConfirm}
+        onOpenChange={setPositionCloseConfirm}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard this position name?</DialogTitle>
+            <DialogDescription>
+              The new position has not been added to the board.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setPositionCloseConfirm(false)}
+            >
+              Keep editing
+            </Button>
+            <Button
+              onClick={() => {
+                setPositionCloseConfirm(false);
+                setPositionName('');
+                setPositionDialogOpen(false);
+              }}
+            >
+              Discard position
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </section>

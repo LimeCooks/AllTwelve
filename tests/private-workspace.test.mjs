@@ -77,6 +77,10 @@ const dbUrl = await moduleUrl('../db/client.ts', [
   ["'@/lib/workspace-identity'", JSON.stringify(identityUrl)],
 ]);
 const replacements = [
+  [
+    "'@/lib/depth-layout'",
+    JSON.stringify(await moduleUrl('../lib/depth-layout.ts')),
+  ],
   ["'@/db/client'", JSON.stringify(dbUrl)],
   ["'@/lib/request-identity'", JSON.stringify(requestUrl)],
   ["'@/lib/workspace-identity'", JSON.stringify(identityUrl)],
@@ -107,6 +111,9 @@ const calendarEvents = await import(
 );
 const sideline = await import(
   await moduleUrl('../app/api/sideline/route.ts', replacements)
+);
+const depthCharts = await import(
+  await moduleUrl('../app/api/depth-charts/route.ts', replacements)
 );
 const practicePlans = await import(
   await moduleUrl('../app/api/practice-plans/route.ts', replacements)
@@ -1624,4 +1631,244 @@ test('media serves seekable byte ranges and metadata with owner isolation, valid
   );
   await globalThis.privateTestBucket.delete('teams/' + a.teamId + '/' + key);
   await globalThis.privateTestBucket.delete('teams/' + b.teamId + '/' + key);
+});
+
+test('depth charts start blank, preserve custom roles and notes, reject stale or foreign assignments and retain legacy data', async () => {
+  const blank = { Offence: [], Defence: [], 'Special teams': [] };
+  globalThis.privateTestIdentity = null;
+  assert.equal((await depthCharts.GET()).status, 401);
+  assert.equal(
+    (await depthCharts.PUT(request({ layouts: blank, version: '' }))).status,
+    401,
+  );
+  globalThis.privateTestIdentity = {
+    id: 'depth-first-owner',
+    name: 'First depth owner',
+    email: 'depth-first@example.test',
+  };
+  assert.equal(
+    (
+      await onboarding.POST(
+        request({ name: 'Blank depth team', season: '2026' }),
+      )
+    ).status,
+    201,
+  );
+  const fresh = await depthCharts.GET();
+  assert.equal(fresh.status, 200);
+  assert.equal(fresh.headers.get('cache-control'), 'private, no-store');
+  const first = await fresh.json();
+  assert.deepEqual(first.layouts, blank);
+  assert.deepEqual(first.athletes, []);
+  assert.equal(
+    (
+      await workspaceState.PUT(
+        request({ key: 'depth-layouts-v2', value: null }),
+      )
+    ).status,
+    200,
+  );
+  assert.deepEqual((await (await depthCharts.GET()).json()).layouts, blank);
+  const alice = { id: 'owner-a', name: 'Coach A', email: 'a@example.test' },
+    bob = { id: 'owner-b', name: 'Coach B', email: 'b@example.test' };
+  const makeAthlete = async (owner, suffix) => {
+    globalThis.privateTestIdentity = owner;
+    const response = await athletesApi.POST(
+      request({
+        firstName: 'Depth',
+        lastName: suffix,
+        number: null,
+        position: 'DB',
+        unit: 'Defence',
+        graduationYear: 12,
+        weightLb: 180,
+        email: 'depth-' + suffix + '@example.test',
+      }),
+    );
+    assert.equal(response.status, 201);
+    return (await response.json()).athlete.id;
+  };
+  const aId = await makeAthlete(alice, 'A'),
+    bId = await makeAthlete(bob, 'B');
+  globalThis.privateTestIdentity = alice;
+  const a = await getDatabase();
+  const legacy = {
+    Offence: [
+      {
+        id: 'custom-boundary',
+        pos: 'Boundary half',
+        athleteId: aId,
+        x: 23,
+        y: 42,
+      },
+    ],
+  };
+  assert.equal(
+    (
+      await workspaceState.PUT(
+        request({ key: 'depth-layouts-v2', value: legacy }),
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await workspaceState.PUT(
+        request({
+          key: 'depth-note-offence-custom-boundary',
+          value: 'Earlier coaching note',
+        }),
+      )
+    ).status,
+    200,
+  );
+  const loaded = await (await depthCharts.GET()).json();
+  assert.deepEqual(loaded.layouts.Defence, []);
+  assert.deepEqual(loaded.layouts['Special teams'], []);
+  assert.equal(loaded.layouts.Offence[0].notes, 'Earlier coaching note');
+  assert.equal(loaded.layouts.Offence[0].athleteId, aId);
+  const rawLegacy = sqlite
+    .prepare(
+      'SELECT value_json FROM workspace_state WHERE team_id=? AND state_key=?',
+    )
+    .get(a.teamId, 'depth-layouts-v2').value_json;
+  const valid = {
+    ...loaded.layouts,
+    Offence: [
+      { ...loaded.layouts.Offence[0], notes: 'Corrected role notes', x: 61.5 },
+    ],
+  };
+  for (const layouts of [
+    null,
+    { ...valid, Offence: [{ ...valid.Offence[0], pos: '' }] },
+    { ...valid, Offence: [{ ...valid.Offence[0], x: -1 }] },
+    { ...valid, Offence: [valid.Offence[0], valid.Offence[0]] },
+    { ...valid, Offence: [{ ...valid.Offence[0], notes: {} }] },
+    { ...valid, Offence: [{ ...valid.Offence[0], athleteId: bId }] },
+  ]) {
+    assert.equal(
+      (await depthCharts.PUT(request({ layouts, version: loaded.version })))
+        .status,
+      400,
+    );
+    assert.deepEqual(
+      (await (await depthCharts.GET()).json()).layouts,
+      loaded.layouts,
+    );
+  }
+  const save = await depthCharts.PUT(
+    request({ layouts: valid, version: loaded.version }),
+  );
+  assert.equal(save.status, 200);
+  const saved = await save.json();
+  assert.equal(saved.layouts.Offence[0].notes, 'Corrected role notes');
+  assert.equal(saved.layouts.Offence[0].x, 61.5);
+  assert.notEqual(saved.version, loaded.version);
+  assert.equal(
+    (
+      await depthCharts.PUT(
+        request({ layouts: loaded.layouts, version: loaded.version }),
+      )
+    ).status,
+    409,
+  );
+  const competing = await Promise.all(
+    ['First device', 'Second device'].map((pos) =>
+      depthCharts.PUT(
+        request({
+          layouts: { ...valid, Offence: [{ ...valid.Offence[0], pos }] },
+          version: saved.version,
+        }),
+      ),
+    ),
+  );
+  assert.deepEqual(competing.map((r) => r.status).sort(), [200, 409]);
+  const winner = await (await depthCharts.GET()).json();
+  assert.ok(
+    ['First device', 'Second device'].includes(winner.layouts.Offence[0].pos),
+  );
+  assert.equal(winner.layouts.Offence[0].notes, 'Corrected role notes');
+  const raw = sqlite
+    .prepare(
+      'SELECT value_json FROM workspace_state WHERE team_id=? AND state_key=?',
+    )
+    .get(a.teamId, 'depth-layouts-v3').value_json;
+  sqlite
+    .prepare(
+      'UPDATE workspace_state SET value_json=? WHERE team_id=? AND state_key=?',
+    )
+    .run('{broken', a.teamId, 'depth-layouts-v3');
+  assert.equal((await depthCharts.GET()).status, 500);
+  assert.equal(
+    (
+      await depthCharts.PUT(
+        request({ layouts: valid, version: winner.version }),
+      )
+    ).status,
+    500,
+  );
+  assert.equal(
+    sqlite
+      .prepare(
+        'SELECT value_json FROM workspace_state WHERE team_id=? AND state_key=?',
+      )
+      .get(a.teamId, 'depth-layouts-v3').value_json,
+    '{broken',
+  );
+  sqlite
+    .prepare(
+      'UPDATE workspace_state SET value_json=? WHERE team_id=? AND state_key=?',
+    )
+    .run(raw, a.teamId, 'depth-layouts-v3');
+  assert.equal(
+    sqlite
+      .prepare(
+        'SELECT value_json FROM workspace_state WHERE team_id=? AND state_key=?',
+      )
+      .get(a.teamId, 'depth-layouts-v2').value_json,
+    rawLegacy,
+  );
+  assert.equal(
+    JSON.parse(
+      sqlite
+        .prepare(
+          'SELECT value_json FROM workspace_state WHERE team_id=? AND state_key=?',
+        )
+        .get(a.teamId, 'depth-note-offence-custom-boundary').value_json,
+    ),
+    'Earlier coaching note',
+  );
+  globalThis.privateTestIdentity = bob;
+  const other = await (await depthCharts.GET()).json();
+  assert.deepEqual(other.layouts, blank);
+  assert.ok(!other.athletes.some((athlete) => athlete.id === aId));
+  assert.equal(
+    (await depthCharts.PUT(request({ layouts: valid, version: other.version })))
+      .status,
+    400,
+  );
+  globalThis.privateTestIdentity = alice;
+  sqlite
+    .prepare('DELETE FROM athletes WHERE id=? AND team_id=?')
+    .run(aId, a.teamId);
+  const missing = await (await depthCharts.GET()).json();
+  assert.equal(missing.layouts.Offence[0].athleteId, aId);
+  assert.ok(!missing.athletes.some((athlete) => athlete.id === aId));
+  assert.equal(
+    (
+      await depthCharts.PUT(
+        request({ layouts: missing.layouts, version: missing.version }),
+      )
+    ).status,
+    400,
+  );
+  missing.layouts.Offence[0].athleteId = '';
+  assert.equal(
+    (
+      await depthCharts.PUT(
+        request({ layouts: missing.layouts, version: missing.version }),
+      )
+    ).status,
+    200,
+  );
 });
