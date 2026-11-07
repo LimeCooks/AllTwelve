@@ -35,7 +35,7 @@ Home now checks successful, complete calendar/install responses before showing c
 3. Verify every persisted module and uploaded file across two browser sessions/devices. Handle failed requests honestly; do not replace failures with apparent empty success.
 4. Verify responsive layouts and touch drawing on phone/tablet. Desktop tests are insufficient for this gate.
 5. Manual full export and offline recovery are implemented and tested separately; see [backups.md](backups.md). Still verify cloud disaster recovery, retention/restore procedures, and an owner-accessible recovery handoff. Retain the local prototype unchanged; do not migrate its records into the clean pilot.
-6. Define and exercise a reviewed update/rollback workflow so development experiments never share pilot data or publish automatically.
+6. A repeatable local production-build update/rollback rehearsal now passes with isolated storage, saved domain records, uploaded bytes, backup ZIPs and owner isolation; see [releases.md](releases.md). Live hosted rollback and disaster recovery remain unverified. Development experiments must never share pilot data or publish automatically.
 7. Walk the real coaching workflows with the owner, recording and fixing defects. The first working deployment is a pilot milestone, not proof that the complete product is polished.
 
 ## Hosting identity

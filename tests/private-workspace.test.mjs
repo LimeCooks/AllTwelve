@@ -304,7 +304,8 @@ test('fresh hosted migration chain is empty, identity required, owners receive i
     request({ kind: 'book', name: 'A defence', side: 'Defence' }),
   );
   assert.equal(created.status, 201);
-  const bookId = (await created.json()).createdId;
+  const bookId = (await created.json()).books[0].id;
+  assert.equal(typeof bookId, 'string');
   globalThis.privateTestIdentity = {
     id: 'owner-b',
     name: 'Coach B',
