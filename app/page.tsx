@@ -1,5 +1,7 @@
 'use client';
 import { BackupControls } from '@/components/backup-controls';
+import { WorkspaceSearch } from '@/components/workspace-search';
+import type { SearchResult } from '@/lib/workspace-search';
 import { loadDashboard } from '@/lib/dashboard-load';
 import {
   calendarClock,
@@ -386,6 +388,9 @@ export default function Home() {
 }
 
 function WorkspaceHome({ session }: { session: WorkspaceSession }) {
+  const [searchTarget, setSearchTarget] = useState<
+    (SearchResult & { revision: number }) | null
+  >(null);
   const [activeView, setActiveViewUnsafe] = useState('Home');
   const [pendingView, setPendingView] = useState('');
   const editingPlayRef = useRef(false);
@@ -394,13 +399,15 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
   }, []);
   const setActiveView = useCallback((view: string) => {
     if (editingPlayRef.current) setPendingView(view);
-    else setActiveViewUnsafe(view);
+    else {
+      setSearchTarget(null);
+      setActiveViewUnsafe(view);
+    }
   }, []);
   const [isDark, setIsDark] = useState(true);
   const [userRole, setUserRole] = useState<'Coach' | 'Player'>('Coach');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
   const [assetRevision, setAssetRevision] = useState(0);
   const [settingsLoad, setSettingsLoad] = useState<
     'loading' | 'ready' | 'error'
@@ -573,43 +580,23 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
     setProfileMenuOpen(false);
   };
 
-  const openGlobalSearchResult = () => {
-    const query = searchQuery.trim().toLowerCase();
-    if (!query) return;
-    const destination =
-      query.includes('athlete') || query.includes('player')
-        ? 'Athletes'
-        : query.includes('film') ||
-            query.includes('clip') ||
-            query.includes('hamilton')
-          ? 'Film Room'
-          : query.includes('play') ||
-              query.includes('red 24') ||
-              query.includes('mesh')
-            ? 'Playbook'
-            : query.includes('message') || query.includes('coach')
-              ? 'Messages'
-              : query.includes('practice')
-                ? 'Practice Plans'
-                : query.includes('calendar') || query.includes('event')
-                  ? 'Calendar'
-                  : 'Home';
-    const permittedDestination =
-      userRole === 'Player' && !playerAllowedViews.has(destination)
-        ? 'Home'
-        : destination;
-    setActiveView(permittedDestination);
-    notify(
-      permittedDestination === 'Home'
-        ? `No available player result for “${searchQuery}”.`
-        : `Showing ${permittedDestination} results for “${searchQuery}”.`,
-      permittedDestination === 'Home' ? 'info' : 'success',
+  const openSearchRecord = (record: SearchResult) => {
+    if (editingPlayRef.current) {
+      notify(
+        'Save or cancel your current changes before opening a search result.',
+        'info',
+      );
+      return false;
+    }
+    setSearchTarget({ ...record, revision: Date.now() });
+    setActiveViewUnsafe(
+      record.kind === 'play'
+        ? 'Playbook'
+        : record.kind === 'athlete'
+          ? 'Athletes'
+          : 'Film Room',
     );
-  };
-
-  const runGlobalSearch = (event: SyntheticEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    openGlobalSearchResult();
+    return true;
   };
 
   const accountName =
@@ -912,28 +899,9 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
               chalk<span>talk</span>
             </strong>
           </div>
-          <form
-            className="search-wrap global-search"
-            onSubmit={runGlobalSearch}
-          >
-            <span className="search-symbol">
-              <Search size={18} />
-            </span>
-            <Input
-              aria-label="Search ChalkTalk"
-              className="border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
-              onChange={(event) => setSearchQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  openGlobalSearchResult();
-                }
-              }}
-              placeholder="Search ChalkTalk…"
-              value={searchQuery}
-            />
-            <span className="search-context">Film · Plays · People</span>
-          </form>
+          {userRole === 'Coach' && (
+            <WorkspaceSearch onOpenRecord={openSearchRecord} />
+          )}
           <div className="top-actions">
             <Button
               aria-label="Notifications"
@@ -1547,6 +1515,8 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
             )
           ) : (
             <ModuleView
+              key={searchTarget?.revision ?? 'workspace'}
+              searchTarget={searchTarget}
               onPlayEditingChange={onPlayEditingChange}
               assetRevision={assetRevision}
               focusMode={toolFocus && focusableTools.has(activeView)}
@@ -1648,6 +1618,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
               onClick={() => {
                 editingPlayRef.current = false;
                 setActiveViewUnsafe(pendingView);
+                setSearchTarget(null);
                 setPendingView('');
               }}
               variant="destructive"
@@ -1892,6 +1863,7 @@ function PlayerDashboard({
 }
 
 type ModuleProps = {
+  searchTarget: SearchResult | null;
   onPlayEditingChange: (editing: boolean) => void;
   view: string;
   userRole: 'Coach' | 'Player';
@@ -1906,6 +1878,7 @@ type ModuleProps = {
 };
 
 function ModuleView({
+  searchTarget,
   view,
   userRole,
   focusMode,
@@ -1925,6 +1898,7 @@ function ModuleView({
   if (view === 'Film Room')
     return (
       <FilmRoomView
+        initialAssetId={searchTarget?.kind === 'film' ? searchTarget.id : ''}
         assetRevision={assetRevision}
         focusMode={focusMode}
         onAssetsChanged={onAssetsChanged}
@@ -1941,6 +1915,7 @@ function ModuleView({
   )
     return (
       <PlaybookWorkspace
+        initialPlayId={searchTarget?.kind === 'play' ? searchTarget.id : ''}
         view={view}
         onEditingChange={onPlayEditingChange}
         onNavigate={onNavigate}
@@ -1960,6 +1935,9 @@ function ModuleView({
   if (view === 'Athletes')
     return (
       <AthletesView
+        initialAthleteId={
+          searchTarget?.kind === 'athlete' ? searchTarget.id : ''
+        }
         onEditingChange={onPlayEditingChange}
         assetRevision={assetRevision}
         onAssetsChanged={onAssetsChanged}
@@ -2104,6 +2082,7 @@ function clipLabel(clip: FilmClipRecord) {
 }
 
 function FilmRoomView({
+  initialAssetId = '',
   assetRevision,
   focusMode,
   onAssetsChanged,
@@ -2112,6 +2091,7 @@ function FilmRoomView({
   onToggleFocus,
   onEditingChange,
 }: {
+  initialAssetId?: string;
   assetRevision: number;
   focusMode: boolean;
   onAssetsChanged: () => void;
@@ -2164,7 +2144,10 @@ function FilmRoomView({
   const filmAvailable = Boolean(filmSource && readyFilmSource === filmSource);
 
   useEffect(() => {
-    fetch('/api/film', { cache: 'no-store' })
+    fetch(
+      `/api/film${initialAssetId ? `?assetId=${encodeURIComponent(initialAssetId)}` : ''}`,
+      { cache: 'no-store' },
+    )
       .then(async (response) => {
         const data = (await response.json()) as FilmPayload;
         if (!response.ok) throw new Error(data.error ?? 'Unable to load film.');
@@ -2182,7 +2165,7 @@ function FilmRoomView({
         setFilmLoadError('Saved film could not be loaded. Try again.'),
       )
       .finally(() => setFilmLoading(false));
-  }, [onNotify]);
+  }, [onNotify, initialAssetId]);
 
   const openFilm = async (assetId: string, discard = false) => {
     if (filmSaving) return;
@@ -3750,11 +3733,13 @@ function positionFamily(position: string, unit: string) {
 }
 
 function AthletesView({
+  initialAthleteId = '',
   onEditingChange,
   assetRevision,
   onAssetsChanged,
   onNotify,
 }: {
+  initialAthleteId?: string;
   onEditingChange: (editing: boolean) => void;
   assetRevision: number;
   onAssetsChanged: () => void;
@@ -3833,8 +3818,13 @@ function AthletesView({
         if (!active || !data.athletes || !data.metrics) return;
         setRoster(data.athletes);
         setMetrics(data.metrics);
-        setSelected(data.athletes[0] ?? null);
-        setNoteDraft(data.athletes[0]?.staffNote ?? '');
+        const requested = initialAthleteId
+          ? data.athletes.find((athlete) => athlete.id === initialAthleteId)
+          : data.athletes[0];
+        setSelected(requested ?? null);
+        setNoteDraft(requested?.staffNote ?? '');
+        if (initialAthleteId && !requested)
+          onNotify('That athlete is no longer available.', 'info');
         setDataMessage(
           data.athletes.length
             ? 'Saved roster'
@@ -3857,7 +3847,7 @@ function AthletesView({
     return () => {
       active = false;
     };
-  }, [rosterRetry]);
+  }, [rosterRetry, initialAthleteId, onNotify]);
 
   const createAthlete = async (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();

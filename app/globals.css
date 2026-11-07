@@ -155,6 +155,13 @@
 .workspace { grid-column: 2; min-width: 0; }
 .topbar { position: sticky; top: 0; z-index: 15; display: flex; height: 66px; align-items: center; justify-content: space-between; border-bottom: 1px solid #e6e1d7; background: rgba(250,249,246,.88); padding: 0 34px; backdrop-filter: blur(16px); }
 .mobile-brand { display: none; align-items: center; gap: 9px; }
+.workspace-search-trigger { max-width: min(410px, 42vw); justify-content: flex-start; color: var(--muted-foreground); }
+.workspace-search-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-search-results { list-style: none; margin: 0; padding: 0; max-height: 45dvh; overflow-y: auto; }
+.workspace-search-results button { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; min-height: 52px; padding: 12px; text-align: left; border-radius: 6px; }
+.workspace-search-results button:hover, .workspace-search-results button:focus-visible { background: var(--accent); outline: 2px solid var(--ring); outline-offset: -2px; }
+.workspace-search-results span { color: var(--muted-foreground); font-size: 13px; }
+@media (max-width: 600px) { .workspace-search-trigger span { display: none; } .workspace-search-trigger { min-width: 44px; min-height: 44px; } }
 .search-wrap { display: flex; width: min(410px, 42vw); align-items: center; gap: 9px; color: #8490a0; }
 .top-actions { display: flex; align-items: center; gap: 6px; }
 .profile-avatar { display: grid; height: 34px; width: 34px; place-items: center; border-radius: 50%; background: #dbe2e9; color: #20344f; font-size: 12px; font-weight: 750; }

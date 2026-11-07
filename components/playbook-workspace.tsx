@@ -32,10 +32,12 @@ type Review = { athleteId: string; name: string; acknowledged: boolean };
 type Pack = { id: string; name: string; publishedAt: string | null };
 export function PlaybookWorkspace({
   view = 'Playbook',
+  initialPlayId = '',
   onNavigate,
   onEditingChange,
 }: {
   view?: string;
+  initialPlayId?: string;
   onNavigate: (view: string) => void;
   onEditingChange: (editing: boolean) => void;
 }) {
@@ -58,7 +60,7 @@ export function PlaybookWorkspace({
     kind: 'play' | 'formation';
     id: string;
   } | null>(null);
-  const [viewerId, setViewerId] = useState('');
+  const [viewerId, setViewerId] = useState(initialPlayId);
   const [dialog, setDialog] = useState<
     | 'book'
     | 'play'
@@ -111,7 +113,11 @@ export function PlaybookWorkspace({
       if (!response.ok)
         throw new Error(next.error || 'Unable to load playbooks.');
       setData(next);
-      setError('');
+      setError(
+        initialPlayId && !next.plays.some((play) => play.id === initialPlayId)
+          ? 'That play is no longer available.'
+          : '',
+      );
     } catch (failure) {
       setError(
         failure instanceof Error
@@ -121,7 +127,7 @@ export function PlaybookWorkspace({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [initialPlayId]);
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(''), 3500);
