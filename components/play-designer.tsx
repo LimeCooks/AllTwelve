@@ -12,6 +12,9 @@ import {
   Copy,
   GripHorizontal,
   Info,
+  Hand,
+  ZoomIn,
+  ZoomOut,
   MousePointer2,
   Pencil,
   Plus,
@@ -38,6 +41,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { PlayField } from '@/components/play-field';
+import { fieldViewport } from '@/lib/field-camera';
 import {
   formationPlayers,
   normalizeDrawing,
@@ -45,6 +49,7 @@ import {
   snapX,
   snapY,
   spotLabel,
+  yardY,
   startingPlayers,
   type DesignerPlay,
   type Formation,
@@ -56,6 +61,7 @@ import {
 } from '@/lib/play-designer';
 
 type Tool =
+  | 'Pan'
   | 'Select'
   | 'Route'
   | 'Player'
@@ -76,6 +82,7 @@ type Draft = {
   packageName: string;
 };
 type Drag = {
+  pointerId: number;
   type: string;
   id: string;
   index?: number;
@@ -141,6 +148,14 @@ export function PlayDesigner({
     [toolsOpen, setToolsOpen] = useState(false),
     [paletteOpen, setPaletteOpen] = useState(false);
   const [heightYards, setHeightYards] = useState(60);
+  const [zoom, setZoom] = useState(1);
+  const [cameraPan, setCameraPan] = useState({ x: 0, y: 0 });
+  const cameraDrag = useRef<{
+    pointerId: number;
+    start: Point;
+    pan: Point;
+    scale: number;
+  } | null>(null);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [leaveOpen, setLeaveOpen] = useState(false),
@@ -148,7 +163,11 @@ export function PlayDesigner({
   const [paletteOffset, setPaletteOffset] = useState({ x: 0, y: 0 });
   const [pendingFormation, setPendingFormation] = useState('');
   const drag = useRef<Drag | null>(null);
-  const paletteDrag = useRef<{ start: Point; offset: Point } | null>(null);
+  const paletteDrag = useRef<{
+    pointerId: number;
+    start: Point;
+    offset: Point;
+  } | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const svg = useRef<SVGSVGElement | null>(null);
   const [kind, id] = selected.split(':');
@@ -331,7 +350,26 @@ export function PlayDesigner({
     };
   };
   const pointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (busy || event.button !== 0) return;
+    if (busy || event.button !== 0 || !event.isPrimary) return;
+    if (tool === 'Pan') {
+      const matrix = event.currentTarget.getScreenCTM();
+      if (!matrix) return;
+      const viewport = fieldViewport(
+        yardY(draft.scene.fieldPosition),
+        heightYards,
+        zoom,
+        cameraPan,
+      );
+      cameraDrag.current = {
+        pointerId: event.pointerId,
+        start: { x: event.clientX, y: event.clientY },
+        pan: viewport.pan,
+        scale: matrix.a,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return;
+    }
     const p = pointAt(event);
     if (!p) return;
     svg.current = event.currentTarget;
@@ -360,6 +398,7 @@ export function PlayDesigner({
       ].find((item) => item.id === hitId);
       if (chosen?.colour) setColour(chosen.colour);
       drag.current = {
+        pointerId: event.pointerId,
         type: hitKind,
         id: hitId,
         index: Number(hit?.getAttribute('data-index')),
@@ -450,8 +489,18 @@ export function PlayDesigner({
     setTool('Select');
   };
   const pointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const camera = cameraDrag.current;
+    if (camera?.pointerId === event.pointerId) {
+      setCameraPan(
+        fieldViewport(yardY(draft.scene.fieldPosition), heightYards, zoom, {
+          x: camera.pan.x - (event.clientX - camera.start.x) / camera.scale,
+          y: camera.pan.y - (event.clientY - camera.start.y) / camera.scale,
+        }).pan,
+      );
+      return;
+    }
     const action = drag.current;
-    if (!action) return;
+    if (!action || action.pointerId !== event.pointerId) return;
     const p = pointAt(event);
     if (!p) return;
     const dx = p.x - action.point.x,
@@ -533,9 +582,23 @@ export function PlayDesigner({
     setDraft((value) => ({ ...value, scene: next }));
   };
   const pointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (cameraDrag.current?.pointerId === event.pointerId)
+      cameraDrag.current = null;
+    if (drag.current?.pointerId === event.pointerId) drag.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId);
-    drag.current = null;
+  };
+  const changeZoom = (value: number) => {
+    const next = Math.max(1, Math.min(6, value));
+    setZoom(next);
+    setCameraPan(
+      fieldViewport(
+        yardY(draft.scene.fieldPosition),
+        heightYards,
+        next,
+        cameraPan,
+      ).pan,
+    );
   };
   const save = async () => {
     if (busy) return;
@@ -691,12 +754,14 @@ export function PlayDesigner({
         </div>
       ) : null}
       <div className="pd-workarea" inert={busy}>
-        <div className="pd-canvas">
+        <div className={`pd-canvas${tool === 'Pan' ? ' is-panning' : ''}`}>
           <PlayField
             drawing={draft.scene}
             name={draft.name}
             selected={selected}
             heightYards={heightYards}
+            zoom={zoom}
+            pan={cameraPan}
             onPointerDown={pointerDown}
             onPointerMove={pointerMove}
             onPointerUp={pointerUp}
@@ -791,34 +856,87 @@ export function PlayDesigner({
               </Button>
             ) : null}
           </div>
-          <div className="pd-field-controls">
-            <label htmlFor="pd-ball">
-              Ball
-              <Input
-                aria-label="Ball position in yards from own goal"
-                id="pd-ball"
-                type="number"
-                min="1"
-                max="109"
-                value={draft.scene.fieldPosition}
-                onChange={(event) => {
-                  const spot = Number(event.target.value);
-                  if (Number.isInteger(spot) && spot >= 1 && spot <= 109)
-                    sceneEdit(shiftScene(draft.scene, spot));
-                }}
-              />
-            </label>
-            <span>{spotLabel(draft.scene.fieldPosition)}</span>
-            <NativeSelect
-              aria-label="Field zoom"
-              onChange={(event) => setHeightYards(Number(event.target.value))}
-              value={String(heightYards)}
+          <div className="pd-camera-controls" aria-label="Field camera">
+            <Button
+              aria-label="Zoom out"
+              disabled={zoom <= 1}
+              onClick={() => changeZoom(zoom / 1.5)}
+              size="icon"
+              variant="ghost"
             >
-              <NativeSelectOption value="30">30 yards</NativeSelectOption>
-              <NativeSelectOption value="60">60 yards</NativeSelectOption>
-              <NativeSelectOption value="140">Full field</NativeSelectOption>
-            </NativeSelect>
+              <ZoomOut />
+            </Button>
+            <output aria-label="Field magnification">
+              {Math.round(zoom * 100)}%
+            </output>
+            <Button
+              aria-label="Zoom in"
+              disabled={zoom >= 6}
+              onClick={() => changeZoom(zoom * 1.5)}
+              size="icon"
+              variant="ghost"
+            >
+              <ZoomIn />
+            </Button>
+            <Button
+              aria-label="Pan field"
+              aria-pressed={tool === 'Pan'}
+              onClick={() => {
+                finish();
+                setTool(tool === 'Pan' ? 'Select' : 'Pan');
+              }}
+              size="icon"
+              variant="ghost"
+            >
+              <Hand />
+            </Button>
+            <Button
+              aria-label="Fit field"
+              onClick={() => {
+                setZoom(1);
+                setCameraPan({ x: 0, y: 0 });
+              }}
+              size="sm"
+              variant="ghost"
+            >
+              Fit
+            </Button>
           </div>
+          <details className="pd-field-controls">
+            <summary>Field settings</summary>
+            <div className="pd-field-settings-body">
+              <label htmlFor="pd-ball">
+                Ball
+                <Input
+                  aria-label="Ball position in yards from own goal"
+                  id="pd-ball"
+                  type="number"
+                  min="1"
+                  max="109"
+                  value={draft.scene.fieldPosition}
+                  onChange={(event) => {
+                    const spot = Number(event.target.value);
+                    if (Number.isInteger(spot) && spot >= 1 && spot <= 109)
+                      sceneEdit(shiftScene(draft.scene, spot));
+                  }}
+                />
+              </label>
+              <span>{spotLabel(draft.scene.fieldPosition)}</span>
+              <NativeSelect
+                aria-label="Field depth shown"
+                onChange={(event) => {
+                  setHeightYards(Number(event.target.value));
+                  setZoom(1);
+                  setCameraPan({ x: 0, y: 0 });
+                }}
+                value={String(heightYards)}
+              >
+                <NativeSelectOption value="30">30 yards</NativeSelectOption>
+                <NativeSelectOption value="60">60 yards</NativeSelectOption>
+                <NativeSelectOption value="140">Full field</NativeSelectOption>
+              </NativeSelect>
+            </div>
+          </details>
           {selected ? (
             <section
               className={`pd-properties${paletteOpen ? ' open' : ''}`}
@@ -832,7 +950,9 @@ export function PlayDesigner({
                   aria-label="Drag editing controls"
                   type="button"
                   onPointerDown={(event) => {
+                    if (!event.isPrimary || event.button !== 0) return;
                     paletteDrag.current = {
+                      pointerId: event.pointerId,
                       start: { x: event.clientX, y: event.clientY },
                       offset: paletteOffset,
                     };
@@ -840,7 +960,7 @@ export function PlayDesigner({
                   }}
                   onPointerMove={(event) => {
                     const action = paletteDrag.current;
-                    if (!action) return;
+                    if (!action || action.pointerId !== event.pointerId) return;
                     const bounds = root.current?.getBoundingClientRect();
                     const paletteBounds = event.currentTarget
                       .closest('section')
@@ -874,8 +994,21 @@ export function PlayDesigner({
                       ),
                     });
                   }}
-                  onPointerUp={() => {
-                    paletteDrag.current = null;
+                  onPointerUp={(event) => {
+                    if (paletteDrag.current?.pointerId === event.pointerId)
+                      paletteDrag.current = null;
+                    if (event.currentTarget.hasPointerCapture(event.pointerId))
+                      event.currentTarget.releasePointerCapture(
+                        event.pointerId,
+                      );
+                  }}
+                  onPointerCancel={(event) => {
+                    if (paletteDrag.current?.pointerId === event.pointerId)
+                      paletteDrag.current = null;
+                  }}
+                  onLostPointerCapture={(event) => {
+                    if (paletteDrag.current?.pointerId === event.pointerId)
+                      paletteDrag.current = null;
                   }}
                 >
                   <GripHorizontal />

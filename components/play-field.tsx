@@ -1,5 +1,6 @@
 'use client';
 import { useId, type PointerEvent as ReactPointerEvent } from 'react';
+import { fieldViewport } from '@/lib/field-camera';
 import {
   normalizeDrawing,
   routePath,
@@ -14,6 +15,8 @@ export function PlayField({
   name,
   selected = '',
   heightYards = 60,
+  zoom = 1,
+  pan = { x: 0, y: 0 },
   onPointerDown,
   onPointerMove,
   onPointerUp,
@@ -22,16 +25,19 @@ export function PlayField({
   name: string;
   selected?: string;
   heightYards?: number;
+  zoom?: number;
+  pan?: { x: number; y: number };
   onPointerDown?: (event: ReactPointerEvent<SVGSVGElement>) => void;
   onPointerMove?: (event: ReactPointerEvent<SVGSVGElement>) => void;
   onPointerUp?: (event: ReactPointerEvent<SVGSVGElement>) => void;
 }) {
   const scene: Scene = normalizeDrawing(drawing);
   const uid = useId().replaceAll(':', '');
-  const height = heightYards * 10;
-  const top = Math.max(
-    -100,
-    Math.min(1300 - height, yardY(scene.fieldPosition) - height / 2),
+  const viewport = fieldViewport(
+    yardY(scene.fieldPosition),
+    heightYards,
+    zoom,
+    pan,
   );
   const marker = (id: string) => `${uid}-${id}`;
   const player = (p: Player, opponent = false) => {
@@ -84,12 +90,13 @@ export function PlayField({
     <svg
       className="pd-field"
       aria-label={`${name} football diagram`}
-      viewBox={`0 ${top} 720 ${height}`}
+      viewBox={`${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}`}
       preserveAspectRatio="xMidYMid meet"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onLostPointerCapture={onPointerUp}
     >
       <title>{name}</title>
       <defs>
