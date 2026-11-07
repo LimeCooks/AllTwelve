@@ -45,6 +45,8 @@ import { fieldViewport } from '@/lib/field-camera';
 import {
   formationPlayers,
   normalizeDrawing,
+  removeSceneItem,
+  replaceScenePlayers,
   shiftScene,
   snapX,
   snapY,
@@ -242,17 +244,7 @@ export function PlayDesigner({
   };
   const deleteSelected = () => {
     if (!selected) return;
-    const next = structuredClone(draft.scene);
-    if (kind === 'player') {
-      next.players = next.players.filter((p) => p.id !== id);
-      next.routes = next.routes.filter((r) => r.playerId !== id);
-    }
-    if (kind === 'opponent')
-      next.opponentPlayers = next.opponentPlayers.filter((p) => p.id !== id);
-    if (kind === 'route') next.routes = next.routes.filter((r) => r.id !== id);
-    if (kind === 'zone') next.zones = next.zones.filter((z) => z.id !== id);
-    if (kind === 'label') next.labels = next.labels.filter((l) => l.id !== id);
-    sceneEdit(next);
+    sceneEdit(removeSceneItem(draft.scene, kind, id));
     setSelected('');
     finish();
   };
@@ -641,9 +633,11 @@ export function PlayDesigner({
     }
   };
   const toggleOpponent = () => {
-    if (draft.scene.showOpponent)
+    if (draft.scene.showOpponent) {
       sceneEdit({ ...draft.scene, showOpponent: false });
-    else {
+      setSelected('');
+      finish();
+    } else {
       setDetailsOpen(true);
       setError('Choose a saved opponent alignment in Looks.');
     }
@@ -933,7 +927,7 @@ export function PlayDesigner({
               >
                 <NativeSelectOption value="30">30 yards</NativeSelectOption>
                 <NativeSelectOption value="60">60 yards</NativeSelectOption>
-                <NativeSelectOption value="140">Full field</NativeSelectOption>
+                <NativeSelectOption value="150">Full field</NativeSelectOption>
               </NativeSelect>
             </div>
           </details>
@@ -1500,14 +1494,17 @@ export function PlayDesigner({
                       );
                       if (!look) return;
                       sceneEdit({
-                        ...draft.scene,
+                        ...replaceScenePlayers(
+                          draft.scene,
+                          formationPlayers(
+                            look,
+                            draft.scene.fieldPosition,
+                            true,
+                          ).map((p) => ({ ...p, colour: '#9aa5b1' })),
+                          true,
+                        ),
                         showOpponent: true,
                         opponentFormationId: look.id,
-                        opponentPlayers: formationPlayers(
-                          look,
-                          draft.scene.fieldPosition,
-                          true,
-                        ).map((p) => ({ ...p, colour: '#9aa5b1' })),
                       });
                     }}
                   >
@@ -1672,11 +1669,10 @@ export function PlayDesigner({
                 if (!f) return;
                 edit({
                   formationId: f.id,
-                  scene: {
-                    ...draft.scene,
-                    players: formationPlayers(f, draft.scene.fieldPosition),
-                    routes: [],
-                  },
+                  scene: replaceScenePlayers(
+                    draft.scene,
+                    formationPlayers(f, draft.scene.fieldPosition),
+                  ),
                 });
                 setPendingFormation('');
                 setSelected('');

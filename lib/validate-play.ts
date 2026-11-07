@@ -140,4 +140,36 @@ export function validatePlayDiagram(body: RecordValue) {
       body.fieldPosition > 110)
   )
     throw new Error('Ball position must be between 0 and 110 yards.');
+  if (body.diagramVersion === 2) {
+    const players = [
+      ...((body.players ?? []) as RecordValue[]),
+      ...((body.opponentPlayers ?? []) as RecordValue[]),
+    ];
+    const playerIds = new Set(players.map((player) => player.id));
+    if (playerIds.size !== players.length)
+      throw new Error('Our players and opponents need distinct IDs.');
+    const routes = (body.routes ?? []) as RecordValue[];
+    const routeIds = new Set(routes.map((route) => route.id));
+    if (
+      routes.some(
+        (route) =>
+          route.playerId !== undefined &&
+          (typeof route.playerId !== 'string' ||
+            !playerIds.has(route.playerId)),
+      )
+    )
+      throw new Error(
+        'A route refers to a player that is not in this drawing.',
+      );
+    if (
+      ((body.zones ?? []) as RecordValue[]).some(
+        (zone) =>
+          zone.routeId !== undefined &&
+          (typeof zone.routeId !== 'string' || !routeIds.has(zone.routeId)),
+      )
+    )
+      throw new Error(
+        'A coverage shape refers to a route that is not in this drawing.',
+      );
+  }
 }

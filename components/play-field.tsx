@@ -32,6 +32,14 @@ export function PlayField({
   onPointerUp?: (event: ReactPointerEvent<SVGSVGElement>) => void;
 }) {
   const scene: Scene = normalizeDrawing(drawing);
+  const opponentIds = new Set(scene.opponentPlayers.map((player) => player.id));
+  const hiddenRoutes = new Set(
+    scene.showOpponent
+      ? []
+      : scene.routes
+          .filter((route) => route.playerId && opponentIds.has(route.playerId))
+          .map((route) => route.id),
+  );
   const uid = useId().replaceAll(':', '');
   const viewport = fieldViewport(
     yardY(scene.fieldPosition),
@@ -100,41 +108,53 @@ export function PlayField({
     >
       <title>{name}</title>
       <defs>
-        {scene.routes.map((r) => (
-          <marker
-            key={r.id}
-            id={marker(r.id)}
-            viewBox="0 0 8 8"
-            markerWidth="7"
-            markerHeight="7"
-            refX="6"
-            refY="4"
-            orient="auto"
-            markerUnits="userSpaceOnUse"
-          >
-            {r.ending === 'bar' ? (
-              <path d="M6 0 L6 8" stroke={r.colour} strokeWidth="2" />
-            ) : (
-              <path
-                d="M0 0 L6 4 L0 8"
-                stroke={r.colour}
-                strokeWidth="1.6"
-                fill="none"
-              />
-            )}
-          </marker>
-        ))}
+        {scene.routes
+          .filter((route) => !hiddenRoutes.has(route.id))
+          .map((r) => (
+            <marker
+              key={r.id}
+              id={marker(r.id)}
+              viewBox="0 0 8 8"
+              markerWidth="7"
+              markerHeight="7"
+              refX="6"
+              refY="4"
+              orient="auto"
+              markerUnits="userSpaceOnUse"
+            >
+              {r.ending === 'bar' ? (
+                <path d="M6 0 L6 8" stroke={r.colour} strokeWidth="2" />
+              ) : (
+                <path
+                  d="M0 0 L6 4 L0 8"
+                  stroke={r.colour}
+                  strokeWidth="1.6"
+                  fill="none"
+                />
+              )}
+            </marker>
+          ))}
       </defs>
       <rect x="0" y="-1500" width="720" height="4500" fill="#202b34" />
-      <rect x="35" y="-50" width="650" height="150" fill="#283540" />
-      <rect x="35" y="1200" width="650" height="150" fill="#283540" />
+      <rect x="35" y="-100" width="650" height="200" fill="#283540" />
+      <rect x="35" y="1200" width="650" height="200" fill="#283540" />
+      {[-100, 1400].map((y) => (
+        <line
+          key={y}
+          x1="35"
+          x2="685"
+          y1={y}
+          y2={y}
+          className="pd-yard major"
+        />
+      ))}
       {[35, 685].map((x) => (
         <line
           key={x}
           x1={x}
           x2={x}
-          y1="-50"
-          y2="1350"
+          y1="-100"
+          y2="1400"
           className="pd-sideline"
         />
       ))}
@@ -203,133 +223,142 @@ export function PlayField({
         y2={yardY(scene.fieldPosition)}
         className="pd-los"
       />
-      {scene.zones.map((z) => (
-        <g
-          key={z.id}
-          data-kind="zone"
-          data-id={z.id}
-          className={
-            selected === `zone:${z.id}` ? 'pd-zone selected' : 'pd-zone'
-          }
-          transform={`rotate(${z.rotation ?? 0} ${z.x + z.width / 2} ${z.y + z.height / 2})`}
-        >
-          {z.shape === 'rectangle' ? (
-            <rect
-              x={z.x}
-              y={z.y}
-              width={z.width}
-              height={z.height}
-              fill={z.colour}
-              fillOpacity={z.opacity ?? 0.25}
-              stroke={z.colour}
-              strokeWidth="1"
-            />
-          ) : z.shape === 'triangle' ? (
-            <path
-              d={`M${z.x + z.width / 2} ${z.y} L${z.x + z.width} ${z.y + z.height} L${z.x} ${z.y + z.height} Z`}
-              fill={z.colour}
-              fillOpacity={z.opacity ?? 0.25}
-              stroke={z.colour}
-              strokeWidth="1"
-            />
-          ) : (
-            <ellipse
-              cx={z.x + z.width / 2}
-              cy={z.y + z.height / 2}
-              rx={z.width / 2}
-              ry={z.height / 2}
-              fill={z.colour}
-              fillOpacity={z.opacity ?? 0.25}
-              stroke={z.colour}
-              strokeWidth="1"
-            />
-          )}
-          {selected === `zone:${z.id}` ? (
-            <g>
+      {scene.zones
+        .filter((zone) => !zone.routeId || !hiddenRoutes.has(zone.routeId))
+        .map((z) => (
+          <g
+            key={z.id}
+            data-kind="zone"
+            data-id={z.id}
+            className={
+              selected === `zone:${z.id}` ? 'pd-zone selected' : 'pd-zone'
+            }
+            transform={`rotate(${z.rotation ?? 0} ${z.x + z.width / 2} ${z.y + z.height / 2})`}
+          >
+            {z.shape === 'rectangle' ? (
               <rect
-                x={z.x - 3}
-                y={z.y - 3}
-                width={z.width + 6}
-                height={z.height + 6}
-                fill="none"
-                stroke="#f4f7fa"
-                strokeDasharray="3 3"
+                x={z.x}
+                y={z.y}
+                width={z.width}
+                height={z.height}
+                fill={z.colour}
+                fillOpacity={z.opacity ?? 0.25}
+                stroke={z.colour}
                 strokeWidth="1"
               />
-              {[
-                { x: z.x + z.width, y: z.y + z.height / 2 },
-                { x: z.x + z.width / 2, y: z.y + z.height },
-              ].map((p, index) => (
+            ) : z.shape === 'triangle' ? (
+              <path
+                d={`M${z.x + z.width / 2} ${z.y} L${z.x + z.width} ${z.y + z.height} L${z.x} ${z.y + z.height} Z`}
+                fill={z.colour}
+                fillOpacity={z.opacity ?? 0.25}
+                stroke={z.colour}
+                strokeWidth="1"
+              />
+            ) : (
+              <ellipse
+                cx={z.x + z.width / 2}
+                cy={z.y + z.height / 2}
+                rx={z.width / 2}
+                ry={z.height / 2}
+                fill={z.colour}
+                fillOpacity={z.opacity ?? 0.25}
+                stroke={z.colour}
+                strokeWidth="1"
+              />
+            )}
+            {selected === `zone:${z.id}` ? (
+              <g>
                 <rect
-                  key={index}
-                  data-kind="resize"
-                  data-id={z.id}
-                  data-index={index}
-                  x={p.x - (index === 0 ? 3 : 9)}
-                  y={p.y - (index === 0 ? 9 : 3)}
-                  width={index === 0 ? 6 : 18}
-                  height={index === 0 ? 18 : 6}
-                  rx="2"
-                  fill="#f4f7fa"
-                  stroke={z.colour}
+                  x={z.x - 3}
+                  y={z.y - 3}
+                  width={z.width + 6}
+                  height={z.height + 6}
+                  fill="none"
+                  stroke="#f4f7fa"
+                  strokeDasharray="3 3"
                   strokeWidth="1"
-                  style={{ cursor: index === 0 ? 'ew-resize' : 'ns-resize' }}
                 />
-              ))}
-            </g>
-          ) : null}
-        </g>
-      ))}
-      {scene.routes.map((r) => {
-        const points = r.points?.length
-          ? r.points
-          : [
-              { x: r.startX, y: r.startY },
-              { x: r.endX, y: r.endY },
-            ];
-        const path = routePath(r);
-        return (
-          <g key={r.id} data-kind="route" data-id={r.id}>
-            <path d={path} fill="none" stroke="transparent" strokeWidth="12" />
-            <path
-              d={path}
-              fill="none"
-              stroke={r.colour}
-              strokeWidth={selected === `route:${r.id}` ? 2.3 : 1.7}
-              strokeDasharray={
-                r.lineStyle === 'dashed'
-                  ? '6 4'
-                  : r.lineStyle === 'dotted'
-                    ? '1 4'
-                    : undefined
-              }
-              strokeLinecap="round"
-              strokeLinejoin={r.lineStyle === 'curve' ? 'round' : 'miter'}
-              markerEnd={
-                r.ending === 'none' ? undefined : `url(#${marker(r.id)})`
-              }
-            />
-            {selected === `route:${r.id}`
-              ? points
-                  .slice(1)
-                  .map((p, i) => (
-                    <circle
-                      key={i}
-                      data-kind="vertex"
-                      data-id={r.id}
-                      data-index={i + 1}
-                      cx={p.x}
-                      cy={p.y}
-                      r="4"
-                      fill="#f3f7fb"
-                      stroke={r.colour}
-                      strokeWidth="1.5"
-                    />
-                  ))
-              : null}
+                {[
+                  { x: z.x + z.width, y: z.y + z.height / 2 },
+                  { x: z.x + z.width / 2, y: z.y + z.height },
+                ].map((p, index) => (
+                  <rect
+                    key={index}
+                    data-kind="resize"
+                    data-id={z.id}
+                    data-index={index}
+                    x={p.x - (index === 0 ? 3 : 9)}
+                    y={p.y - (index === 0 ? 9 : 3)}
+                    width={index === 0 ? 6 : 18}
+                    height={index === 0 ? 18 : 6}
+                    rx="2"
+                    fill="#f4f7fa"
+                    stroke={z.colour}
+                    strokeWidth="1"
+                    style={{ cursor: index === 0 ? 'ew-resize' : 'ns-resize' }}
+                  />
+                ))}
+              </g>
+            ) : null}
           </g>
-        );
-      })}
+        ))}
+      {scene.routes
+        .filter((route) => !hiddenRoutes.has(route.id))
+        .map((r) => {
+          const points = r.points?.length
+            ? r.points
+            : [
+                { x: r.startX, y: r.startY },
+                { x: r.endX, y: r.endY },
+              ];
+          const path = routePath(r);
+          return (
+            <g key={r.id} data-kind="route" data-id={r.id}>
+              <path
+                d={path}
+                fill="none"
+                stroke="transparent"
+                strokeWidth="12"
+              />
+              <path
+                d={path}
+                fill="none"
+                stroke={r.colour}
+                strokeWidth={selected === `route:${r.id}` ? 2.3 : 1.7}
+                strokeDasharray={
+                  r.lineStyle === 'dashed'
+                    ? '6 4'
+                    : r.lineStyle === 'dotted'
+                      ? '1 4'
+                      : undefined
+                }
+                strokeLinecap="round"
+                strokeLinejoin={r.lineStyle === 'curve' ? 'round' : 'miter'}
+                markerEnd={
+                  r.ending === 'none' ? undefined : `url(#${marker(r.id)})`
+                }
+              />
+              {selected === `route:${r.id}`
+                ? points
+                    .slice(1)
+                    .map((p, i) => (
+                      <circle
+                        key={i}
+                        data-kind="vertex"
+                        data-id={r.id}
+                        data-index={i + 1}
+                        cx={p.x}
+                        cy={p.y}
+                        r="4"
+                        fill="#f3f7fb"
+                        stroke={r.colour}
+                        strokeWidth="1.5"
+                      />
+                    ))
+                : null}
+            </g>
+          );
+        })}
       {scene.showOpponent
         ? scene.opponentPlayers.map((p) => player(p, true))
         : null}

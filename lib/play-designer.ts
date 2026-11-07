@@ -192,7 +192,7 @@ export function normalizeDrawing(drawing: Drawing): Scene {
   const y = (value: number) =>
     modern ? value : 100 + ((value - 45) / (510 / 110)) * YARD;
   const point = (p: Point) => ({ x: p.x, y: y(p.y) });
-  return {
+  return repairSceneLinks({
     diagramVersion: 2,
     fieldPosition: drawing.fieldPosition ?? 55,
     players: (drawing.players ?? []).map((p) => ({ ...p, ...point(p) })),
@@ -234,7 +234,7 @@ export function normalizeDrawing(drawing: Drawing): Scene {
       ...point(p),
       opponent: true,
     })),
-  };
+  });
 }
 
 export function shiftScene(scene: Scene, spot: number): Scene {
@@ -287,4 +287,99 @@ export function routePath(route: Route): string {
   }
   const end = points.at(-1)!;
   return `${result} T${end.x} ${end.y}`;
+}
+/** Keep saved geometry coherent while retaining standalone coverage annotations. */
+export function repairSceneLinks(scene: Scene): Scene {
+  const players = new Map(
+    [...scene.players, ...scene.opponentPlayers].map((player) => [
+      player.id,
+      player,
+    ]),
+  );
+  const routes = scene.routes.map((route) => {
+    const { playerId, ...rest } = route;
+    const points = (
+      route.points?.length
+        ? route.points
+        : [
+            { x: route.startX, y: route.startY },
+            { x: route.endX, y: route.endY },
+          ]
+    ).map((point) => ({ ...point }));
+    const anchor = playerId ? players.get(playerId) : undefined;
+    if (anchor) points[0] = { x: anchor.x, y: anchor.y };
+    return {
+      ...rest,
+      ...(anchor ? { playerId } : {}),
+      points,
+      startX: points[0].x,
+      startY: points[0].y,
+      endX: points.at(-1)!.x,
+      endY: points.at(-1)!.y,
+    };
+  });
+  const byId = new Map(routes.map((route) => [route.id, route]));
+  return {
+    ...scene,
+    routes,
+    zones: scene.zones.map((zone) => {
+      const { routeId, ...rest } = zone;
+      const route = routeId ? byId.get(routeId) : undefined;
+      return route
+        ? {
+            ...rest,
+            routeId,
+            x: route.endX - zone.width / 2,
+            y: route.endY - zone.height / 2,
+          }
+        : rest;
+    }),
+  };
+}
+
+export function removeSceneItem(scene: Scene, kind: string, id: string): Scene {
+  const removedPlayer = kind === 'player' || kind === 'opponent';
+  return repairSceneLinks({
+    ...scene,
+    players:
+      kind === 'player'
+        ? scene.players.filter((player) => player.id !== id)
+        : scene.players,
+    opponentPlayers:
+      kind === 'opponent'
+        ? scene.opponentPlayers.filter((player) => player.id !== id)
+        : scene.opponentPlayers,
+    routes: scene.routes.filter(
+      (route) =>
+        !(kind === 'route' && route.id === id) &&
+        !(removedPlayer && route.playerId === id),
+    ),
+    zones:
+      kind === 'zone'
+        ? scene.zones.filter((zone) => zone.id !== id)
+        : scene.zones,
+    labels:
+      kind === 'label'
+        ? scene.labels.filter((label) => label.id !== id)
+        : scene.labels,
+  });
+}
+
+export function replaceScenePlayers(
+  scene: Scene,
+  players: Player[],
+  opponent = false,
+): Scene {
+  const replaced = new Set(
+    (opponent ? scene.opponentPlayers : scene.players).map(
+      (player) => player.id,
+    ),
+  );
+  return repairSceneLinks({
+    ...scene,
+    ...(opponent ? { opponentPlayers: players } : { players }),
+    routes: scene.routes.filter(
+      (route) => !route.playerId || !replaced.has(route.playerId),
+    ),
+  });
 }

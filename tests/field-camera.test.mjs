@@ -38,7 +38,7 @@ test('zoom enlarges field coordinates without changing their yard scale and fit 
 
 test('camera stays within the field at goal lines, full field, maximum zoom and extreme pans', () => {
   for (const spot of [1, 55, 109])
-    for (const depth of [30, 60, 140])
+    for (const depth of [30, 60, 140, 150])
       for (const zoom of [0, 1, 2, 6, 100])
         for (const delta of [-10000, 0, 10000]) {
           const view = fieldViewport(100 + spot * 10, depth, zoom, {
@@ -47,11 +47,20 @@ test('camera stays within the field at goal lines, full field, maximum zoom and 
           });
           assert.ok(view.width > 0 && view.height > 0);
           assert.ok(view.x >= 0 && view.x + view.width <= 720 + 1e-8);
-          assert.ok(view.y >= -100 && view.y + view.height <= 1300 + 1e-8);
+          assert.ok(view.y >= -100 && view.y + view.height <= 1400 + 1e-8);
           assert.deepEqual(
             fieldViewport(100 + spot * 10, depth, zoom, view.pan),
             view,
             'bounded pan must not accumulate hidden offsets',
           );
         }
+});
+test('full Canadian amateur field includes both twenty-yard end zones', () => {
+  assert.deepEqual(fieldViewport(650, 150), {
+    x: 0,
+    y: -100,
+    width: 720,
+    height: 1500,
+    pan: { x: 0, y: 0 },
+  });
 });

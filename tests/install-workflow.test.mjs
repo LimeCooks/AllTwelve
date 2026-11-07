@@ -54,7 +54,10 @@ const moduleUrl = async (path, replacements = []) => {
 };
 const identityUrl = await moduleUrl('../lib/workspace-identity.ts');
 const dbUrl = await moduleUrl('../db/client.ts', [
-  ["import { isPrototype, requestIdentity } from '@/lib/request-identity';", "const isPrototype = () => true; const requestIdentity = async () => ({id: 'local-test'});"],
+  [
+    "import { isPrototype, requestIdentity } from '@/lib/request-identity';",
+    "const isPrototype = () => true; const requestIdentity = async () => ({id: 'local-test'});",
+  ],
   ["'@/lib/workspace-identity'", JSON.stringify(identityUrl)],
   [
     "import { env } from 'cloudflare:workers';",
@@ -410,7 +413,10 @@ test('defensive/scout formations, custom packages, opponent snapshots and modern
     400,
   );
   const scene = designer.normalizeDrawing(play);
-  assert.equal(new Set(designer.startingPlayers('Defence').map((p) => p.colour)).size, 3);
+  assert.equal(
+    new Set(designer.startingPlayers('Defence').map((p) => p.colour)).size,
+    3,
+  );
   const p = scene.players.find((item) => item.label === 'S');
   p.colour = '#ef665c';
   scene.routes = [
@@ -466,11 +472,23 @@ test('defensive/scout formations, custom packages, opponent snapshots and modern
     true,
   );
   const shifted = designer.shiftScene(scene, 75);
-  const attached = designer.normalizeDrawing({ ...scene, zones: [{ ...scene.zones[0], routeId: scene.routes[0].id }] });
-  assert.equal(attached.zones[0].x + attached.zones[0].width / 2, scene.routes[0].endX);
-  assert.equal(attached.zones[0].y + attached.zones[0].height / 2, scene.routes[0].endY);
+  const attached = designer.normalizeDrawing({
+    ...scene,
+    zones: [{ ...scene.zones[0], routeId: scene.routes[0].id }],
+  });
+  assert.equal(
+    attached.zones[0].x + attached.zones[0].width / 2,
+    scene.routes[0].endX,
+  );
+  assert.equal(
+    attached.zones[0].y + attached.zones[0].height / 2,
+    scene.routes[0].endY,
+  );
   const extended = structuredClone(attached);
-  extended.routes[0].points.push({ x: scene.routes[0].endX + 20, y: scene.routes[0].endY - 30 });
+  extended.routes[0].points.push({
+    x: scene.routes[0].endX + 20,
+    y: scene.routes[0].endY - 30,
+  });
   const extendedDrawing = designer.normalizeDrawing(extended);
   assert.equal(extendedDrawing.zones[0].x, attached.zones[0].x + 20);
   assert.equal(extendedDrawing.zones[0].y, attached.zones[0].y - 30);
@@ -524,5 +542,79 @@ test('defensive/scout formations, custom packages, opponent snapshots and modern
       ok(await call(playbooks, 'GET')).plays.find((p) => p.id === play.id),
     ),
     before,
+  );
+});
+test('deleting an opponent persists coherent routes and detached coverage, while invalid links preserve the saved play', async () => {
+  const designer = await import(designerUrl);
+  const books = ok(
+    await call(playbooks, 'POST', {
+      kind: 'book',
+      name: 'Link integrity',
+      side: 'Defence',
+    }),
+  );
+  const book = books.books.find((item) => item.name === 'Link integrity');
+  const created = ok(
+    await call(playbooks, 'POST', {
+      kind: 'play',
+      playbookId: book.id,
+      name: 'Linked defence',
+    }),
+  );
+  const play = created.plays.find((item) => item.id === created.createdId);
+  const scene = designer.normalizeDrawing(play);
+  const own = scene.players[0];
+  scene.opponentPlayers = [
+    { id: 'opponent-q', label: 'Q', kind: 'qb', x: 360, y: 680 },
+  ];
+  scene.showOpponent = true;
+  scene.routes = [own, scene.opponentPlayers[0]].map((player, index) => ({
+    id: `link-${index}`,
+    playerId: player.id,
+    startX: player.x,
+    startY: player.y,
+    endX: player.x,
+    endY: player.y - 40,
+    points: [
+      { x: player.x, y: player.y },
+      { x: player.x, y: player.y - 40 },
+    ],
+    colour: '#ffffff',
+    lineStyle: 'solid',
+  }));
+  scene.zones = [
+    {
+      id: 'coverage',
+      routeId: 'link-1',
+      x: 340,
+      y: 620,
+      width: 40,
+      height: 40,
+      colour: '#ffffff',
+    },
+  ];
+  ok(await call(playbooks, 'PUT', { ...play, ...scene }));
+  const removed = designer.removeSceneItem(scene, 'opponent', 'opponent-q');
+  ok(await call(playbooks, 'PUT', { ...play, ...removed }));
+  const reopened = ok(await call(playbooks, 'GET')).plays.find(
+    (item) => item.id === play.id,
+  );
+  assert.equal(reopened.opponentPlayers.length, 0);
+  assert.deepEqual(
+    reopened.routes.map((route) => route.id),
+    ['link-0'],
+  );
+  assert.equal(reopened.zones[0].routeId, undefined);
+  assert.equal(reopened.zones[0].x, 340);
+  const invalid = await call(playbooks, 'PUT', {
+    ...reopened,
+    name: 'Must not replace',
+    zones: [{ ...reopened.zones[0], routeId: 'missing' }],
+  });
+  assert.equal(invalid.status, 400);
+  assert.equal(
+    ok(await call(playbooks, 'GET')).plays.find((item) => item.id === play.id)
+      .name,
+    'Linked defence',
   );
 });
