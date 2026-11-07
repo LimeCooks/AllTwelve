@@ -1,5 +1,16 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
+import {
+  readFile,
+  readdir,
+  mkdtemp,
+  writeFile,
+  access,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { restoreBackup } from '../scripts/restore-backup.mjs';
+import { unzipSync } from 'fflate';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import ts from 'typescript';
@@ -29,6 +40,8 @@ const database = {
         return { results: statement.all(...values) };
       },
       async run() {
+        if (/^\s*SELECT\b/i.test(sql))
+          return { results: statement.all(...values) };
         return statement.run(...values);
       },
     };
@@ -104,11 +117,21 @@ globalThis.privateTestBucket = {
       options,
     });
   },
-  async get(key) {
+  async get(key, options) {
     const object = objects.get(key);
+    if (
+      object &&
+      options?.onlyIf?.etagMatches &&
+      options.onlyIf.etagMatches !==
+        createHash('md5').update(new Uint8Array(object.bytes)).digest('hex')
+    )
+      return {};
     return object
       ? {
-          body: object.bytes,
+          body: new Response(object.bytes).body,
+          async json() {
+            return JSON.parse(new TextDecoder().decode(object.bytes));
+          },
           httpEtag: 'test-etag',
           writeHttpMetadata(headers) {
             headers.set(
@@ -122,7 +145,46 @@ globalThis.privateTestBucket = {
   async delete(key) {
     objects.delete(key);
   },
+  async list({ prefix = '', cursor = '' } = {}) {
+    const matches = [...objects.entries()]
+      .filter(([key]) => key.startsWith(prefix))
+      .sort(([a], [b]) => a.localeCompare(b));
+    const index = Number(cursor || 0),
+      selected = matches.slice(index, index + 1);
+    return {
+      objects: selected.map(([key, object]) => ({
+        key,
+        size: object.bytes.byteLength,
+        etag: createHash('md5')
+          .update(new Uint8Array(object.bytes))
+          .digest('hex'),
+        httpMetadata: object.options?.httpMetadata,
+        customMetadata: object.options?.customMetadata,
+      })),
+      truncated: index + 1 < matches.length,
+      cursor: String(index + 1),
+    };
+  },
 };
+const backupUrl = await moduleUrl('../lib/team-backup.ts');
+const zipUrl = await moduleUrl('../lib/backup-zip.ts', [
+  ["'fflate'", JSON.stringify(import.meta.resolve('fflate'))],
+]);
+const backups = await import(
+  await moduleUrl('../app/api/backups/route.ts', [
+    [
+      "import { env } from 'cloudflare:workers';",
+      'const env = { MEDIA: globalThis.privateTestBucket };',
+    ],
+    ["'@/lib/team-backup'", JSON.stringify(backupUrl)],
+    ["'@/lib/backup-zip'", JSON.stringify(zipUrl)],
+    ...replacements,
+  ])
+);
+const { backupTables, createTeamBackup, backupJobKey } = await import(
+  backupUrl
+);
+const { backupZip } = await import(zipUrl);
 const media = await import(
   await moduleUrl('../app/api/media/route.ts', [
     [
@@ -315,6 +377,302 @@ test('same media key is isolated per team and anonymous media access is rejected
   assert.equal((await media.POST(upload('intrusion'))).status, 401);
   assert.equal(
     (await media.DELETE(new Request(url, { method: 'DELETE' }))).status,
+    401,
+  );
+});
+
+test('complete backup restores all team tables and file bytes offline without touching another owner', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'owner-a',
+    name: 'Coach A',
+    email: 'a@example.test',
+  };
+  const scoped = await getDatabase(),
+    ids = new Map([['teams', scoped.teamId]]);
+  for (const [table, sql] of backupTables) {
+    if (table === 'teams') continue;
+    const existing = sqlite.prepare(sql).get(scoped.teamId);
+    if (existing) {
+      ids.set(table, existing.id);
+      continue;
+    }
+    const columns = sqlite.prepare(`PRAGMA table_info(${table})`).all();
+    const references = new Map(
+      sqlite
+        .prepare(`PRAGMA foreign_key_list(${table})`)
+        .all()
+        .map((fk) => [fk.from, ids.get(fk.table)]),
+    );
+    const row = Object.fromEntries(
+      columns.map((col) => [
+        col.name,
+        col.name === 'id'
+          ? `backup-fixture-${table}`
+          : col.name === 'team_id'
+            ? scoped.teamId
+            : references.has(col.name)
+              ? references.get(col.name)
+              : col.name === 'storage_key'
+                ? 'film-backup'
+                : col.name.endsWith('_json')
+                  ? JSON.stringify({
+                      fixture: table,
+                      note: 'Recovery must preserve this JSON exactly.',
+                    })
+                  : /INT|REAL/.test(col.type)
+                    ? 1
+                    : `fixture-${col.name}`,
+      ]),
+    );
+    sqlite
+      .prepare(
+        `INSERT INTO ${table} (${columns.map((c) => c.name).join(',')}) VALUES (${columns.map(() => '?').join(',')})`,
+      )
+      .run(...columns.map((c) => row[c.name]));
+    ids.set(table, row.id);
+  }
+  await globalThis.privateTestBucket.put(
+    `teams/${scoped.teamId}/film-backup`,
+    'real film bytes for recovery',
+    {
+      httpMetadata: { contentType: 'video/mp4' },
+      customMetadata: { originalName: 'Practice.mp4' },
+    },
+  );
+  await globalThis.privateTestBucket.put(
+    'teams/some-other-team/private-film',
+    'NEVER EXPORT',
+    { httpMetadata: { contentType: 'video/mp4' } },
+  );
+  const prepared = await backups.POST();
+  assert.equal(prepared.status, 200, await prepared.clone().text());
+  const job = await prepared.json();
+  assert.equal(job.mediaFiles, 2);
+  const response = await backups.GET(
+    new Request(`https://pilot.test/api/backups?id=${job.id}&part=1`),
+  );
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'application/zip');
+  const bytes = new Uint8Array(await response.arrayBuffer()),
+    files = unzipSync(bytes);
+  const snapshot = JSON.parse(
+    new TextDecoder().decode(files['chalktalk-backup.json']),
+  );
+  assert.equal(snapshot.tables.teams.length, 1);
+  assert.equal(snapshot.tables.teams[0].id, scoped.teamId);
+  assert.equal('workspace_owners' in snapshot.tables, false);
+  for (const [table] of backupTables)
+    assert.ok(
+      snapshot.tables[table].length > 0,
+      `${table} must be covered by recovery`,
+    );
+  assert.equal(
+    new TextDecoder().decode(files['media/film-backup']),
+    'real film bytes for recovery',
+  );
+  assert.equal(files['media/private-film'], undefined);
+  const directory = await mkdtemp(
+    path.join(tmpdir(), 'chalktalk-backup-test-'),
+  );
+  const archive = path.join(directory, 'backup.zip');
+  await writeFile(archive, bytes);
+  const output = path.join(directory, 'recovered');
+  await restoreBackup({
+    archives: [archive],
+    output,
+    ownerId: 'recovery-owner',
+  });
+  const recovered = new DatabaseSync(path.join(output, 'workspace.sqlite'));
+  for (const [table] of backupTables) {
+    const rows = recovered
+      .prepare(`SELECT * FROM ${table} ORDER BY id`)
+      .all()
+      .map((row) => ({ ...row }));
+    assert.deepEqual(
+      rows,
+      [...snapshot.tables[table]].sort((a, b) => a.id.localeCompare(b.id)),
+      table,
+    );
+  }
+  assert.equal(
+    recovered.prepare('SELECT user_id FROM workspace_owners').get().user_id,
+    'recovery-owner',
+  );
+  assert.equal(recovered.prepare('PRAGMA foreign_key_check').all().length, 0);
+  recovered.close();
+  assert.equal(
+    await readFile(path.join(output, 'media', 'film-backup'), 'utf8'),
+    'real film bytes for recovery',
+  );
+  await assert.rejects(access(path.join(output, 'RESTORE_INCOMPLETE.txt')));
+  await assert.rejects(
+    restoreBackup({ archives: [archive], output, ownerId: 'overwrite' }),
+    /already exists/,
+  );
+  const multi = {
+    ...snapshot,
+    parts: 2,
+    media: snapshot.media.map((m, i) => ({ ...m, part: i + 1 })),
+  };
+  const partNames = [];
+  for (const part of [1, 2]) {
+    const filename = path.join(directory, `part-${part}.zip`);
+    await writeFile(
+      filename,
+      new Uint8Array(
+        await new Response(
+          backupZip(
+            multi,
+            part,
+            globalThis.privateTestBucket,
+            `teams/${scoped.teamId}/`,
+          ),
+        ).arrayBuffer(),
+      ),
+    );
+    partNames.push(filename);
+  }
+  await assert.rejects(
+    restoreBackup({
+      archives: [partNames[0]],
+      output: path.join(directory, 'missing-part'),
+      ownerId: 'recovery-owner',
+    }),
+    /Not all backup parts/,
+  );
+  await assert.rejects(
+    restoreBackup({
+      archives: [partNames[0], partNames[0]],
+      output: path.join(directory, 'duplicate-part'),
+      ownerId: 'recovery-owner',
+    }),
+    /same backup part/,
+  );
+  const multiOutput = path.join(directory, 'multipart-recovery');
+  assert.equal(
+    (
+      await restoreBackup({
+        archives: partNames.reverse(),
+        output: multiOutput,
+        ownerId: 'recovery-owner',
+      })
+    ).mediaFiles,
+    2,
+  );
+  const recoveredMetadata = JSON.parse(
+    await readFile(path.join(multiOutput, 'recovery.json'), 'utf8'),
+  );
+  assert.equal(
+    recoveredMetadata.media.find((m) => m.key === 'film-backup').customMetadata
+      .originalName,
+    'Practice.mp4',
+  );
+  const corrupted = bytes.slice(),
+    location = Buffer.from(corrupted).indexOf(
+      Buffer.from('real film bytes for recovery'),
+    );
+  assert.ok(location > 0);
+  corrupted[location] ^= 1;
+  const damaged = path.join(directory, 'damaged.zip');
+  await writeFile(damaged, corrupted);
+  await assert.rejects(
+    restoreBackup({
+      archives: [damaged],
+      output: path.join(directory, 'damaged-output'),
+      ownerId: 'recovery-owner',
+    }),
+    /integrity check/,
+  );
+  const largePlan = await createTeamBackup(
+    scoped,
+    {
+      ...globalThis.privateTestBucket,
+      async list(options) {
+        const page = await globalThis.privateTestBucket.list(options);
+        return {
+          ...page,
+          objects: page.objects.map((o) => ({ ...o, size: 300 * 1024 * 1024 })),
+        };
+      },
+    },
+    `teams/${scoped.teamId}/`,
+  );
+  assert.equal(
+    largePlan.parts,
+    2,
+    'large libraries are split without allocating the film in memory',
+  );
+  assert.equal(
+    (
+      await backups.GET(
+        new Request(`https://pilot.test/api/backups?id=${job.id}&part=99`),
+      )
+    ).status,
+    400,
+  );
+  await globalThis.privateTestBucket.put(
+    `teams/${scoped.teamId}/film-backup`,
+    'changed after snapshot',
+    { httpMetadata: { contentType: 'video/mp4' } },
+  );
+  const changed = await backups.GET(
+    new Request(`https://pilot.test/api/backups?id=${job.id}&part=1`),
+  );
+  await assert.rejects(changed.arrayBuffer(), /changed|removed/);
+  const next = await backups.POST();
+  assert.equal(next.status, 200);
+  assert.equal(
+    (
+      await backups.GET(
+        new Request(`https://pilot.test/api/backups?id=${job.id}&part=1`),
+      )
+    ).status,
+    409,
+  );
+  const nextJob = await next.json();
+  const storedJob = await (
+    await globalThis.privateTestBucket.get(backupJobKey(scoped.teamId))
+  ).json();
+  storedJob.createdAt = '2000-01-01T00:00:00.000Z';
+  await globalThis.privateTestBucket.put(
+    backupJobKey(scoped.teamId),
+    JSON.stringify(storedJob),
+    { httpMetadata: { contentType: 'application/json' } },
+  );
+  assert.equal(
+    (
+      await backups.GET(
+        new Request(`https://pilot.test/api/backups?id=${nextJob.id}&part=1`),
+      )
+    ).status,
+    409,
+  );
+  await globalThis.privateTestBucket.delete(
+    `teams/${scoped.teamId}/film-backup`,
+  );
+  assert.equal(
+    (await backups.POST()).status,
+    400,
+    'missing film must not silently produce an incomplete backup',
+  );
+  globalThis.privateTestIdentity = {
+    id: 'owner-b',
+    name: 'Coach B',
+    email: 'b@example.test',
+  };
+  assert.equal(
+    (
+      await backups.GET(
+        new Request(`https://pilot.test/api/backups?id=${job.id}&part=1`),
+      )
+    ).status,
+    404,
+  );
+  globalThis.privateTestIdentity = null;
+  assert.equal((await backups.POST()).status, 401);
+  assert.equal(
+    (await backups.GET(new Request('https://pilot.test/api/backups?part=1')))
+      .status,
     401,
   );
 });

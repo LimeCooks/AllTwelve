@@ -30,7 +30,7 @@ Viewport checks do not prove physical iPhone/iPad touch behaviour. Sign-in, back
 2. Continue auditing remaining module-specific prototype copy and incomplete controls. Staff/player invitations and account-to-athlete linking require real membership roles before external users can join.
 3. Verify every persisted module and uploaded file across two browser sessions/devices. Handle failed requests honestly; do not replace failures with apparent empty success.
 4. Verify responsive layouts and touch drawing on phone/tablet. Desktop tests are insufficient for this gate.
-5. Establish backup/export and demonstrate restore in a separate environment. Retain the local prototype unchanged; do not migrate its records into the clean pilot.
+5. Manual full export and offline recovery are implemented and tested separately; see [backups.md](backups.md). Still verify cloud disaster recovery, retention/restore procedures, and an owner-accessible recovery handoff. Retain the local prototype unchanged; do not migrate its records into the clean pilot.
 6. Define and exercise a reviewed update/rollback workflow so development experiments never share pilot data or publish automatically.
 7. Walk the real coaching workflows with the owner, recording and fixing defects. The first working deployment is a pilot milestone, not proof that the complete product is polished.
 

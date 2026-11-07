@@ -1,4 +1,5 @@
 'use client';
+import { BackupControls } from '@/components/backup-controls';
 import {
   WorkspaceGate,
   useWorkspaceSession,
@@ -7976,34 +7977,37 @@ function SettingsView({
               </div>
             ) : null}
             {activeTab === 'Data & privacy' ? (
-              <div className="local-data-note">
-                <CloudOff />
-                <div>
-                  <strong>
-                    {prototype
-                      ? 'Stored on this computer'
-                      : 'Stored in your private workspace'}
-                  </strong>
-                  <p>
-                    {prototype
-                      ? 'Development records stay on this computer. They are not copied into your hosted pilot.'
-                      : 'Your account owns this team. Signing out does not delete its records. The settings export below contains team settings only, not a complete backup of plays, roster, or files.'}
-                  </p>
+              <>
+                <div className="local-data-note">
+                  <CloudOff />
+                  <div>
+                    <strong>
+                      {prototype
+                        ? 'Stored on this computer'
+                        : 'Stored in your private workspace'}
+                    </strong>
+                    <p>
+                      {prototype
+                        ? 'Development records stay on this computer. They are not copied into your hosted pilot.'
+                        : 'Your account owns this team. Signing out does not delete its records. The settings export below contains team settings only, not a complete backup of plays, roster, or files.'}
+                    </p>
+                  </div>
+                  <Button
+                    onClick={() => {
+                      downloadText(
+                        'chalktalk-settings.json',
+                        JSON.stringify(teamSettings, null, 2),
+                        'application/json',
+                      );
+                      onNotify('Team settings exported.');
+                    }}
+                    variant="outline"
+                  >
+                    <Download /> Export settings
+                  </Button>
                 </div>
-                <Button
-                  onClick={() => {
-                    downloadText(
-                      'chalktalk-settings.json',
-                      JSON.stringify(teamSettings, null, 2),
-                      'application/json',
-                    );
-                    onNotify('Team settings exported.');
-                  }}
-                  variant="outline"
-                >
-                  <Download /> Export settings
-                </Button>
-              </div>
+                <BackupControls />
+              </>
             ) : null}
             {activeTab === 'Season & schedule' ? (
               <div className="settings-section-save">
