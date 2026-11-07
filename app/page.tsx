@@ -3,6 +3,14 @@ import { BackupControls } from '@/components/backup-controls';
 import { SidelineWorkspace } from '@/components/sideline-workspace';
 import { parseDepthLayouts } from '@/lib/depth-layout';
 import {
+  buildFilmReport,
+  loadReportDataset,
+  filmReportCsv,
+  safeCsvCell,
+  type ReportDataset,
+  type ReportClip,
+} from '@/lib/film-report';
+import {
   calendarSegments,
   eventsInCalendarPeriod,
 } from '@/lib/calendar-layout';
@@ -241,16 +249,7 @@ function downloadText(
 }
 
 function quoteCsv(value: unknown) {
-  const rendered =
-    value == null
-      ? ''
-      : typeof value === 'string' ||
-          typeof value === 'number' ||
-          typeof value === 'boolean' ||
-          typeof value === 'bigint'
-        ? String(value)
-        : JSON.stringify(value);
-  return `"${rendered.replaceAll('"', '""')}"`;
+  return safeCsvCell(value);
 }
 
 function mediaUrl(key: string, revision = 0) {
@@ -606,6 +605,30 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
 
   const accountName =
     userRole === 'Coach' ? session.user.name : 'Player account';
+  const openDataset = (
+    selection: string,
+    destination: 'Film Room' | 'Reports' | 'Gameplanning',
+  ) => {
+    if (editingPlayRef.current) {
+      notify(
+        'Save or cancel your current changes before opening another dataset.',
+        'info',
+      );
+      return;
+    }
+    setSearchTarget({
+      kind: 'film',
+      id: selection,
+      name: '',
+      detail: '',
+      revision: Date.now(),
+    });
+    setActiveViewUnsafe(
+      selection === 'all' && destination === 'Film Room'
+        ? 'Reports'
+        : destination,
+    );
+  };
   const accountInitials = initialsFor(accountName);
   const mobileQuickLinks = [
     { label: 'Home', icon: LayoutDashboard },
@@ -1520,6 +1543,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
             )
           ) : (
             <ModuleView
+              onOpenDataset={openDataset}
               key={searchTarget?.revision ?? 'workspace'}
               searchTarget={searchTarget}
               onPlayEditingChange={onPlayEditingChange}
@@ -1868,6 +1892,10 @@ function PlayerDashboard({
 }
 
 type ModuleProps = {
+  onOpenDataset: (
+    selection: string,
+    destination: 'Film Room' | 'Reports' | 'Gameplanning',
+  ) => void;
   searchTarget: SearchResult | null;
   onPlayEditingChange: (editing: boolean) => void;
   view: string;
@@ -1883,6 +1911,7 @@ type ModuleProps = {
 };
 
 function ModuleView({
+  onOpenDataset,
   searchTarget,
   view,
   userRole,
@@ -1971,9 +2000,23 @@ function ModuleView({
       />
     );
   if (view === 'Reports')
-    return <ReportsView onNavigate={onNavigate} onNotify={onNotify} />;
+    return (
+      <ReportsView
+        onNavigate={onNavigate}
+        onNotify={onNotify}
+        initialSelection={searchTarget?.kind === 'film' ? searchTarget.id : ''}
+        onOpenDataset={onOpenDataset}
+      />
+    );
   if (view === 'Gameplanning')
-    return <GameplanningView onNavigate={onNavigate} onNotify={onNotify} />;
+    return (
+      <GameplanningView
+        onNavigate={onNavigate}
+        onNotify={onNotify}
+        initialSelection={searchTarget?.kind === 'film' ? searchTarget.id : ''}
+        onOpenDataset={onOpenDataset}
+      />
+    );
   if (view === 'Calendar')
     return (
       <CalendarView
@@ -2087,7 +2130,9 @@ async function readFilmData(assetId = ''): Promise<FilmPayload> {
   return data;
 }
 
-function clipLabel(clip: FilmClipRecord) {
+function clipLabel(
+  clip: Pick<FilmClipRecord, 'playName' | 'concept' | 'clipNumber'>,
+) {
   return clip.playName || clip.concept || `Clip ${clip.clipNumber}`;
 }
 
@@ -5578,71 +5623,72 @@ function MessagesView({
 function ReportsView({
   onNavigate,
   onNotify,
+  initialSelection = '',
+  onOpenDataset,
 }: {
   onNavigate: (view: string) => void;
   onNotify: Notify;
+  initialSelection?: string;
+  onOpenDataset: (
+    selection: string,
+    destination: 'Film Room' | 'Reports' | 'Gameplanning',
+  ) => void;
 }) {
   const [reportUnit, setReportUnit] = useState('Offence');
-  const [reportFilm, setReportFilm] = useState<FilmPayload>({
+  const [reportFilm, setReportFilm] = useState<ReportDataset>({
     assets: [],
     asset: null,
     clips: [],
+    selection: initialSelection,
+    label: 'No saved film',
+    filmCount: 0,
   });
+  const [selection, setSelection] = useState(initialSelection),
+    [reportRetry, setReportRetry] = useState(0);
+  const [reportLoad, setReportLoad] = useState<'loading' | 'ready' | 'error'>(
+      'loading',
+    ),
+    [reportError, setReportError] = useState('');
   useEffect(() => {
-    fetch('/api/film', { cache: 'no-store' })
-      .then(async (response) => (await response.json()) as FilmPayload)
-      .then(setReportFilm)
-      .catch(() => setReportFilm({ assets: [], asset: null, clips: [] }));
-  }, []);
-  const reportClips = reportFilm.clips.filter(
-    (clip) => clip.odk === reportUnit,
-  );
-  const yardsFor = (clip: FilmClipRecord) => {
-    const match = clip.result.match(/[+-]?\d+/);
-    return match ? Number(match[0]) : null;
-  };
-  const numericYards = reportClips
-    .map(yardsFor)
-    .filter((value): value is number => value != null);
-  const positive = numericYards.filter((value) => value > 0).length;
-  const explosive = numericYards.filter((value) => value >= 20).length;
-  const complete = reportClips.filter(
-    (clip) =>
-      clip.down != null && clip.distance != null && Boolean(clip.result),
-  ).length;
-  const grouped = reportClips.reduce<Record<string, FilmClipRecord[]>>(
-    (groups, clip) => {
-      const key = clip.down
-        ? `${clip.down}${clip.distance != null ? ` & ${clip.distance}` : ' down'}`
-        : 'Down not charted';
-      (groups[key] ??= []).push(clip);
-      return groups;
-    },
-    {},
-  );
-  const reportRows = Object.entries(grouped).map(([situation, clips]) => {
-    const calls = clips.map(clipLabel);
-    const topCall =
-      calls.sort(
-        (a, b) =>
-          calls.filter((call) => call === b).length -
-          calls.filter((call) => call === a).length,
-      )[0] ?? '—';
-    const yards = clips
-      .map(yardsFor)
-      .filter((value): value is number => value != null);
-    return [
-      situation,
-      topCall,
-      `${Math.round((clips.length / Math.max(1, reportClips.length)) * 100)}%`,
-      yards.length
-        ? (yards.reduce((sum, value) => sum + value, 0) / yards.length).toFixed(
-            1,
-          )
-        : '—',
-      `${clips.length}`,
-    ];
-  });
+    let active = true;
+    const controller = new AbortController();
+    void loadReportDataset(selection, fetch, controller.signal)
+      .then((data) => {
+        if (active) {
+          setReportFilm(data);
+          setReportLoad('ready');
+          setReportError('');
+        }
+      })
+      .catch((error: unknown) => {
+        controller.abort();
+        if (active) {
+          setReportError(
+            error instanceof Error ? error.message : 'Unable to load reports.',
+          );
+          setReportLoad('error');
+        }
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [selection, reportRetry]);
+  const report = buildFilmReport(reportFilm.clips, reportUnit);
+  const {
+    clips: reportClips,
+    rows: reportRows,
+    complete,
+    positive,
+    explosive,
+    yardageCount,
+  } = report;
+  const openReportFilm = () =>
+    reportFilm.selection && reportFilm.selection !== 'all'
+      ? onOpenDataset(reportFilm.selection, 'Film Room')
+      : onNavigate('Film Room');
+  const openReportPlan = () =>
+    onOpenDataset(reportFilm.selection, 'Gameplanning');
   return (
     <section className="module-surface reports-surface">
       <ModuleHeader
@@ -5652,24 +5698,16 @@ function ReportsView({
       >
         <Button
           className="module-secondary"
-          disabled={!reportRows.length}
+          disabled={reportLoad !== 'ready' || !reportRows.length}
           onClick={() => {
-            const rows = [
-              [
-                'Situation',
-                'Top saved play',
-                'Share of charted clips',
-                'Average yards',
-                'Clip count',
-              ],
-              ...reportRows,
-            ];
             downloadText(
-              `${reportUnit.toLowerCase().replaceAll(' ', '-')}-report.csv`,
-              rows.map((row) => row.map(quoteCsv).join(',')).join('\n'),
+              'chalktalk-' +
+                reportUnit.toLowerCase().replaceAll(' ', '-') +
+                '-report.csv',
+              filmReportCsv(reportFilm, reportUnit),
               'text/csv;charset=utf-8',
             );
-            onNotify(`${reportUnit} report exported.`);
+            onNotify(reportUnit + ' report exported.');
           }}
           variant="outline"
         >
@@ -5677,9 +5715,10 @@ function ReportsView({
         </Button>
         <Button
           className="module-primary"
-          onClick={() => onNavigate('Gameplanning')}
+          disabled={reportLoad !== 'ready'}
+          onClick={openReportPlan}
         >
-          <Zap /> Build gameplan
+          <Zap /> Open gameplanning
         </Button>
       </ModuleHeader>
       <div className="planning-toolbar">
@@ -5695,170 +5734,243 @@ function ReportsView({
             </button>
           ))}
         </div>
-        <NativeSelect aria-label="Choose film dataset" defaultValue="current">
-          <NativeSelectOption value="current">
-            {reportFilm.asset?.title ?? 'No uploaded film'}
-          </NativeSelectOption>
+        <NativeSelect
+          aria-label="Choose film dataset"
+          value={
+            reportLoad === 'ready'
+              ? reportFilm.selection
+              : selection || reportFilm.selection
+          }
+          onChange={(event) => {
+            setSelection(event.target.value);
+            setReportLoad('loading');
+          }}
+        >
+          {!reportFilm.assets.length && (
+            <NativeSelectOption value="">No saved film</NativeSelectOption>
+          )}
+          {reportFilm.assets.length > 0 && (
+            <NativeSelectOption value="all">All saved films</NativeSelectOption>
+          )}
+          {reportFilm.assets.map((asset) => (
+            <NativeSelectOption key={asset.id} value={asset.id}>
+              {asset.title}
+            </NativeSelectOption>
+          ))}
         </NativeSelect>
-        <Button onClick={() => onNavigate('Film Room')} variant="outline">
-          <Film /> Chart film
+        <Button
+          variant="outline"
+          onClick={() => {
+            setSelection(reportFilm.selection);
+            setReportLoad('loading');
+            setReportRetry((n) => n + 1);
+          }}
+        >
+          Refresh data
+        </Button>
+        <Button onClick={openReportFilm} variant="outline">
+          <Film /> Open Film Room
         </Button>
       </div>
-      <div className="report-kpis">
-        <article>
-          <span className="metric-icon blue">
-            <SlidersHorizontal />
-          </span>
-          <div>
-            <small>Charted clips</small>
-            <strong>{reportClips.length}</strong>
-            <p>{reportFilm.clips.length} across all units</p>
-          </div>
-        </article>
-        <article>
-          <span className="metric-icon teal">
-            <CheckCircle2 />
-          </span>
-          <div>
-            <small>Data completeness</small>
-            <strong>
-              {reportClips.length
-                ? Math.round((complete / reportClips.length) * 100)
-                : 0}
-              %
-            </strong>
-            <p>Down, distance, and result</p>
-          </div>
-        </article>
-        <article>
-          <span className="metric-icon violet">
-            <Film />
-          </span>
-          <div>
-            <small>Positive results</small>
-            <strong>
-              {numericYards.length
-                ? Math.round((positive / numericYards.length) * 100)
-                : 0}
-              %
-            </strong>
-            <p>{numericYards.length} clips with yardage</p>
-          </div>
-        </article>
-        <article>
-          <span className="metric-icon orange">
-            <Zap />
-          </span>
-          <div>
-            <small>Explosive clips</small>
-            <strong>{explosive}</strong>
-            <p>20 or more yards</p>
-          </div>
-        </article>
-      </div>
-      <div className="reports-layout">
-        <div className="reports-main">
-          <section className="analytics-card">
-            <div className="analytics-head">
-              <div>
-                <p className="eyebrow">Down and distance</p>
-                <h3>Charted tendency matrix</h3>
-              </div>
-              <Badge variant="secondary">{reportClips.length} clips</Badge>
-            </div>
-            {reportRows.length ? (
-              <div className="tendency-table">
-                <div className="tendency-table-head">
-                  <span>Situation</span>
-                  <span>Top saved play</span>
-                  <span>Share</span>
-                  <span>Yds/play</span>
-                  <span>Clips</span>
-                </div>
-                {reportRows.map((row) => (
-                  <button
-                    key={row[0]}
-                    onClick={() => onNavigate('Film Room')}
-                    type="button"
-                  >
-                    {row.map((cell, index) => (
-                      <span
-                        className={index === 2 ? 'rate-cell' : ''}
-                        key={`${index}-${cell}`}
-                      >
-                        {cell}
-                      </span>
-                    ))}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="viewer-empty-state compact">
-                <SlidersHorizontal />
-                <strong>No {reportUnit.toLowerCase()} clips charted</strong>
-                <span>
-                  Upload film and save clip data before ChalkTalk calculates
-                  tendencies.
-                </span>
-                <Button onClick={() => onNavigate('Film Room')} size="sm">
-                  Open Film Room
-                </Button>
-              </div>
-            )}
-          </section>
+      {reportLoad === 'loading' ? (
+        <output>Loading the selected film dataset…</output>
+      ) : reportLoad === 'error' ? (
+        <div role="alert">
+          <p>{reportError}</p>
+          <Button
+            onClick={() => {
+              setReportLoad('loading');
+              setReportRetry((n) => n + 1);
+            }}
+          >
+            Retry dataset
+          </Button>
         </div>
-        <aside className="reports-rail">
-          <section className="analytics-card insight-rail-card">
-            <div className="analytics-head">
+      ) : (
+        <>
+          <p className="report-scope">
+            Dataset: <strong>{reportFilm.label}</strong> ·{' '}
+            {reportFilm.clips.length} total clips
+            {report.unassigned
+              ? ' · ' + report.unassigned + ' without a unit'
+              : ''}
+          </p>
+          <div className="report-kpis">
+            <article>
+              <span className="metric-icon blue">
+                <SlidersHorizontal />
+              </span>
               <div>
-                <p className="eyebrow">Dataset health</p>
-                <h3>What is actually available</h3>
+                <small>Charted clips</small>
+                <strong>{reportClips.length}</strong>
+                <p>{reportFilm.clips.length} across all units</p>
               </div>
-              <Film />
+            </article>
+            <article>
+              <span className="metric-icon teal">
+                <CheckCircle2 />
+              </span>
+              <div>
+                <small>Data completeness</small>
+                <strong>
+                  {reportClips.length
+                    ? Math.round((complete / reportClips.length) * 100)
+                    : '—'}
+                  {reportClips.length ? '%' : ''}
+                </strong>
+                <p>Down, distance, and result</p>
+              </div>
+            </article>
+            <article>
+              <span className="metric-icon violet">
+                <Film />
+              </span>
+              <div>
+                <small>Positive yardage</small>
+                <strong>
+                  {yardageCount
+                    ? Math.round((positive / yardageCount) * 100)
+                    : '—'}
+                  {yardageCount ? '%' : ''}
+                </strong>
+                <p>{yardageCount} clips with yardage</p>
+              </div>
+            </article>
+            <article>
+              <span className="metric-icon orange">
+                <Zap />
+              </span>
+              <div>
+                <small>Explosive clips</small>
+                <strong>{yardageCount ? explosive : '—'}</strong>
+                <p>Recorded gains of 20+ yards</p>
+              </div>
+            </article>
+          </div>
+          <p className="report-method">
+            Yardage counts entries such as +8, -2 or 12 yards. Other result text
+            is uncounted; positive yardage is not a success rating.
+          </p>
+          <div className="reports-layout reports-focused">
+            <div className="reports-main">
+              <section className="analytics-card">
+                <div className="analytics-head">
+                  <div>
+                    <p className="eyebrow">Down and distance</p>
+                    <h3>Charted tendency matrix</h3>
+                  </div>
+                  <Badge variant="secondary">{reportClips.length} clips</Badge>
+                </div>
+                {reportRows.length ? (
+                  <div className="reports-table-wrap">
+                    <table className="reports-data-table">
+                      <caption className="sr-only">
+                        Down and distance for {reportUnit} in {reportFilm.label}
+                      </caption>
+                      <thead>
+                        <tr>
+                          <th scope="col">Situation</th>
+                          <th scope="col">Top call / concept</th>
+                          <th scope="col">Clips</th>
+                          <th scope="col">Share</th>
+                          <th scope="col">Yardage clips</th>
+                          <th scope="col">Avg recorded yards</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {reportRows.map((row) => (
+                          <tr key={row.situation}>
+                            <th scope="row">{row.situation}</th>
+                            <td>{row.topCall}</td>
+                            <td>{row.count}</td>
+                            <td>{row.share}%</td>
+                            <td>{row.yardageCount}</td>
+                            <td>
+                              {row.averageYards === null
+                                ? '—'
+                                : row.averageYards.toFixed(1)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="viewer-empty-state compact">
+                    <SlidersHorizontal />
+                    <strong>No {reportUnit.toLowerCase()} clips charted</strong>
+                    <span>
+                      Upload film and save clip data before ChalkTalk calculates
+                      tendencies.
+                    </span>
+                    <Button onClick={openReportFilm} size="sm">
+                      Open Film Room
+                    </Button>
+                  </div>
+                )}
+              </section>
             </div>
-            <article>
-              <span>1</span>
-              <div>
-                <strong>
-                  {reportFilm.asset ? 'Film uploaded' : 'Film missing'}
-                </strong>
-                <p>
-                  {reportFilm.asset?.title ??
-                    'Add a real video before charting.'}
-                </p>
-              </div>
-            </article>
-            <article>
-              <span>2</span>
-              <div>
-                <strong>
-                  {reportClips.length} clips for {reportUnit}
-                </strong>
-                <p>{complete} have down, distance, and result data.</p>
-              </div>
-            </article>
-            <article>
-              <span>3</span>
-              <div>
-                <strong>
-                  {reportClips.filter((clip) => clip.playId).length} linked
-                  plays
-                </strong>
-                <p>
-                  Link clips to saved plays for stronger call-sheet context.
-                </p>
-              </div>
-            </article>
-            <Button
-              className="w-full"
-              disabled={!reportClips.length}
-              onClick={() => onNavigate('Gameplanning')}
-            >
-              Use saved data in gameplan <ChevronRight />
-            </Button>
-          </section>
-        </aside>
-      </div>
+            <aside className="reports-rail">
+              <details>
+                <summary>Dataset details</summary>
+                <section className="analytics-card insight-rail-card">
+                  <div className="analytics-head">
+                    <div>
+                      <p className="eyebrow">Dataset health</p>
+                      <h3>What is actually available</h3>
+                    </div>
+                    <Film />
+                  </div>
+                  <article>
+                    <span>1</span>
+                    <div>
+                      <strong>
+                        {reportFilm.filmCount
+                          ? String(reportFilm.filmCount) + ' saved film(s)'
+                          : 'No saved film'}
+                      </strong>
+                      <p>
+                        {reportFilm.filmCount
+                          ? reportFilm.label
+                          : 'Add a real video before charting.'}
+                      </p>
+                    </div>
+                  </article>
+                  <article>
+                    <span>2</span>
+                    <div>
+                      <strong>
+                        {reportClips.length} clips for {reportUnit}
+                      </strong>
+                      <p>{complete} have down, distance, and result data.</p>
+                    </div>
+                  </article>
+                  <article>
+                    <span>3</span>
+                    <div>
+                      <strong>
+                        {reportClips.filter((clip) => clip.playId).length}{' '}
+                        linked plays
+                      </strong>
+                      <p>
+                        Link clips to saved plays for stronger call-sheet
+                        context.
+                      </p>
+                    </div>
+                  </article>
+                  <Button
+                    className="w-full"
+                    disabled={!reportClips.length}
+                    onClick={openReportPlan}
+                  >
+                    Open gameplan with this dataset <ChevronRight />
+                  </Button>
+                </section>
+              </details>
+            </aside>
+          </div>
+        </>
+      )}
     </section>
   );
 }
@@ -5873,9 +5985,16 @@ const initialGameplanBuckets: { name: string; plays: string[] }[] = [];
 function GameplanningView({
   onNavigate,
   onNotify,
+  initialSelection = '',
+  onOpenDataset,
 }: {
   onNavigate: (view: string) => void;
   onNotify: Notify;
+  initialSelection?: string;
+  onOpenDataset: (
+    selection: string,
+    destination: 'Film Room' | 'Reports' | 'Gameplanning',
+  ) => void;
 }) {
   const [unit, setUnit] = useState('Offence');
   const [included, setIncluded] = useState<string[]>([]);
@@ -5883,7 +6002,16 @@ function GameplanningView({
   const [objectives, setObjectives] = useState(initialGameplanObjectives);
   const [callBuckets, setCallBuckets] = useState(initialGameplanBuckets);
   const [gameplanPlays, setGameplanPlays] = useState<StudioPlay[]>([]);
-  const [gameplanFilm, setGameplanFilm] = useState<FilmClipRecord[]>([]);
+  const [gameplanFilm, setGameplanFilm] = useState<ReportClip[]>([]);
+  const [evidenceFilms, setEvidenceFilms] = useState<Record<string, string>>(
+    {},
+  );
+  const [filmSelection, setFilmSelection] = useState<string | null>(null);
+  const [evidenceLoad, setEvidenceLoad] = useState<
+    'loading' | 'ready' | 'error'
+  >('loading');
+  const [evidenceLabel, setEvidenceLabel] = useState('Loading film evidence');
+  const [evidenceRetry, setEvidenceRetry] = useState(0);
   const [objectiveDialogOpen, setObjectiveDialogOpen] = useState(false);
   const [sectionDialogOpen, setSectionDialogOpen] = useState(false);
   const [installChoices, setInstallChoices] = useState<InstallPackage[]>([]);
@@ -5897,32 +6025,28 @@ function GameplanningView({
   const [savingPlan, setSavingPlan] = useState(false);
   const planSaveLock = useRef(false);
   const insights = gameplanFilm
-    .filter((clip) => clip.note || clip.concept || clip.tags.length)
-    .slice(0, 8)
+    .filter(
+      (clip) =>
+        clip.odk === unit && (clip.note || clip.concept || clip.tags.length),
+    )
     .map((clip) => ({
       id: clip.id,
       title: clipLabel(clip),
-      detail:
+      detail: [
+        evidenceFilms[clip.assetId],
         clip.note ||
-        [clip.odk, clip.result].filter(Boolean).join(' · ') ||
-        'Charted film clip',
+          [clip.odk, clip.result].filter(Boolean).join(' · ') ||
+          'Charted film clip',
+      ]
+        .filter(Boolean)
+        .join(' · '),
       clips: 1,
     }));
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      loadGameplan(),
-      loadPlaybookData(),
-      fetch('/api/film', { cache: 'no-store' }).then(async (response) => {
-        if (!response.ok) throw new Error('Unable to load film observations.');
-        const data = (await response.json()) as FilmPayload;
-        if (!Array.isArray(data.clips))
-          throw new Error('The film response was incomplete.');
-        return data;
-      }),
-    ])
-      .then(([state, playbook, film]) => {
+    Promise.all([loadGameplan(), loadPlaybookData()])
+      .then(([state, playbook]) => {
         if (cancelled) return;
         const saved = linkGameplanPlays(state, playbook.plays);
         setUnit(saved.unit);
@@ -5930,7 +6054,7 @@ function GameplanningView({
         setObjectives(saved.objectives);
         setCallBuckets(saved.callBuckets);
         setGameplanPlays(playbook.plays);
-        setGameplanFilm(film.clips);
+        setFilmSelection(initialSelection || saved.filmSelection || 'all');
         setPlanLoad('ready');
       })
       .catch(() => {
@@ -5939,7 +6063,35 @@ function GameplanningView({
     return () => {
       cancelled = true;
     };
-  }, [planRetry]);
+  }, [planRetry, initialSelection]);
+
+  useEffect(() => {
+    if (filmSelection === null) return;
+    const controller = new AbortController();
+    let active = true;
+    loadReportDataset(filmSelection, fetch, controller.signal)
+      .then((dataset) => {
+        if (!active) return;
+        setGameplanFilm(dataset.clips);
+        setEvidenceFilms(
+          Object.fromEntries(
+            dataset.assets.map((asset) => [asset.id, asset.title]),
+          ),
+        );
+        setEvidenceLabel(dataset.label);
+        setEvidenceLoad('ready');
+      })
+      .catch(() => {
+        if (!active) return;
+        controller.abort();
+        setGameplanFilm([]);
+        setEvidenceLoad('error');
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [filmSelection, evidenceRetry]);
 
   const saveGameplan = async (changes: {
     unit?: string;
@@ -5951,6 +6103,7 @@ function GameplanningView({
     planSaveLock.current = true;
     setSavingPlan(true);
     const next = {
+      filmSelection: filmSelection ?? 'all',
       unit: changes.unit ?? unit,
       included: changes.included ?? included,
       objectives: changes.objectives ?? objectives,
@@ -6134,7 +6287,7 @@ function GameplanningView({
       >
         <Button
           className="module-secondary"
-          onClick={() => onNavigate('Reports')}
+          onClick={() => onOpenDataset(filmSelection ?? 'all', 'Reports')}
           variant="outline"
         >
           <SlidersHorizontal /> Open reports
@@ -6175,19 +6328,23 @@ function GameplanningView({
       <div className="workflow-stepper">
         <button
           className={gameplanFilm.length ? 'complete' : ''}
-          onClick={() => onNavigate('Film Room')}
+          onClick={() => onOpenDataset(filmSelection ?? 'all', 'Film Room')}
           type="button"
         >
           <span>{gameplanFilm.length ? <Check /> : '1'}</span>
           <div>
-            <strong>Film charted</strong>
-            <small>{gameplanFilm.length} saved clips</small>
+            <strong>Film evidence</strong>
+            <small>
+              {evidenceLoad === 'ready'
+                ? `${evidenceLabel} · ${gameplanFilm.length} clips`
+                : 'Film evidence unavailable or loading'}
+            </small>
           </div>
         </button>
         <i />
         <button
           className={insights.length ? 'complete' : ''}
-          onClick={() => onNavigate('Reports')}
+          onClick={() => onOpenDataset(filmSelection ?? 'all', 'Reports')}
           type="button"
         >
           <span>{insights.length ? <Check /> : '2'}</span>
@@ -6280,7 +6437,32 @@ function GameplanningView({
           ))}
           {!insights.length ? (
             <div className="channel-empty">
-              No film observations yet. Add notes or tags while charting clips.
+              {evidenceLoad === 'loading'
+                ? 'Loading film observations…'
+                : evidenceLoad === 'error'
+                  ? 'Unable to load this film dataset. Your saved plan is still available.'
+                  : 'No film observations yet. Add notes or tags while charting clips.'}
+              {evidenceLoad === 'error' ? (
+                <>
+                  <Button
+                    onClick={() => {
+                      setEvidenceLoad('loading');
+                      setEvidenceRetry((value) => value + 1);
+                    }}
+                  >
+                    Retry evidence
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setEvidenceLoad('loading');
+                      setFilmSelection('all');
+                      setEvidenceRetry((value) => value + 1);
+                    }}
+                  >
+                    Use all saved films
+                  </Button>
+                </>
+              ) : null}
             </div>
           ) : null}
         </aside>

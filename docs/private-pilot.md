@@ -18,13 +18,13 @@ A private, authenticated ChalkTalk workspace usable on laptop, iPhone and tablet
 
 The isolated tests apply the actual hosted SQL to a fresh database, verify that domain tables are empty, exercise unauthenticated rejection and first-time onboarding, create two owners, prove team-specific Playbook reads and attempted cross-team modification rejection, and prove team-prefixed media read/write/delete isolation. The earlier Playbook/Install tests continue exercising the actual handlers against the prototype fixture.
 
-The first private deployment succeeded. The hosting policy was checked: owner only, no other visitors. Initially the deployed database's 20 expected tables were read back as empty. Browser verification reached the real ChatGPT sign-in gate. On November 7 the owner reported seeing “Create your team” after signing in, confirming the intended first-team screen. Actual team creation and cross-device persistence remain to be verified; the initial empty-table observation is not a statement about today's hosted records.
+The first private deployment succeeded. The hosting policy was checked: owner only, no other visitors. Initially the deployed database's 20 expected tables were read back as empty. Browser verification reached the real ChatGPT sign-in gate. On November 7 the owner reported seeing “Create your team” after signing in, confirming the intended first-team screen. The owner subsequently created a team and reported seeing the same team workspace after signing in on another device. Individual saved records and uploaded files still need cross-device verification; the initial empty-table observation is not a statement about today's hosted records.
 
 Follow-up work removed simulated invitations, disconnected notification/schedule controls, and hard-coded account identity from Settings. Phone (390 × 844) and tablet (820 × 1180) browser checks verified the full section menu, Settings and Playbook library. A tablet-only empty sidebar gap was corrected. Profile saves update both workspace settings and team/session identity atomically, with an isolation test.
 
 The first-time film workflow was hardened after real browser checks exposed a missing sample-game dependency, fixed-key overwrites, an inert library selector, an unsafe New clip fallback, and a framework upload-size interception. The fixes and remaining verification limits are documented in [film-hardening.md](film-hardening.md).
 
-Viewport checks do not prove physical iPhone/iPad touch behaviour. Sign-in, backup recovery, cross-device persistence and real coaching workflows still require verification before handoff.
+Viewport checks do not prove physical iPhone/iPad touch behaviour. Owner-reported sign-in and shared team access are verified. Backup recovery, individual saved records and uploaded files across devices, and real coaching workflows still require verification before handoff.
 
 ## Remaining handoff gates
 
@@ -41,3 +41,4 @@ Home now checks successful, complete calendar/install responses before showing c
 ## Hosting identity
 
 The private pilot registration is recorded in `.openai/hosting.json`. An expected URL from registration is not evidence of deployment. Reuse that project ID; never register another Site merely because deployment or source synchronization fails.
+

@@ -1,5 +1,6 @@
 export const GAMEPLAN_KEY = 'gameplan-active-v3';
 export type GameplanState = {
+  filmSelection?: string;
   unit: string;
   included: string[];
   objectives: { title: string; detail: string; target: string }[];
@@ -16,6 +17,9 @@ export function validateGameplan(value: unknown): GameplanState {
     Array.isArray(items) && items.every((item) => typeof item === 'string');
   if (
     !state ||
+    (state.filmSelection !== undefined &&
+      (typeof state.filmSelection !== 'string' ||
+        state.filmSelection.length > 200)) ||
     !['Offence', 'Defence', 'Special teams'].includes(state.unit) ||
     !strings(state.included) ||
     !Array.isArray(state.objectives) ||

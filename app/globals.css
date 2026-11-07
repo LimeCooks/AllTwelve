@@ -1979,3 +1979,13 @@ html { background: #f4f7fb; }
   .pb-editor-tools button span { display: none; }
   .pb-edit-palette { width: min(690px,calc(100% - 26px)); }
 }
+
+/* Reports keep the data visible and secondary explanations folded away. */
+.reports-layout.reports-focused { display: block; }
+.reports-focused .reports-rail { margin-top: 16px; }
+.reports-focused summary { cursor: pointer; padding: 12px 0; font-size: 14px; font-weight: 600; }
+.reports-table-wrap { max-width: 100%; overflow-x: auto; margin-top: 16px; }
+.reports-data-table { width: 100%; min-width: 650px; border-collapse: collapse; font-size: 13px; text-align: left; }
+.reports-data-table th, .reports-data-table td { padding: 13px 12px; border-bottom: 1px solid #344758; vertical-align: top; }
+.reports-data-table thead th { color: #a7bdcf; font-size: 12px; }
+.report-method, .report-scope { font-size: 13px; line-height: 1.6; color: #a7bdcf; margin: 12px 0; }
