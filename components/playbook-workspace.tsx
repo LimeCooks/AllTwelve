@@ -6,7 +6,6 @@ import {
   Copy,
   Pencil,
   Plus,
-  Printer,
   Settings,
   Trash2,
 } from 'lucide-react';
@@ -72,7 +71,6 @@ export function PlaybookWorkspace({
     | null
   >(null);
   const [deletingId, setDeletingId] = useState('');
-  const [printIds, setPrintIds] = useState<string[]>([]);
   const [packs, setPacks] = useState<Pack[]>([]),
     [reviews, setReviews] = useState<Review[]>([]);
   const [draftInstalls, setDraftInstalls] = useState<Pack[]>([]),
@@ -508,65 +506,6 @@ export function PlaybookWorkspace({
                 names are optional and entirely yours.
               </p>
             </div>
-          ) : null}
-        </>
-      ) : view === 'Printouts' ? (
-        <>
-          <header className="pd-library-header">
-            <div>
-              <h1>Printouts</h1>
-              <p>Select saved plays for a printable teaching sheet.</p>
-            </div>
-            <Button disabled={!printIds.length} onClick={() => window.print()}>
-              <Printer /> Print {printIds.length || ''}
-            </Button>
-          </header>
-          <div className="pd-print-picker">
-            {data.plays.map((p) => (
-              <label key={p.id} htmlFor="pw-control-1">
-                <input
-                  id="pw-control-1"
-                  type="checkbox"
-                  checked={printIds.includes(p.id)}
-                  onChange={(event) =>
-                    setPrintIds((ids) =>
-                      event.target.checked
-                        ? [...ids, p.id]
-                        : ids.filter((id) => id !== p.id),
-                    )
-                  }
-                />
-                {p.name}
-                <span>{p.unit}</span>
-              </label>
-            ))}
-          </div>
-          <div className="pd-print-sheets">
-            {data.plays
-              .filter((p) => printIds.includes(p.id))
-              .map((p) => (
-                <article key={p.id}>
-                  <h2>{p.name}</h2>
-                  <p>
-                    {p.unit} · {p.formation}
-                  </p>
-                  <PlayField drawing={p} name={p.name} heightYards={60} />
-                  <p>{p.notes}</p>
-                  {p.assignments?.map((a) => (
-                    <p key={a.id}>
-                      <strong>
-                        {a.position}: {a.title}
-                      </strong>{' '}
-                      {a.detail}
-                    </p>
-                  ))}
-                </article>
-              ))}
-          </div>
-          {!data.plays.length ? (
-            <p className="pd-empty">
-              Save plays in Playbook before creating printouts.
-            </p>
           ) : null}
         </>
       ) : view === 'Learn' ? (

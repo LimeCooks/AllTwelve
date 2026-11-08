@@ -1,5 +1,6 @@
 'use client';
 import { useId, type PointerEvent as ReactPointerEvent } from 'react';
+import { inkColour } from '@/lib/print-layout';
 import { fieldViewport } from '@/lib/field-camera';
 import {
   normalizeDrawing,
@@ -14,6 +15,8 @@ export function PlayField({
   drawing,
   name,
   selected = '',
+  printMode = false,
+  viewportOverride,
   heightYards = 60,
   zoom = 1,
   pan = { x: 0, y: 0 },
@@ -24,6 +27,8 @@ export function PlayField({
   drawing: Drawing;
   name: string;
   selected?: string;
+  printMode?: boolean;
+  viewportOverride?: { x: number; y: number; width: number; height: number };
   heightYards?: number;
   zoom?: number;
   pan?: { x: number; y: number };
@@ -41,17 +46,15 @@ export function PlayField({
           .map((route) => route.id),
   );
   const uid = useId().replaceAll(':', '');
-  const viewport = fieldViewport(
-    yardY(scene.fieldPosition),
-    heightYards,
-    zoom,
-    pan,
-  );
+  const viewport =
+    viewportOverride ??
+    fieldViewport(yardY(scene.fieldPosition), heightYards, zoom, pan);
+  const tone = (colour: string) => (printMode ? inkColour(colour) : colour);
   const marker = (id: string) => `${uid}-${id}`;
   const player = (p: Player, opponent = false) => {
     const active =
       selected === `player:${p.id}` || selected === `opponent:${p.id}`;
-    const colour = p.colour ?? (opponent ? '#8794a2' : '#dce5ef');
+    const colour = tone(p.colour ?? (opponent ? '#8794a2' : '#dce5ef'));
     return (
       <g
         className={`pd-player${active ? ' selected' : ''}${opponent ? ' opponent' : ''}`}
@@ -70,7 +73,7 @@ export function PlayField({
         {p.symbol === 'triangle' ? (
           <path
             d="M0 -10 L10 8 L-10 8 Z"
-            fill="#18242e"
+            fill={printMode ? '#ffffff' : '#18242e'}
             stroke={colour}
             strokeWidth="1.6"
           />
@@ -81,12 +84,17 @@ export function PlayField({
             width="16"
             height="16"
             rx="1"
-            fill="#18242e"
+            fill={printMode ? '#ffffff' : '#18242e'}
             stroke={colour}
             strokeWidth="1.6"
           />
         ) : (
-          <circle r="8.5" fill="#18242e" stroke={colour} strokeWidth="1.6" />
+          <circle
+            r="8.5"
+            fill={printMode ? '#ffffff' : '#18242e'}
+            stroke={colour}
+            strokeWidth="1.6"
+          />
         )}
         <text y={p.symbol === 'triangle' ? 4 : 2.6} fill={colour}>
           {p.label}
@@ -96,7 +104,7 @@ export function PlayField({
   };
   return (
     <svg
-      className="pd-field"
+      className={printMode ? 'pd-field pd-field-print' : 'pd-field'}
       aria-label={`${name} football diagram`}
       viewBox={`${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}`}
       preserveAspectRatio="xMidYMid meet"
@@ -107,6 +115,9 @@ export function PlayField({
       onLostPointerCapture={onPointerUp}
     >
       <title>{name}</title>
+      {printMode ? (
+        <style>{`.pd-field-print .pd-yard{stroke:#c2cbd3;stroke-width:.8}.pd-field-print .pd-yard.major{stroke:#9aa9b6;stroke-width:1}.pd-field-print .pd-sideline{stroke:#5f7181;stroke-width:1.2}.pd-field-print .pd-hash{stroke:#93a2af;stroke-width:.8}.pd-field-print .pd-number{fill:#5b6d7c;font:700 14px Arial,sans-serif;text-anchor:middle;opacity:.8}.pd-field-print .pd-los{stroke:#536f83;stroke-width:1.4;stroke-dasharray:5 4}.pd-field-print .pd-player text{font:700 8px Arial,sans-serif;text-anchor:middle}.pd-field-print .pd-label{font:600 11px Arial,sans-serif;text-anchor:middle}.pd-field-print .pd-player.opponent{opacity:.7}`}</style>
+      ) : null}
       <defs>
         {scene.routes
           .filter((route) => !hiddenRoutes.has(route.id))
@@ -123,11 +134,11 @@ export function PlayField({
               markerUnits="userSpaceOnUse"
             >
               {r.ending === 'bar' ? (
-                <path d="M6 0 L6 8" stroke={r.colour} strokeWidth="2" />
+                <path d="M6 0 L6 8" stroke={tone(r.colour)} strokeWidth="2" />
               ) : (
                 <path
                   d="M0 0 L6 4 L0 8"
-                  stroke={r.colour}
+                  stroke={tone(r.colour)}
                   strokeWidth="1.6"
                   fill="none"
                 />
@@ -135,9 +146,27 @@ export function PlayField({
             </marker>
           ))}
       </defs>
-      <rect x="0" y="-1500" width="720" height="4500" fill="#202b34" />
-      <rect x="35" y="-100" width="650" height="200" fill="#283540" />
-      <rect x="35" y="1200" width="650" height="200" fill="#283540" />
+      <rect
+        x="0"
+        y="-1500"
+        width="720"
+        height="4500"
+        fill={printMode ? '#ffffff' : '#202b34'}
+      />
+      <rect
+        x="35"
+        y="-100"
+        width="650"
+        height="200"
+        fill={printMode ? '#f0f3f5' : '#283540'}
+      />
+      <rect
+        x="35"
+        y="1200"
+        width="650"
+        height="200"
+        fill={printMode ? '#f0f3f5' : '#283540'}
+      />
       {[-100, 1400].map((y) => (
         <line
           key={y}
@@ -241,17 +270,17 @@ export function PlayField({
                 y={z.y}
                 width={z.width}
                 height={z.height}
-                fill={z.colour}
+                fill={tone(z.colour)}
                 fillOpacity={z.opacity ?? 0.25}
-                stroke={z.colour}
+                stroke={tone(z.colour)}
                 strokeWidth="1"
               />
             ) : z.shape === 'triangle' ? (
               <path
                 d={`M${z.x + z.width / 2} ${z.y} L${z.x + z.width} ${z.y + z.height} L${z.x} ${z.y + z.height} Z`}
-                fill={z.colour}
+                fill={tone(z.colour)}
                 fillOpacity={z.opacity ?? 0.25}
-                stroke={z.colour}
+                stroke={tone(z.colour)}
                 strokeWidth="1"
               />
             ) : (
@@ -260,9 +289,9 @@ export function PlayField({
                 cy={z.y + z.height / 2}
                 rx={z.width / 2}
                 ry={z.height / 2}
-                fill={z.colour}
+                fill={tone(z.colour)}
                 fillOpacity={z.opacity ?? 0.25}
-                stroke={z.colour}
+                stroke={tone(z.colour)}
                 strokeWidth="1"
               />
             )}
@@ -293,7 +322,7 @@ export function PlayField({
                     height={index === 0 ? 18 : 6}
                     rx="2"
                     fill="#f4f7fa"
-                    stroke={z.colour}
+                    stroke={tone(z.colour)}
                     strokeWidth="1"
                     style={{ cursor: index === 0 ? 'ew-resize' : 'ns-resize' }}
                   />
@@ -323,7 +352,7 @@ export function PlayField({
               <path
                 d={path}
                 fill="none"
-                stroke={r.colour}
+                stroke={tone(r.colour)}
                 strokeWidth={selected === `route:${r.id}` ? 2.3 : 1.7}
                 strokeDasharray={
                   r.lineStyle === 'dashed'
@@ -351,7 +380,7 @@ export function PlayField({
                         cy={p.y}
                         r="4"
                         fill="#f3f7fb"
-                        stroke={r.colour}
+                        stroke={tone(r.colour)}
                         strokeWidth="1.5"
                       />
                     ))
@@ -370,7 +399,7 @@ export function PlayField({
           key={l.id}
           x={l.x}
           y={l.y}
-          fill={l.colour}
+          fill={tone(l.colour)}
           className={
             selected === `label:${l.id}` ? 'pd-label selected' : 'pd-label'
           }

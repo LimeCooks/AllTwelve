@@ -1,4 +1,5 @@
 'use client';
+import { PrintoutsWorkspace } from '@/components/printouts-workspace';
 import { MessagesWorkspace } from '@/components/messages-workspace';
 import { BackupControls } from '@/components/backup-controls';
 import { SidelineWorkspace } from '@/components/sideline-workspace';
@@ -1941,11 +1942,14 @@ function ModuleView({
         onEditingChange={onPlayEditingChange}
       />
     );
-  if (
-    ['Playbook', 'Formations', 'Learn', 'Printouts', 'Leaderboard'].includes(
-      view,
-    )
-  )
+  if (view === 'Printouts')
+    return (
+      <PrintoutsWorkspace
+        onNavigate={onNavigate}
+        onEditingChange={onPlayEditingChange}
+      />
+    );
+  if (['Playbook', 'Formations', 'Learn', 'Leaderboard'].includes(view))
     return (
       <PlaybookWorkspace
         initialPlayId={searchTarget?.kind === 'play' ? searchTarget.id : ''}
