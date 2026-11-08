@@ -1,3 +1,5 @@
+import { prepareCreation, CreationError } from '@/lib/playbook-creation';
+import { WorkspaceAccessError } from '@/lib/workspace-identity';
 import { getDatabase, type TeamDatabase } from '@/db/client';
 import { validatePlayDiagram } from '@/lib/validate-play';
 import { startingPlayers } from '@/lib/play-designer';
@@ -224,14 +226,18 @@ async function payload(database: TeamDatabase) {
 export async function GET() {
   try {
     const database = await getDatabase();
-    return Response.json(await payload(database));
+    return Response.json(await payload(database), {
+      headers: { 'cache-control': 'private, no-store' },
+    });
   } catch (error) {
     return Response.json(
       {
         error:
-          error instanceof Error ? error.message : 'Unable to load playbooks.',
+          error instanceof WorkspaceAccessError
+            ? error.message
+            : 'Unable to load playbooks. Please retry.',
       },
-      { status: 500 },
+      { status: error instanceof WorkspaceAccessError ? error.status : 500 },
     );
   }
 }
@@ -239,7 +245,15 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as Record<string, unknown>;
+    if (!body || typeof body !== 'object' || Array.isArray(body))
+      throw new CreationError('Enter valid creation details.', 400);
     const database = await getDatabase();
+    const creation = await prepareCreation(database, body);
+    if (creation.replay)
+      return Response.json({
+        ...(await payload(database)),
+        createdId: creation.id,
+      });
     const now = new Date().toISOString();
     if (body.kind === 'duplicate') {
       const sourceId = text(body.id);
@@ -248,7 +262,7 @@ export async function POST(request: Request) {
         .bind(sourceId, database.teamId)
         .first<{ id: string; name: string }>();
       if (!source) throw new Error('Play not found.');
-      const id = crypto.randomUUID();
+      let id = creation.id;
       const sourceAssignments = await database
         .prepare(
           'SELECT position, title, detail, sort_order FROM play_assignments WHERE play_id = ?',
@@ -260,12 +274,19 @@ export async function POST(request: Request) {
           detail: string;
           sort_order: number;
         }>();
-      await database.batch([
+      id = await creation.commit([
         database
           .prepare(
             `INSERT INTO plays (id, team_id, playbook_id, formation_id, name, unit, category, family, concept, diagram_json, notes, created_at, updated_at) SELECT ?, team_id, playbook_id, formation_id, ?, unit, category, family, concept, diagram_json, notes, ?, ? FROM plays WHERE id = ? AND team_id = ?`,
           )
-          .bind(id, `${source.name} — copy`, now, now, sourceId, database.teamId),
+          .bind(
+            id,
+            `${source.name} — copy`,
+            now,
+            now,
+            sourceId,
+            database.teamId,
+          ),
         ...sourceAssignments.results.map((assignment) =>
           database
             .prepare(
@@ -291,15 +312,19 @@ export async function POST(request: Request) {
       if (!name) throw new Error('Playbook name is required.');
       if (!validSide(body.side))
         throw new Error('Choose a valid playbook system.');
-      const id = crypto.randomUUID();
-      await database
-        .prepare(
-          `INSERT INTO playbooks (id, team_id, name, side, archived, created_at, updated_at)
+      let id = creation.id;
+      id = await creation.commit([
+        database
+          .prepare(
+            `INSERT INTO playbooks (id, team_id, name, side, archived, created_at, updated_at)
          VALUES (?, ?, ?, ?, 0, ?, ?)`,
-        )
-        .bind(id, database.teamId, name, body.side, now, now)
-        .run();
-      return Response.json(await payload(database), { status: 201 });
+          )
+          .bind(id, database.teamId, name, body.side, now, now),
+      ]);
+      return Response.json(
+        { ...(await payload(database)), createdId: id },
+        { status: 201 },
+      );
     }
     if (body.kind === 'play') {
       const name = text(body.name, 'Untitled play');
@@ -308,7 +333,7 @@ export async function POST(request: Request) {
       const category = text(body.category, 'Uncategorized');
       const family = validFamily(body.family) ? body.family : 'Unassigned';
       const concept = text(body.concept, 'New concept');
-      const id = crypto.randomUUID();
+      let id = creation.id;
       const book = await database
         .prepare('SELECT id, side FROM playbooks WHERE id = ? AND team_id = ?')
         .bind(playbookId, database.teamId)
@@ -331,44 +356,45 @@ export async function POST(request: Request) {
         throw new Error(
           'Choose your team’s formation for this side of the ball.',
         );
-      await database
-        .prepare(
-          `INSERT INTO plays (id, team_id, playbook_id, formation_id, name, unit, category, family, concept, diagram_json, notes, created_at, updated_at)
+      id = await creation.commit([
+        database
+          .prepare(
+            `INSERT INTO plays (id, team_id, playbook_id, formation_id, name, unit, category, family, concept, diagram_json, notes, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)`,
-        )
-        .bind(
-          id,
-          database.teamId,
-          playbookId,
-          formationId,
-          name,
-          book.side,
-          category,
-          family,
-          concept,
-          JSON.stringify(
-            formation
-              ? {
-                  ...parseDiagram(formation.layout_json),
-                  routes: [],
-                  zones: [],
-                  labels: [],
-                  showOpponent: false,
-                }
-              : {
-                  diagramVersion: 2,
-                  routes: [],
-                  players: startingPlayers(book.side),
-                  zones: [],
-                  labels: [],
-                  fieldPosition: 55,
-                  showOpponent: false,
-                },
+          )
+          .bind(
+            id,
+            database.teamId,
+            playbookId,
+            formationId,
+            name,
+            book.side,
+            category,
+            family,
+            concept,
+            JSON.stringify(
+              formation
+                ? {
+                    ...parseDiagram(formation.layout_json),
+                    routes: [],
+                    zones: [],
+                    labels: [],
+                    showOpponent: false,
+                  }
+                : {
+                    diagramVersion: 2,
+                    routes: [],
+                    players: startingPlayers(book.side),
+                    zones: [],
+                    labels: [],
+                    fieldPosition: 55,
+                    showOpponent: false,
+                  },
+            ),
+            now,
+            now,
           ),
-          now,
-          now,
-        )
-        .run();
+      ]);
       return Response.json(
         { ...(await payload(database)), createdId: id },
         { status: 201 },
@@ -400,21 +426,22 @@ export async function POST(request: Request) {
         players,
       };
       validatePlayDiagram(layout);
-      const id = crypto.randomUUID();
-      await database
-        .prepare(
-          `INSERT INTO formations (id, team_id, name, unit, personnel, layout_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          id,
-          database.teamId,
-          JSON.stringify([name, scope, opponent, packageName]),
-          unit,
-          personnel,
-          JSON.stringify(layout),
-          now,
-        )
-        .run();
+      let id = creation.id;
+      id = await creation.commit([
+        database
+          .prepare(
+            `INSERT INTO formations (id, team_id, name, unit, personnel, layout_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            id,
+            database.teamId,
+            JSON.stringify([name, scope, opponent, packageName]),
+            unit,
+            personnel,
+            JSON.stringify(layout),
+            now,
+          ),
+      ]);
       return Response.json(
         { ...(await payload(database)), createdId: id },
         { status: 201 },
@@ -424,7 +451,14 @@ export async function POST(request: Request) {
   } catch (error) {
     return Response.json(
       { error: errorMessage(error, 'Unable to create record.') },
-      { status: 400 },
+      {
+        status:
+          error instanceof CreationError
+            ? error.status
+            : error instanceof WorkspaceAccessError
+              ? error.status
+              : 400,
+      },
     );
   }
 }

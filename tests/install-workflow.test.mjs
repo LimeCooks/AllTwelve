@@ -67,6 +67,10 @@ const dbUrl = await moduleUrl('../db/client.ts', [
 const validatorUrl = await moduleUrl('../lib/validate-play.ts');
 const designerUrl = await moduleUrl('../lib/play-designer.ts');
 const replacements = [
+  [
+    "'@/lib/playbook-creation'",
+    JSON.stringify(await moduleUrl('../lib/playbook-creation.ts')),
+  ],
   ["'@/lib/workspace-identity'", JSON.stringify(identityUrl)],
   ["'@/db/client'", JSON.stringify(dbUrl)],
   ["'@/lib/validate-play'", JSON.stringify(validatorUrl)],
@@ -659,4 +663,109 @@ test('deleting an opponent persists coherent routes and detached coverage, while
       .name,
     'Linked defence',
   );
+});
+
+test('creation retries return exact IDs without duplicate books, plays, formations or assignments', async () => {
+  const creationId = crypto.randomUUID();
+  const body = {
+    kind: 'book',
+    name: 'Retry defence',
+    side: 'Defence',
+    creationId,
+  };
+  const first = ok(await call(playbooks, 'POST', body));
+  const retry = ok(
+    await call(playbooks, 'POST', {
+      creationId,
+      side: 'Defence',
+      name: 'Retry defence',
+      kind: 'book',
+    }),
+  );
+  assert.equal(retry.createdId, first.createdId);
+  assert.equal(retry.books.filter((b) => b.name === body.name).length, 1);
+  assert.equal(
+    (await call(playbooks, 'POST', { ...body, name: 'Changed' })).status,
+    409,
+  );
+  assert.equal(
+    (await call(playbooks, 'POST', { ...body, creationId: 'bad' })).status,
+    400,
+  );
+  const invalidId = crypto.randomUUID();
+  assert.equal(
+    (
+      await call(playbooks, 'POST', {
+        kind: 'book',
+        side: 'Defence',
+        creationId: invalidId,
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    sqlite
+      .prepare('SELECT count(*) n FROM workspace_state WHERE state_key = ?')
+      .get('pb-create-' + invalidId).n,
+    0,
+  );
+  const playBody = {
+    kind: 'play',
+    name: 'Retry coverage',
+    playbookId: first.createdId,
+    creationId: crypto.randomUUID(),
+  };
+  const play = ok(await call(playbooks, 'POST', playBody));
+  assert.equal(
+    ok(await call(playbooks, 'POST', playBody)).createdId,
+    play.createdId,
+  );
+  sqlite
+    .prepare(
+      'INSERT INTO play_assignments (id,play_id,position,title,detail,sort_order) VALUES (?,?,?,?,?,?)',
+    )
+    .run(crypto.randomUUID(), play.createdId, 'FS', 'Read', 'Deep middle', 0);
+  const copyBody = {
+    kind: 'duplicate',
+    id: play.createdId,
+    creationId: crypto.randomUUID(),
+  };
+  const copy = ok(await call(playbooks, 'POST', copyBody));
+  assert.equal(
+    ok(await call(playbooks, 'POST', copyBody)).createdId,
+    copy.createdId,
+  );
+  assert.equal(
+    sqlite
+      .prepare('SELECT count(*) n FROM play_assignments WHERE play_id = ?')
+      .get(copy.createdId).n,
+    1,
+  );
+  const formationBody = {
+    kind: 'formation',
+    name: 'Retry 6-Pack',
+    unit: 'Defence',
+    scope: 'team',
+    creationId: crypto.randomUUID(),
+  };
+  const formation = ok(await call(playbooks, 'POST', formationBody));
+  assert.equal(
+    ok(await call(playbooks, 'POST', formationBody)).createdId,
+    formation.createdId,
+  );
+  ok(
+    await call(playbooks, 'DELETE', {
+      kind: 'formation',
+      id: formation.createdId,
+    }),
+  );
+  assert.equal((await call(playbooks, 'POST', formationBody)).status, 409);
+});
+
+test('the browser library validator accepts real saved payloads', async () => {
+  const { parsePlaybookLibrary } = await import(
+    await moduleUrl('../lib/playbook-library.ts', replacements)
+  );
+  const data = ok(await call(playbooks, 'GET'));
+  assert.equal(parsePlaybookLibrary(data).plays.length, data.plays.length);
 });

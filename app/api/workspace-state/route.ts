@@ -66,11 +66,14 @@ export async function PUT(request: NextRequest) {
 
     const database = await getDatabase();
     const updatedAt = new Date().toISOString();
-    if (payload.key === 'private-conversations-v3')
+    if (
+      payload.key === 'private-conversations-v3' ||
+      payload.key?.startsWith('pb-create-')
+    )
       return NextResponse.json(
         {
           error:
-            'Use the conversation service to save messages with a verified author.',
+            'Use the dedicated workspace service to save this protected record.',
         },
         { status: 403 },
       );

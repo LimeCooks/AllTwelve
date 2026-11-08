@@ -78,6 +78,10 @@ const dbUrl = await moduleUrl('../db/client.ts', [
 ]);
 const replacements = [
   [
+    "'@/lib/playbook-creation'",
+    JSON.stringify(await moduleUrl('../lib/playbook-creation.ts')),
+  ],
+  [
     "'@/lib/conversations'",
     JSON.stringify(await moduleUrl('../lib/conversations.ts')),
   ],
@@ -288,6 +292,7 @@ const request = (body) =>
   });
 
 test('fresh hosted migration chain is empty, identity required, owners receive isolated blank teams', async () => {
+  assert.equal((await playbooks.GET()).status, 401);
   for (const table of [
     'teams',
     'athletes',
@@ -534,6 +539,14 @@ test('private conversations preserve legacy records, use trusted authors and sur
     (
       await workspaceState.PUT(
         request({ key: 'private-conversations-v3', value: { threads: [] } }),
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await workspaceState.PUT(
+        request({ key: 'pb-create-protected', value: { createdId: 'forged' } }),
       )
     ).status,
     403,

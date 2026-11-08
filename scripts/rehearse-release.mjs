@@ -473,14 +473,23 @@ try {
   assert.equal(editedAthlete.athlete.id, athlete.athlete.id);
   assert.equal(editedAthlete.athlete.staffNote, 'Private rehearsal note');
   assert.equal(editedAthlete.athlete.status, 'Active');
-  const book = await api(
+  const bookRequest = {
+    kind: 'book',
+    name: 'Rehearsal',
+    side: 'Defence',
+    creationId: crypto.randomUUID(),
+  };
+  const book = await api('/api/playbooks', 'a', bookRequest, 'POST', 201);
+  assert.equal(book.books.length, 1);
+  const retriedBook = await api(
     '/api/playbooks',
     'a',
-    { kind: 'book', name: 'Rehearsal', side: 'Defence' },
+    bookRequest,
     'POST',
-    201,
+    200,
   );
-  assert.equal(book.books.length, 1);
+  assert.equal(retriedBook.createdId, book.createdId);
+  assert.equal(retriedBook.books.length, 1);
   const play = await api(
     '/api/playbooks',
     'a',

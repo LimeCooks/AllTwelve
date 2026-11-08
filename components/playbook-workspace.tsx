@@ -1,5 +1,12 @@
 'use client';
-import { useCallback, useEffect, useState, type SyntheticEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type SyntheticEvent,
+} from 'react';
+import { parsePlaybookLibrary } from '@/lib/playbook-library';
 import {
   ArrowLeft,
   BookOpen,
@@ -71,6 +78,32 @@ export function PlaybookWorkspace({
     | null
   >(null);
   const [deletingId, setDeletingId] = useState('');
+  const mutationLock = useRef(false);
+  const creationIds = useRef(new Map<string, string>());
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [formDirty, setFormDirty] = useState(false);
+  const [discardRequested, setDiscardRequested] = useState(false);
+  useEffect(() => {
+    if (editor) return;
+    onEditingChange(formDirty || busy);
+    const guard = (event: BeforeUnloadEvent) => {
+      if (!formDirty && !busy) return;
+      event.preventDefault();
+    };
+    window.addEventListener('beforeunload', guard);
+    return () => {
+      window.removeEventListener('beforeunload', guard);
+      onEditingChange(false);
+    };
+  }, [editor, formDirty, busy, onEditingChange]);
+  const closeDialog = () => {
+    if (mutationLock.current) return;
+    if (formDirty) {
+      setDiscardRequested(true);
+      return;
+    }
+    setDialog(null);
+  };
   const [packs, setPacks] = useState<Pack[]>([]),
     [reviews, setReviews] = useState<Review[]>([]);
   const [draftInstalls, setDraftInstalls] = useState<Pack[]>([]),
@@ -89,6 +122,15 @@ export function PlaybookWorkspace({
     method: string,
     payload?: Record<string, unknown>,
   ): Promise<Library> => {
+    const fingerprint = method === 'POST' ? JSON.stringify(payload) : '';
+    if (fingerprint) {
+      let creationId = creationIds.current.get(fingerprint);
+      if (!creationId) {
+        creationId = crypto.randomUUID();
+        creationIds.current.set(fingerprint, creationId);
+      }
+      payload = { ...payload, creationId };
+    }
     const response = await fetch('/api/playbooks', {
       method,
       cache: 'no-store',
@@ -102,21 +144,42 @@ export function PlaybookWorkspace({
     const result = (await response.json()) as Library & { error?: string };
     if (!response.ok)
       throw new Error(result.error || 'Unable to save the playbook.');
-    return result;
+    const next = parsePlaybookLibrary(result);
+    if (method === 'POST') {
+      const records =
+        payload?.kind === 'book'
+          ? next.books
+          : payload?.kind === 'formation'
+            ? next.formations
+            : next.plays;
+      if (
+        !next.createdId ||
+        !records.some((record) => record.id === next.createdId)
+      )
+        throw new Error(
+          'The created record could not be confirmed. Retry with the same details.',
+        );
+      creationIds.current.delete(fingerprint);
+    }
+    return next;
   };
   const refresh = useCallback(async () => {
+    setLoading(true);
     try {
       const response = await fetch('/api/playbooks', { cache: 'no-store' });
-      const next = (await response.json()) as Library & { error?: string };
+      const result = (await response.json()) as Library & { error?: string };
       if (!response.ok)
-        throw new Error(next.error || 'Unable to load playbooks.');
+        throw new Error(result.error || 'Unable to load playbooks.');
+      const next = parsePlaybookLibrary(result);
       setData(next);
+      setLoadFailed(false);
       setError(
         initialPlayId && !next.plays.some((play) => play.id === initialPlayId)
           ? 'That play is no longer available.'
           : '',
       );
     } catch (failure) {
+      setLoadFailed(true);
       setError(
         failure instanceof Error
           ? failure.message
@@ -222,7 +285,8 @@ export function PlaybookWorkspace({
     payload: Record<string, unknown>,
     done?: (next: Library) => void,
   ) => {
-    if (busy) return;
+    if (mutationLock.current) return;
+    mutationLock.current = true;
     setBusy(true);
     setError('');
     setNotice('');
@@ -230,10 +294,13 @@ export function PlaybookWorkspace({
       const next = await request(method, payload);
       setData(next);
       setDialog(null);
+      setFormDirty(false);
+      setDiscardRequested(false);
       done?.(next);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Unable to save.');
     } finally {
+      mutationLock.current = false;
       setBusy(false);
     }
   };
@@ -246,10 +313,7 @@ export function PlaybookWorkspace({
         'POST',
         { kind: 'book', name: values.name, side: values.side },
         (next) => {
-          const created = next.books.find(
-            (item) => !data.books.some((old) => old.id === item.id),
-          );
-          if (created) setBookId(created.id);
+          if (next.createdId) setBookId(next.createdId);
         },
       );
     if (dialog === 'book-settings')
@@ -346,6 +410,10 @@ export function PlaybookWorkspace({
       {notice ? <output className="pd-notice">{notice}</output> : null}
       {loading ? (
         <p className="pd-empty">Loading saved work…</p>
+      ) : loadFailed ? (
+        <p className="pd-empty">
+          Your library could not be loaded. Retry above to continue.
+        </p>
       ) : view === 'Formations' ? (
         <>
           <header className="pd-library-header">
@@ -817,7 +885,7 @@ export function PlaybookWorkspace({
       <Dialog
         open={dialog !== null}
         onOpenChange={(open) => {
-          if (!open && !busy) setDialog(null);
+          if (!open) closeDialog();
         }}
       >
         <DialogContent className="athlete-dialog pd-library-dialog">
@@ -846,6 +914,27 @@ export function PlaybookWorkspace({
               {error}
             </p>
           ) : null}
+          {discardRequested ? (
+            <div role="alert">
+              <p>Discard the unsaved changes in this form?</p>
+              <Button
+                variant="outline"
+                onClick={() => setDiscardRequested(false)}
+              >
+                Keep editing
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  setFormDirty(false);
+                  setDiscardRequested(false);
+                  setDialog(null);
+                }}
+              >
+                Discard changes
+              </Button>
+            </div>
+          ) : null}
           {dialog?.startsWith('delete') ? (
             <DialogFooter>
               <Button onClick={() => setDialog(null)} variant="outline">
@@ -869,7 +958,11 @@ export function PlaybookWorkspace({
               </Button>
             </DialogFooter>
           ) : (
-            <form onSubmit={create}>
+            <form
+              onSubmit={create}
+              onChange={() => setFormDirty(true)}
+              inert={busy || discardRequested}
+            >
               <div className="athlete-form-grid">
                 <label className="full" htmlFor="pw-control-2">
                   Name
@@ -968,6 +1061,12 @@ export function PlaybookWorkspace({
               <DialogFooter>
                 {dialog === 'book-settings' ? (
                   <Button
+                    disabled={formDirty || busy}
+                    title={
+                      formDirty
+                        ? 'Save or discard your changes before deleting this playbook.'
+                        : undefined
+                    }
                     onClick={() => {
                       setDeletingId(bookId);
                       setDialog('delete-book');
