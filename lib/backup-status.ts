@@ -75,3 +75,43 @@ export async function readBackupStatus(
     reason: 'ready' as const,
   };
 }
+
+export async function readBackupHistory(
+  cursor?: string,
+  signal?: AbortSignal,
+  fetcher: typeof fetch = fetch,
+) {
+  const response = await fetcher(
+    '/api/backups?history=1' +
+      (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''),
+    { cache: 'no-store', signal },
+  );
+  const value = (await response.json()) as {
+    error?: unknown;
+    backups?: unknown;
+    cursor?: unknown;
+  } | null;
+  if (!response.ok)
+    throw new Error(
+      typeof value?.error === 'string'
+        ? value.error
+        : 'Saved backups could not be loaded.',
+    );
+  if (
+    !Array.isArray(value?.backups) ||
+    value.backups.length > 20 ||
+    (value.cursor !== null && typeof value.cursor !== 'string')
+  )
+    throw new Error(
+      'Backup history was incomplete. Refresh before downloading.',
+    );
+  const backups = value.backups.map(parsePreparedBackup);
+  if (
+    backups.some(
+      (backup) => backup.state !== 'ready' || backup.preserved !== true,
+    ) ||
+    new Set(backups.map((backup) => backup.id)).size !== backups.length
+  )
+    throw new Error('Saved backup details could not be verified.');
+  return { backups, cursor: value.cursor as string | null };
+}

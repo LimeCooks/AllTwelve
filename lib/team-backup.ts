@@ -108,6 +108,7 @@ export async function advanceBackupCopy(
     await bucket.put(backupArchiveKey(teamId, id), JSON.stringify(snapshot), {
       onlyIf: { etagDoesNotMatch: '*' },
       httpMetadata: { contentType: 'application/json' },
+      customMetadata: { overview: JSON.stringify(backupOverview(snapshot)) },
     });
   };
   if (snapshot.copiedFiles === snapshot.media.length) {
@@ -277,4 +278,80 @@ export async function createTeamBackup(
       'This workspace needs an assisted backup because its records exceed 16 MB.',
     );
   return snapshot;
+}
+
+export const backupOverview = (snapshot: TeamBackup) => ({
+  retainedHistory: true,
+  copiedFiles: snapshot.copiedFiles,
+  preserved: snapshot.copiedFiles !== undefined,
+  state:
+    snapshot.copiedFiles !== undefined &&
+    snapshot.copiedFiles < snapshot.media.length
+      ? 'copying'
+      : 'ready',
+  id: snapshot.id,
+  createdAt: snapshot.createdAt,
+  expiresAt: new Date(
+    Date.parse(snapshot.createdAt) + 24 * 60 * 60 * 1000,
+  ).toISOString(),
+  parts: snapshot.parts,
+  mediaBytes: snapshot.mediaBytes,
+  mediaFiles: snapshot.media.length,
+  records: Object.values(snapshot.tables).reduce(
+    (n, rows) => n + rows.length,
+    0,
+  ),
+});
+
+export async function listBackupHistory(
+  bucket: R2Bucket,
+  teamId: string,
+  cursor?: string,
+) {
+  if (cursor && cursor.length > 4096)
+    throw new BackupError(
+      'The backup history page could not be read. Refresh history.',
+    );
+  const prefix = `_backups/${teamId}/manifests/`;
+  const page = await bucket.list({
+    prefix,
+    cursor,
+    limit: 20,
+    include: ['customMetadata'],
+  } as R2ListOptions);
+  const backups: ReturnType<typeof backupOverview>[] = [];
+  for (const object of page.objects) {
+    const id = object.key.slice(prefix.length).replace(/\.json$/, '');
+    if (
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+        id,
+      )
+    )
+      throw new BackupError('A saved backup record could not be verified.');
+    let overview: ReturnType<typeof backupOverview>;
+    if (object.customMetadata?.overview)
+      overview = JSON.parse(object.customMetadata.overview);
+    else {
+      const saved = await bucket.get(object.key);
+      if (!saved)
+        throw new BackupError('Backup history changed. Refresh to continue.');
+      const snapshot = await saved.json<TeamBackup>();
+      if (
+        snapshot.teamId !== teamId ||
+        snapshot.id !== id ||
+        snapshot.copiedFiles !== snapshot.media.length
+      )
+        throw new BackupError('A saved backup record could not be verified.');
+      overview = backupOverview(snapshot);
+    }
+    if (overview.id !== id || overview.state !== 'ready' || !overview.preserved)
+      throw new BackupError('A saved backup record could not be verified.');
+    backups.push(overview);
+  }
+  return {
+    backups: backups.sort(
+      (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
+    ),
+    cursor: page.truncated ? page.cursor : null,
+  };
 }

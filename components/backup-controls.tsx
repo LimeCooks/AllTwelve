@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { BackupHistory } from '@/components/backup-history';
 import {
   parsePreparedBackup,
   readBackupStatus,
@@ -200,7 +201,11 @@ export function BackupControls() {
               : ''}
           </p>
           <p>
-            Download links expire {new Date(backup.expiresAt).toLocaleString()}.
+            Current preparation links expire{' '}
+            {new Date(backup.expiresAt).toLocaleString()}.
+            {backup.preserved
+              ? ' The completed recovery copy also remains in Saved backup history.'
+              : ''}
             You can return here on another device using the same account.
           </p>
           {backup.parts > 1 ? (
@@ -232,6 +237,7 @@ export function BackupControls() {
           </p>
         </div>
       ) : null}
+      <BackupHistory key={backup?.id ?? 'none'} />
     </section>
   );
 }

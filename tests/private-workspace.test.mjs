@@ -3148,3 +3148,127 @@ test('legacy prepared manifests remain readable through their original-file path
   );
   await assert.rejects(changed.arrayBuffer(), /changed|removed/);
 });
+
+test('retained backup history preserves older downloads after replacement and expiry with owner-scoped paging', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'history-owner',
+    name: 'History Owner',
+    email: 'history@example.test',
+  };
+  assert.equal(
+    (
+      await onboarding.POST(
+        request({ name: 'History fixture', season: '2026' }),
+      )
+    ).status,
+    201,
+  );
+  const db = await getDatabase(),
+    bucket = globalThis.privateTestBucket,
+    source = `teams/${db.teamId}/history-source`;
+  await bucket.put(source, 'first recovery bytes', {
+    httpMetadata: { contentType: 'text/plain' },
+  });
+  const first = await (await backups.POST()).json();
+  await bucket.put(source, 'second recovery bytes', {
+    httpMetadata: { contentType: 'text/plain' },
+  });
+  const second = await (await backups.POST()).json();
+  assert.notEqual(first.id, second.id);
+  const oldDownload = () =>
+    backups.GET(
+      new Request(
+        `https://pilot.test/api/backups?archiveId=${first.id}&part=1`,
+      ),
+    );
+  assert.equal(
+    (
+      await backups.GET(
+        new Request(`https://pilot.test/api/backups?id=${first.id}&part=1`),
+      )
+    ).status,
+    409,
+  );
+  const oldManifest = await (
+    await bucket.get(`_backups/${db.teamId}/manifests/${first.id}.json`)
+  ).json();
+  oldManifest.createdAt = '2000-01-01T00:00:00.000Z';
+  await bucket.put(
+    `_backups/${db.teamId}/manifests/${first.id}.json`,
+    JSON.stringify(oldManifest),
+    { httpMetadata: { contentType: 'application/json' } },
+  );
+  await bucket.delete(source);
+  const archive = await oldDownload();
+  assert.equal(archive.status, 200);
+  assert.equal(
+    new TextDecoder().decode(
+      unzipSync(new Uint8Array(await archive.arrayBuffer()))[
+        'media/history-source'
+      ],
+    ),
+    'first recovery bytes',
+  );
+  const history = async (cursor = '') =>
+    await (
+      await backups.GET(
+        new Request(
+          'https://pilot.test/api/backups?history=1' +
+            (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''),
+        ),
+      )
+    ).json();
+  let page = await history(),
+    rows = [...page.backups];
+  while (page.cursor) {
+    page = await history(page.cursor);
+    rows.push(...page.backups);
+  }
+  assert.deepEqual(
+    new Set(rows.map((row) => row.id)),
+    new Set([first.id, second.id]),
+  );
+  assert.ok(rows.every((row) => row.preserved && row.state === 'ready'));
+  assert.equal(
+    (
+      await backups.GET(
+        new Request(
+          'https://pilot.test/api/backups?archiveId=../invalid&part=1',
+        ),
+      )
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await backups.GET(
+        new Request(
+          'https://pilot.test/api/backups?history=1&cursor=' + 'x'.repeat(4097),
+        ),
+      )
+    ).status,
+    400,
+  );
+  globalThis.privateTestIdentity = {
+    id: 'history-other-owner',
+    name: 'Other History Owner',
+    email: 'history-other@example.test',
+  };
+  assert.equal(
+    (
+      await onboarding.POST(
+        request({ name: 'Other history fixture', season: '2026' }),
+      )
+    ).status,
+    201,
+  );
+  assert.deepEqual((await history()).backups, []);
+  assert.equal((await oldDownload()).status, 404);
+  globalThis.privateTestIdentity = null;
+  assert.equal(
+    (await backups.GET(new Request('https://pilot.test/api/backups?history=1')))
+      .status,
+    401,
+  );
+  assert.equal((await oldDownload()).status, 401);
+});

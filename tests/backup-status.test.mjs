@@ -85,3 +85,57 @@ test('backup status distinguishes no snapshot, expiry and failed reads, while us
     { name: 'AbortError' },
   );
 });
+
+test('history responses reject duplicate, incomplete and unfinished snapshots while preserving paging and cancellation', async () => {
+  const { readBackupHistory } = await import(
+    'data:text/javascript;base64,' +
+      Buffer.from(
+        ts.transpileModule(source, {
+          compilerOptions: {
+            target: ts.ScriptTarget.ES2022,
+            module: ts.ModuleKind.ESNext,
+          },
+        }).outputText,
+      ).toString('base64')
+  );
+  const ready = {
+    ...backup,
+    state: 'ready',
+    preserved: true,
+    copiedFiles: backup.mediaFiles,
+  };
+  const abort = new AbortController();
+  const result = await readBackupHistory(
+    'next / page',
+    abort.signal,
+    async (url, options) => {
+      assert.equal(url, '/api/backups?history=1&cursor=next%20%2F%20page');
+      assert.equal(options.signal, abort.signal);
+      assert.equal(options.cache, 'no-store');
+      return Response.json({ backups: [ready], cursor: null });
+    },
+  );
+  assert.equal(result.backups[0].id, backup.id);
+  for (const body of [
+    {},
+    { backups: [ready, ready], cursor: null },
+    { backups: [{ ...ready, state: 'copying', copiedFiles: 0 }], cursor: null },
+    { backups: [ready] },
+    { backups: null, cursor: null },
+  ])
+    await assert.rejects(
+      readBackupHistory(undefined, undefined, async () => Response.json(body)),
+    );
+  await assert.rejects(
+    readBackupHistory(undefined, undefined, async () =>
+      Response.json({ error: 'Sign in' }, { status: 401 }),
+    ),
+    /Sign in/,
+  );
+  await assert.rejects(
+    readBackupHistory(undefined, abort.signal, async () => {
+      throw new DOMException('Aborted', 'AbortError');
+    }),
+    { name: 'AbortError' },
+  );
+});

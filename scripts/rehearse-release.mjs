@@ -431,6 +431,27 @@ async function verifySaved(label) {
   assert.equal(backupResponse.status, 200);
   const zip = unzipSync(new Uint8Array(await backupResponse.arrayBuffer()));
   assert.deepEqual(Buffer.from(zip['media/team-logo']), media);
+  if (backup.retainedHistory) {
+    const history = await api('/api/backups?history=1');
+    assert.ok(history.backups.some((record) => record.id === backup.id));
+    const archived = await fetch(
+      `${origin}/api/backups?archiveId=${backup.id}&part=1`,
+      { headers: ownerHeaders('a') },
+    );
+    assert.equal(archived.status, 200);
+    const archivedFiles = unzipSync(
+      new Uint8Array(await archived.arrayBuffer()),
+    );
+    assert.deepEqual(Buffer.from(archivedFiles['media/team-logo']), media);
+    assert.equal(
+      (
+        await fetch(`${origin}/api/backups?archiveId=${backup.id}&part=1`, {
+          headers: ownerHeaders('b'),
+        })
+      ).status,
+      404,
+    );
+  }
   if (backup.preserved) {
     const restoredSource = await fetch(`${origin}/api/media?key=team-logo`, {
       method: 'POST',

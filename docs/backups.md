@@ -14,9 +14,9 @@ Large libraries are split at file boundaries into parts containing up to 512 MiB
 
 A stored progress count makes copying resumable. A retry recognizes previously copied matching objects. Progress updates compare the current manifest's ETag, so a delayed request cannot replace a newer preparation from another device. A completed snapshot also stores a write-once manifest alongside its independently preserved file set.
 
-The current prepared download links last 24 hours or until another backup is prepared. Settings shows expiry, hides expired links, and restores current preparation status across navigation and devices. Older pre-copy snapshots remain readable but are explicitly labelled as depending on original uploads; prepare a new backup to gain independent copies.
+The current prepared download links last 24 hours or until another backup is prepared. Completed preserved snapshots also appear in the collapsed Saved backup history panel; their recovery-copy downloads remain available after those quick links expire or are replaced. Settings shows expiry, hides expired links, and restores current preparation status across navigation and devices. Older pre-copy snapshots remain readable but are explicitly labelled as depending on original uploads; prepare a new backup to gain independent copies.
 
-Completed copy sets/manifests are retained internally; scheduled preparation, a history/download picker, automatic pruning/retention limits, and an exercised cloud restore procedure are unfinished. Repeated preparation uses additional storage, and unfinished or replaced preparations can leave internal file copies until cleanup is implemented. Do not describe this as a finished unattended disaster-recovery service or imply that the UI can restore an older retained snapshot yet. No hosted restore-over-live action exists.
+Completed copy sets/manifests are retained and downloadable from Saved backup history. Scheduled preparation, automatic pruning/retention limits, and an exercised cloud restore procedure are unfinished. Repeated preparation uses additional storage, and unfinished or replaced preparations can leave internal file copies until cleanup is implemented. Do not describe this as a finished unattended disaster-recovery service or imply that the UI can overwrite the live workspace from a retained snapshot. No hosted restore-over-live action exists.
 
 ## Offline recovery check
 
@@ -41,3 +41,12 @@ The packaged production-Worker rehearsal checks the real streaming copy path and
 The prototype stores old messages in workspace JSON and lacks two unused relational messaging tables. Prototype export preserves that JSON and exports those absent tables as empty. Hosted export requires the complete deployed schema.
 
 Implementation references: [R2 streaming and conditional operations](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/), [fflate streaming ZIP](https://github.com/101arrowz/fflate).
+
+
+## Saved backup history
+
+History starts collapsed and loads only when opened. It lists complete preserved snapshots in bounded pages, with creation time, record/file counts, part count and links for each ZIP part. Loaded entries are sorted by date; Load more retrieves further pages and merges them without duplicates. The current preparation remains visible above history. Archived downloads use the immutable manifest and preserved files rather than the current-preparation pointer, so replacement and its 24-hour expiry do not revoke those saved recovery copies.
+
+Every listing and archive read derives the team from authenticated identity. IDs accept only UUIDs; page cursors stay within the team's fixed manifest prefix. Invalid, incomplete or failed history reads show an error instead of an apparently empty list. Older preserved manifests without listing metadata are read through the same scoped path. Incomplete preparations are never listed as completed backups.
+
+The actual-handler tests cover old snapshots after replacement/expiry, paging, legacy manifest metadata, malformed IDs/cursors, missing records and cross-account/anonymous rejection. Local browser QA verified the collapsed default, two distinct snapshots after source replacement/deletion, and 390px download controls. Both ZIPs contained their respective original video bytes; the older ZIP restored all domain rows into a new offline workspace. Only disposable local snapshots were removed, and the prior local preparation was restored. The packaged release rehearsal also lists/downloads a saved archive and rejects a foreign owner's archive request.

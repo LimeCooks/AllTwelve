@@ -4,6 +4,9 @@ import { isPrototype } from '@/lib/request-identity';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
 import {
   backupJobKey,
+  backupArchiveKey,
+  backupOverview as summary,
+  listBackupHistory,
   backupCopyPrefix,
   advanceBackupCopy,
   BackupError,
@@ -14,27 +17,6 @@ import { backupZip } from '@/lib/backup-zip';
 
 const bucket = () => (env as unknown as { MEDIA: R2Bucket }).MEDIA;
 const prefix = (teamId: string) => (isPrototype() ? '' : `teams/${teamId}/`);
-const summary = (snapshot: TeamBackup) => ({
-  copiedFiles: snapshot.copiedFiles,
-  preserved: snapshot.copiedFiles !== undefined,
-  state:
-    snapshot.copiedFiles !== undefined &&
-    snapshot.copiedFiles < snapshot.media.length
-      ? 'copying'
-      : 'ready',
-  id: snapshot.id,
-  createdAt: snapshot.createdAt,
-  expiresAt: new Date(
-    Date.parse(snapshot.createdAt) + 24 * 60 * 60 * 1000,
-  ).toISOString(),
-  parts: snapshot.parts,
-  mediaBytes: snapshot.mediaBytes,
-  mediaFiles: snapshot.media.length,
-  records: Object.values(snapshot.tables).reduce(
-    (n, rows) => n + rows.length,
-    0,
-  ),
-});
 const failure = (error: unknown) =>
   Response.json(
     {
@@ -109,8 +91,29 @@ export async function GET(request: Request) {
   try {
     const database = await getDatabase(),
       params = new URL(request.url).searchParams;
-    const statusOnly = params.get('status') === '1';
-    const object = await bucket().get(backupJobKey(database.teamId));
+    if (params.get('history') === '1')
+      return Response.json(
+        await listBackupHistory(
+          bucket(),
+          database.teamId,
+          params.get('cursor') ?? undefined,
+        ),
+        { headers: { 'cache-control': 'private, no-store' } },
+      );
+    const archiveId = params.get('archiveId');
+    if (
+      archiveId !== null &&
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+        archiveId,
+      )
+    )
+      throw new BackupError('Choose a valid saved backup.');
+    const statusOnly = !archiveId && params.get('status') === '1';
+    const object = await bucket().get(
+      archiveId
+        ? backupArchiveKey(database.teamId, archiveId)
+        : backupJobKey(database.teamId),
+    );
     if (!object && statusOnly)
       return Response.json(
         { backup: null, reason: 'none' },
@@ -118,13 +121,24 @@ export async function GET(request: Request) {
       );
     if (!object)
       return Response.json(
-        { error: 'Prepare a backup first.' },
+        {
+          error: archiveId
+            ? 'This saved backup was not found. Refresh backup history.'
+            : 'Prepare a backup first.',
+        },
         { status: 404 },
       );
     const snapshot = await object.json<TeamBackup>();
     const createdAt = Date.parse(snapshot.createdAt);
     if (snapshot.teamId !== database.teamId)
       throw new BackupError('This backup could not be verified for your team.');
+    if (
+      archiveId &&
+      (snapshot.id !== archiveId ||
+        snapshot.copiedFiles !== snapshot.media.length ||
+        !Number.isFinite(createdAt))
+    )
+      throw new BackupError('This saved backup is incomplete or unreadable.');
     const expired =
       !Number.isFinite(createdAt) ||
       createdAt > Date.now() + 5 * 60 * 1000 ||
@@ -137,7 +151,7 @@ export async function GET(request: Request) {
         },
         { headers: { 'cache-control': 'private, no-store' } },
       );
-    if (snapshot.id !== params.get('id') || expired)
+    if (!archiveId && (snapshot.id !== params.get('id') || expired))
       return Response.json(
         {
           error: 'This backup has expired or was replaced. Prepare a new one.',
