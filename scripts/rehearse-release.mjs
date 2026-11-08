@@ -281,6 +281,7 @@ const media = Buffer.from(
   'base64',
 );
 let fixture;
+let designerFixture;
 async function verifySaved(label) {
   const ownAthlete = (await api('/api/athletes')).athletes.find(
     (athlete) => athlete.id === fixture.athlete,
@@ -301,6 +302,37 @@ async function verifySaved(label) {
   );
   const a = await api('/api/session');
   assert.equal(a.team.id, fixture.team);
+  const library = await api('/api/playbooks');
+  const drawing = library.plays.find((play) => play.id === fixture.play);
+  for (const [key, value] of Object.entries(designerFixture.drawing))
+    assert.deepEqual(drawing[key], value, `${label}: saved diagram ${key}`);
+  assert.equal(drawing.unit, 'Defence');
+  assert.equal(drawing.formationId, designerFixture.teamFormation);
+  assert.deepEqual(
+    drawing.assignments.map(({ position, title, detail }) => ({
+      position,
+      title,
+      detail,
+    })),
+    designerFixture.assignments,
+  );
+  const ownFormation = library.formations.find(
+    (formation) => formation.id === designerFixture.teamFormation,
+  );
+  assert.equal(ownFormation.scope, 'team');
+  assert.equal(ownFormation.packageName, 'Nascar - custom personnel');
+  assert.deepEqual(ownFormation.players, designerFixture.drawing.players);
+  const scoutFormation = library.formations.find(
+    (formation) => formation.id === designerFixture.scoutFormation,
+  );
+  assert.equal(scoutFormation.scope, 'scout');
+  assert.equal(scoutFormation.opponent, 'Rehearsal opponent');
+  assert.equal(scoutFormation.unit, 'Offence');
+  assert.deepEqual(
+    scoutFormation.players,
+    designerFixture.drawing.opponentPlayers,
+  );
+  assert.equal((await api('/api/playbooks', 'b')).formations.length, 0);
   assert.equal(
     (await api('/api/playbooks')).plays.find((play) => play.id === fixture.play)
       .name,
@@ -389,6 +421,25 @@ async function verifySaved(label) {
   );
   assert.equal(manifest.teamId, fixture.team);
   assert.ok(manifest.tables.plays.some((play) => play.id === fixture.play));
+  const backedDrawing = JSON.parse(
+    manifest.tables.plays.find((play) => play.id === fixture.play).diagram_json,
+  );
+  for (const [key, value] of Object.entries(designerFixture.drawing))
+    assert.deepEqual(
+      backedDrawing[key],
+      value,
+      `${label}: backed-up diagram ${key}`,
+    );
+  assert.ok(
+    manifest.tables.formations.some(
+      (formation) => formation.id === designerFixture.teamFormation,
+    ),
+  );
+  assert.ok(
+    manifest.tables.formations.some(
+      (formation) => formation.id === designerFixture.scoutFormation,
+    ),
+  );
   assert.equal(
     (await fetch(`${origin}${backupPath}`, { headers: ownerHeaders('b') }))
       .status,
@@ -399,7 +450,7 @@ async function verifySaved(label) {
     verifiedAt: new Date().toISOString(),
   });
   console.log(
-    `${label}: saved plays, install, practice, event and uploaded bytes verified.`,
+    `${label}: custom diagram, team/scout formations, install, practice, event and uploaded bytes verified.`,
   );
 }
 
@@ -495,18 +546,177 @@ try {
   );
   assert.equal(retriedBook.createdId, book.createdId);
   assert.equal(retriedBook.books.length, 1);
+  const players = [
+    {
+      id: 'rehearsal-fc',
+      label: 'FC',
+      kind: 'skill',
+      symbol: 'triangle',
+      colour: '#27b8b1',
+      x: 250,
+      y: 650,
+    },
+    {
+      id: 'rehearsal-ma',
+      label: 'MA',
+      kind: 'skill',
+      symbol: 'triangle',
+      colour: '#ed6559',
+      x: 350,
+      y: 650,
+    },
+    {
+      id: 'rehearsal-n',
+      label: 'N',
+      kind: 'line',
+      symbol: 'triangle',
+      colour: '#e2b550',
+      x: 350,
+      y: 670,
+    },
+  ];
+  const opponentPlayers = [
+    {
+      id: 'rehearsal-opp-q',
+      label: 'Q',
+      kind: 'qb',
+      symbol: 'circle',
+      colour: '#b9c5cf',
+      x: 350,
+      y: 710,
+      opponent: true,
+    },
+    {
+      id: 'rehearsal-opp-x',
+      label: 'X',
+      kind: 'skill',
+      symbol: 'circle',
+      colour: '#b9c5cf',
+      x: 150,
+      y: 680,
+      opponent: true,
+    },
+  ];
+  const teamFormation = await api(
+    '/api/playbooks',
+    'a',
+    {
+      kind: 'formation',
+      name: '6-Pack',
+      unit: 'Defence',
+      scope: 'team',
+      packageName: 'Nascar - custom personnel',
+      personnel: 'Coach-defined package',
+      players,
+    },
+    'POST',
+    201,
+  );
+  const scoutFormation = await api(
+    '/api/playbooks',
+    'a',
+    {
+      kind: 'formation',
+      name: 'Unique opponent look',
+      unit: 'Offence',
+      scope: 'scout',
+      opponent: 'Rehearsal opponent',
+      players: opponentPlayers,
+    },
+    'POST',
+    201,
+  );
   const play = await api(
     '/api/playbooks',
     'a',
-    { kind: 'play', playbookId: book.books[0].id, name: 'Rehearsal defence' },
+    {
+      kind: 'play',
+      playbookId: book.books[0].id,
+      formationId: teamFormation.createdId,
+      name: 'Rehearsal defence',
+    },
     'POST',
     201,
   );
   const openedPlay = play.plays.find((record) => record.id === play.createdId);
+  assert.equal(openedPlay.unit, 'Defence');
+  assert.deepEqual(
+    openedPlay.players,
+    players,
+    'a defensive play starts from the selected team formation',
+  );
+  designerFixture = {
+    teamFormation: teamFormation.createdId,
+    scoutFormation: scoutFormation.createdId,
+    drawing: {
+      diagramVersion: 2,
+      fieldPosition: 55,
+      players,
+      routes: [
+        {
+          id: 'rehearsal-route',
+          playerId: players[0].id,
+          startX: 250,
+          startY: 650,
+          endX: 290,
+          endY: 620,
+          points: [
+            { x: 250, y: 650 },
+            { x: 250, y: 620 },
+            { x: 290, y: 620 },
+          ],
+          colour: '#a994da',
+          lineStyle: 'dashed',
+          ending: 'arrow',
+        },
+      ],
+      zones: [
+        {
+          id: 'rehearsal-zone',
+          routeId: 'rehearsal-route',
+          x: 290,
+          y: 620,
+          width: 80,
+          height: 50,
+          colour: '#a994da',
+          shape: 'ellipse',
+          opacity: 0.3,
+          rotation: 15,
+        },
+      ],
+      labels: [
+        {
+          id: 'rehearsal-label',
+          x: 320,
+          y: 600,
+          text: 'Match the release',
+          colour: '#e2b550',
+        },
+      ],
+      showOpponent: true,
+      opponentFormationId: scoutFormation.createdId,
+      opponentPlayers,
+    },
+    assignments: [
+      {
+        position: 'FC',
+        title: 'Match release',
+        detail: 'Carry vertical, then settle in the attached zone.',
+      },
+    ],
+  };
   await api(
     '/api/playbooks',
     'a',
-    { ...openedPlay, notes: 'Saved diagram revision' },
+    {
+      ...openedPlay,
+      ...designerFixture.drawing,
+      assignments: designerFixture.assignments.map((assignment, index) => ({
+        id: 'rehearsal-assignment-' + index,
+        ...assignment,
+      })),
+      notes: 'Saved diagram revision',
+    },
     'PUT',
   );
   await api(

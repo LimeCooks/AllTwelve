@@ -32,3 +32,9 @@ The local rehearsal exercises switching actual Worker artifacts over persistent 
 The calendar build (`ca68fcdcacb2ee679bbf7d9cb13dd81f33bcb12b`) and preceding planning build (`d999a6c6675f73b1670d11b4642a0e826aa445a3`) passed the full local rehearsal. The retained machine-readable report is `outputs/release-rehearsal-0gnqsZ/report.json`; it includes archive SHA-256 hashes and completed stages. The owned Worker process was stopped between transitions and the last process exited successfully. Temporary fixture data remains only in that ignored rehearsal directory for inspection.
 
 No hosted test team or records were created, and neither the original prototype nor the private pilot database was used by the rehearsal.
+
+## Expanded designer persistence rehearsal — November 8
+
+The rehearsal now creates and saves actual custom drawing geometry instead of only editing a play's teaching note. A defensive team formation with a coach-named personnel package initializes the defensive play. A separate scout offensive formation supplies opponent terminology and players. The saved play includes a three-point dashed route tied to a player, a rotated coverage ellipse attached to its end, a teaching label, opponent look and position assignment.
+
+At candidate, rollback and forward-again stages, assertions compare every drawing array and field, formation scope/package/opponent metadata, and assignment content. The full backup manifest is checked against the same expected geometry and includes both formation records. Another owner sees no formations. The new isolated run passed in `outputs/release-rehearsal-YpnKlw/report.json`, using `private-pilot-backup-status.tar.gz` and `private-pilot-clip-conflicts.tar.gz`. This is persistence/ownership evidence, not proof of physical touch interaction. The fixtures remain only in that ignored rehearsal directory.

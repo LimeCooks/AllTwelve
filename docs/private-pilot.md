@@ -42,3 +42,7 @@ Home now checks successful, complete calendar/install responses before showing c
 
 The private pilot registration is recorded in `.openai/hosting.json`. An expected URL from registration is not evidence of deployment. Reuse that project ID; never register another Site merely because deployment or source synchronization fails.
 
+
+## Updated evidence — November 8
+
+The owner has now confirmed that a saved play diagram matches on another device and that seeking works in the existing hosted desktop film. The expanded production-artifact rehearsal also compares actual routes, zones, opponent players, custom team/scout formations and assignment content through update/rollback/forward and backup export. These close the corresponding individual evidence gaps above; they do not close physical-device interaction, full coaching workflow or cloud recovery gates. See [handoff-status.md](handoff-status.md) for the current requirement-by-requirement status.
