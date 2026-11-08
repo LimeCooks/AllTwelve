@@ -68,6 +68,7 @@ export async function PUT(request: NextRequest) {
     const updatedAt = new Date().toISOString();
     if (
       payload.key === 'private-conversations-v3' ||
+      payload.key === 'depth-layouts-v3' ||
       payload.key?.startsWith('pb-create-')
     )
       return NextResponse.json(

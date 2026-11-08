@@ -288,6 +288,79 @@ async function verifySaved(label) {
   );
   assert.equal(ownAthlete.firstName, 'Corrected');
   assert.equal(ownAthlete.staffNote, 'Private rehearsal note');
+  const removalCheck = await api(`/api/athletes?athleteId=${fixture.athlete}`);
+  assert.equal(
+    removalCheck.removal.blocked,
+    true,
+    'Saved depth links must prevent roster removal',
+  );
+  await api(
+    '/api/athletes',
+    'a',
+    { id: fixture.athlete, version: removalCheck.removal.version },
+    'DELETE',
+    409,
+  );
+  await api(
+    `/api/athletes?athleteId=${fixture.athlete}`,
+    'b',
+    undefined,
+    'GET',
+    404,
+  );
+  const disposable = await api(
+    '/api/athletes',
+    'a',
+    {
+      firstName: 'Unused',
+      lastName: 'Removal rehearsal',
+      position: 'DB',
+      unit: 'Defence',
+      graduationYear: 12,
+      weightLb: 180,
+      email: 'unused-removal@example.test',
+      staffNote: 'Disposable',
+    },
+    'POST',
+    201,
+  );
+  const disposableId = disposable.athlete.id;
+  const disposableCheck = await api(`/api/athletes?athleteId=${disposableId}`);
+  assert.equal(disposableCheck.removal.blocked, false);
+  await api(
+    '/api/athletes',
+    'a',
+    { id: disposableId, status: 'Limited' },
+    'PATCH',
+    200,
+  );
+  await api(
+    '/api/athletes',
+    'a',
+    { id: disposableId, version: disposableCheck.removal.version },
+    'DELETE',
+    409,
+  );
+  const freshRemoval = await api(`/api/athletes?athleteId=${disposableId}`);
+  const removedRoster = await api(
+    '/api/athletes',
+    'a',
+    { id: disposableId, version: freshRemoval.removal.version },
+    'DELETE',
+    200,
+  );
+  assert.equal(removedRoster.removedId, disposableId);
+  assert.ok(
+    !removedRoster.athletes.some((athlete) => athlete.id === disposableId),
+  );
+  await api(
+    `/api/athletes?athleteId=${disposableId}`,
+    'a',
+    undefined,
+    'GET',
+    404,
+  );
+
   const staleNote = await api(
     '/api/athletes',
     'a',

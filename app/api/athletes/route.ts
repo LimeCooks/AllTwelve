@@ -1,5 +1,6 @@
 import { getDatabase, type TeamDatabase } from '@/db/client';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
+import { athleteRemovalInfo, removeUnusedAthlete } from '@/lib/athlete-removal';
 
 class AthleteInputError extends Error {}
 function failure(error: unknown) {
@@ -206,9 +207,19 @@ async function metrics(database: TeamDatabase): Promise<AthleteMetrics> {
   };
 }
 
-export async function GET() {
+export async function GET(request?: Request) {
   try {
     const database = await getDatabase();
+    const athleteId = request
+      ? new URL(request.url).searchParams.get('athleteId')
+      : null;
+    if (athleteId) {
+      const { row, ...removal } = await athleteRemovalInfo(database, athleteId);
+      return Response.json(
+        { athlete: present(row as unknown as AthleteRow), removal },
+        { headers: { 'cache-control': 'private, no-store' } },
+      );
+    }
     const result = await database
       .prepare(
         `${athleteSelect} WHERE team_id = ? ORDER BY number IS NULL, number, last_name, first_name, id`,
@@ -219,6 +230,24 @@ export async function GET() {
       athletes: result.results.map(present),
       metrics: await metrics(database),
     });
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const database = await getDatabase(),
+      body = (await request.json()) as { id?: unknown; version?: unknown };
+    if (typeof body?.id !== 'string' || !body.id.trim())
+      throw new AthleteInputError('Choose an athlete to remove.');
+    await removeUnusedAthlete(database, body.id, body.version);
+    const response = await GET();
+    if (!response.ok) throw new Error('The updated roster could not be read.');
+    return Response.json(
+      { ...((await response.json()) as object), removedId: body.id },
+      { headers: { 'cache-control': 'private, no-store' } },
+    );
   } catch (error) {
     return failure(error);
   }

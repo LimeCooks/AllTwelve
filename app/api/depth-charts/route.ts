@@ -162,7 +162,7 @@ export async function PUT(request: Request) {
         { status: 413 },
       );
     const saved = await db
-      .prepare(`INSERT INTO workspace_state (id, team_id, state_key, value_json, updated_at) VALUES (?, ?, ?, ?, ?)
+      .prepare(`INSERT INTO workspace_state (id, team_id, state_key, value_json, updated_at) SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS(SELECT 1 FROM json_each(?) j LEFT JOIN athletes a ON a.id=j.value AND a.team_id=? WHERE a.id IS NULL)
       ON CONFLICT(team_id, state_key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
       WHERE workspace_state.value_json = ? RETURNING value_json`)
       .bind(
@@ -171,6 +171,14 @@ export async function PUT(request: Request) {
         KEY,
         serialized,
         new Date().toISOString(),
+        JSON.stringify([
+          ...new Set(
+            depthUnits.flatMap((unit) =>
+              layouts[unit].map((slot) => slot.athleteId).filter(Boolean),
+            ),
+          ),
+        ]),
+        db.teamId,
         current.raw,
       )
       .first();
@@ -178,7 +186,7 @@ export async function PUT(request: Request) {
       return Response.json(
         {
           error:
-            'This chart changed on another device. Your draft is retained. Reload the saved chart before trying again.',
+            'This chart or its roster changed. Your draft is retained. Reload the saved chart before trying again.',
         },
         { status: 409 },
       );

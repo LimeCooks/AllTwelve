@@ -3712,6 +3712,124 @@ function AthletesView({
   const [pendingAthlete, setPendingAthlete] = useState<AthleteRecord | null>(
     null,
   );
+  const [removal, setRemoval] = useState<{
+    athlete: AthleteRecord;
+    version?: string;
+    blocked?: boolean;
+    links?: Record<string, number>;
+  } | null>(null);
+  const [removalError, setRemovalError] = useState('');
+  const [removalConfirmed, setRemovalConfirmed] = useState(false);
+  const openRemoval = async () => {
+    if (!selected || rosterWriteLock.current || noteDirty || profileFormDirty)
+      return;
+    const target = selected;
+    rosterWriteLock.current = true;
+    setSaving(true);
+    setRemoval({ athlete: target });
+    setRemovalError('');
+    setRemovalConfirmed(false);
+    try {
+      const response = await fetch(
+        `/api/athletes?athleteId=${encodeURIComponent(target.id)}`,
+        { cache: 'no-store' },
+      );
+      const data = (await response.json()) as {
+        athlete?: AthleteRecord;
+        removal?: {
+          version: string;
+          blocked: boolean;
+          links: Record<string, number>;
+        };
+        error?: string;
+      };
+      if (
+        !response.ok ||
+        data.athlete?.id !== target.id ||
+        !/^[a-f0-9]{64}$/.test(data.removal?.version ?? '') ||
+        typeof data.removal?.blocked !== 'boolean' ||
+        !data.removal.links
+      )
+        throw new Error(
+          data.error ||
+            'The removal check was incomplete. Reload the roster before trying again.',
+        );
+      setRemoval({ athlete: data.athlete, ...data.removal! });
+    } catch (error) {
+      setRemovalError(
+        error instanceof Error
+          ? error.message
+          : 'Removal could not be checked. Reload the roster.',
+      );
+    } finally {
+      rosterWriteLock.current = false;
+      setSaving(false);
+    }
+  };
+  const removeRosterEntry = async () => {
+    if (
+      !removal?.version ||
+      removal.blocked ||
+      !removalConfirmed ||
+      removalError ||
+      rosterWriteLock.current
+    )
+      return;
+    const target = removal;
+    rosterWriteLock.current = true;
+    setSaving(true);
+    try {
+      const response = await fetch('/api/athletes', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: target.athlete.id,
+          version: target.version,
+        }),
+      });
+      const data = (await response.json()) as {
+        removedId?: string;
+        athletes?: AthleteRecord[];
+        metrics?: AthleteMetrics;
+        error?: string;
+      };
+      if (
+        !response.ok ||
+        data.removedId !== target.athlete.id ||
+        !Array.isArray(data.athletes) ||
+        !data.metrics ||
+        data.athletes.some((a: AthleteRecord) => a.id === target.athlete.id)
+      )
+        throw new Error(
+          data.error ||
+            'Removal could not be confirmed. Reload the roster before trying again.',
+        );
+      setRoster(data.athletes);
+      setMetrics(data.metrics);
+      const next = data.athletes[0] as AthleteRecord | undefined;
+      setSelected(next ?? null);
+      setNoteDraft(next?.staffNote ?? '');
+      setNoteBaseline(next?.staffNote ?? '');
+      setNoteDownload('');
+      setRosterSaveError('');
+      setRemoval(null);
+      setDataMessage(
+        data.athletes.length
+          ? 'Saved roster'
+          : 'Roster empty · ready for your athletes',
+      );
+      onNotify(`${target.athlete.name} removed from the roster.`, 'info');
+    } catch (error) {
+      setRemovalError(
+        error instanceof Error
+          ? error.message
+          : 'Removal could not be confirmed. Reload the roster.',
+      );
+    } finally {
+      rosterWriteLock.current = false;
+      setSaving(false);
+    }
+  };
   const rosterWriteLock = useRef(false);
   const noteDirty = Boolean(selected && noteDraft !== noteBaseline);
   useEffect(() => {
@@ -4310,6 +4428,18 @@ function AthletesView({
                 <Pencil />
               </Button>
             </div>
+            <Button
+              variant="ghost"
+              disabled={saving || noteDirty || profileFormDirty}
+              onClick={() => void openRemoval()}
+            >
+              <Trash2 /> Remove roster entry
+            </Button>
+            {noteDirty ? (
+              <p className="staff-note-save">
+                Save or discard the note before removing this entry.
+              </p>
+            ) : null}
             <div className="contact-actions">
               <Button
                 aria-label="Email athlete"
@@ -4490,6 +4620,92 @@ function AthletesView({
         ) : null}
       </div>
 
+      <Dialog
+        open={Boolean(removal)}
+        onOpenChange={(open) => {
+          if (!saving && !open) setRemoval(null);
+        }}
+      >
+        <DialogContent className="athlete-dialog">
+          <DialogHeader>
+            <DialogTitle>
+              Remove {removal?.athlete.name} from the roster?
+            </DialogTitle>
+            <DialogDescription>
+              This permanently removes the roster entry and staff note. Existing
+              backups and uploaded files are retained. Athletes with linked work
+              cannot be removed.
+            </DialogDescription>
+          </DialogHeader>
+          <p>
+            #{removal?.athlete.no ?? '—'} · {removal?.athlete.position} ·{' '}
+            {removal?.athlete.email || 'No email'}
+          </p>
+          {saving ? (
+            <p role="status">Checking or updating saved roster…</p>
+          ) : null}
+          {removal?.links ? (
+            <p>
+              Depth assignments: {removal.links.depthAssignments} · Install
+              reviews: {removal.links.installReviews} · Saved references:{' '}
+              {removal.links.savedReferences} · Unreadable records:{' '}
+              {removal.links.unreadableRecords}
+            </p>
+          ) : null}
+          {removal?.blocked ? (
+            <p role="alert">
+              This entry has linked or unreadable saved work. Keep it until
+              those links are resolved.
+            </p>
+          ) : null}
+          {removalError ? <p role="alert">{removalError}</p> : null}
+          {!removal?.blocked && removal?.version && !removalError ? (
+            <label>
+              <input
+                type="checkbox"
+                checked={removalConfirmed}
+                disabled={saving}
+                onChange={(event) => setRemovalConfirmed(event.target.checked)}
+              />{' '}
+              I understand this permanently removes this roster entry and note.
+            </label>
+          ) : null}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={saving}
+              onClick={() => setRemoval(null)}
+            >
+              Cancel
+            </Button>
+            {removalError ? (
+              <Button
+                disabled={saving}
+                onClick={() => {
+                  setRemoval(null);
+                  setLoading(true);
+                  setRosterLoadError(false);
+                  setRosterRetry((value) => value + 1);
+                }}
+              >
+                Reload roster
+              </Button>
+            ) : (
+              <Button
+                disabled={
+                  saving ||
+                  !removal?.version ||
+                  removal.blocked ||
+                  !removalConfirmed
+                }
+                onClick={() => void removeRosterEntry()}
+              >
+                Remove roster entry permanently
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={noteReloadOpen}
         onOpenChange={(open) => {

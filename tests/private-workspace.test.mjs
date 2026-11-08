@@ -78,6 +78,14 @@ const dbUrl = await moduleUrl('../db/client.ts', [
 ]);
 const replacements = [
   [
+    "'@/lib/athlete-removal'",
+    JSON.stringify(
+      await moduleUrl('../lib/athlete-removal.ts', [
+        ["'@/lib/workspace-identity'", JSON.stringify(identityUrl)],
+      ]),
+    ),
+  ],
+  [
     "'@/lib/playbook-revision'",
     JSON.stringify(await moduleUrl('../lib/playbook-revision.ts')),
   ],
@@ -3371,4 +3379,248 @@ test('staff-note writes reject stale baselines atomically and remain independent
     email: 'b@example.test',
   };
   assert.equal((await save('Foreign note', 'Late saved note')).status, 404);
+});
+
+test('unused roster removal is owned, versioned, and refuses saved links or unreadable work', async () => {
+  const owner = {
+    id: 'removal-owner',
+    name: 'Removal Coach',
+    email: 'removal@example.test',
+  };
+  globalThis.privateTestIdentity = owner;
+  assert.equal(
+    (
+      await onboarding.POST(
+        request({ name: 'Removal fixture', season: '2026' }),
+      )
+    ).status,
+    201,
+  );
+  const db = await getDatabase();
+  const made = await athletesApi.POST(
+    request({
+      firstName: 'Remove',
+      lastName: 'Fixture',
+      position: 'DB',
+      unit: 'Defence',
+      graduationYear: 12,
+      weightLb: 180,
+      email: 'remove-fixture@example.test',
+      staffNote: 'Private note',
+    }),
+  );
+  assert.equal(made.status, 201);
+  const athlete = (await made.json()).athlete;
+  const info = async () =>
+    athletesApi.GET(
+      new Request(`https://pilot.test/api/athletes?athleteId=${athlete.id}`),
+    );
+  const remove = async (version) =>
+    athletesApi.DELETE(request({ id: athlete.id, version }));
+  const check = await (await info()).json();
+  assert.equal(check.removal.blocked, false);
+  assert.equal(check.athlete.staffNote, 'Private note');
+  assert.equal((await remove()).status, 400);
+  globalThis.privateTestIdentity = {
+    id: 'owner-b',
+    name: 'Coach B',
+    email: 'b@example.test',
+  };
+  assert.equal((await info()).status, 404);
+  assert.equal((await remove(check.removal.version)).status, 404);
+  globalThis.privateTestIdentity = null;
+  assert.equal((await remove(check.removal.version)).status, 401);
+  globalThis.privateTestIdentity = owner;
+  assert.equal(
+    (await athletesApi.PATCH(request({ id: athlete.id, status: 'Limited' })))
+      .status,
+    200,
+  );
+  assert.equal((await remove(check.removal.version)).status, 409);
+  for (const value of [
+    JSON.stringify({ nested: [{ athleteId: athlete.id }] }),
+    '{broken',
+  ]) {
+    sqlite
+      .prepare(
+        'INSERT INTO workspace_state (id,team_id,state_key,value_json,updated_at) VALUES (?,?,?,?,?)',
+      )
+      .run('removal-link', db.teamId, 'fixture-reference', value, 'now');
+    const linked = await (await info()).json();
+    assert.equal(linked.removal.blocked, true);
+    assert.equal((await remove(linked.removal.version)).status, 409);
+    sqlite
+      .prepare('DELETE FROM workspace_state WHERE id=?')
+      .run('removal-link');
+  }
+  for (const late of ['profile', 'reference']) {
+    const current = await (await info()).json();
+    const original = database.prepare;
+    let injected = false;
+    database.prepare = function (sql) {
+      const statement = original.call(this, sql);
+      if (sql.startsWith('DELETE FROM athletes WHERE')) {
+        const first = statement.first;
+        statement.first = async function () {
+          injected = true;
+          if (late === 'profile')
+            sqlite
+              .prepare('UPDATE athletes SET staff_note=? WHERE id=?')
+              .run('Late note', athlete.id);
+          else
+            sqlite
+              .prepare(
+                'INSERT INTO workspace_state (id,team_id,state_key,value_json,updated_at) VALUES (?,?,?,?,?)',
+              )
+              .run(
+                'late-removal-link',
+                db.teamId,
+                'fixture-reference',
+                JSON.stringify({ athleteId: athlete.id }),
+                'now',
+              );
+          return first.call(this);
+        };
+      }
+      return statement;
+    };
+    try {
+      assert.equal((await remove(current.removal.version)).status, 409);
+    } finally {
+      database.prepare = original;
+    }
+    assert.equal(injected, true);
+    sqlite
+      .prepare('DELETE FROM workspace_state WHERE id=?')
+      .run('late-removal-link');
+    assert.ok(
+      sqlite.prepare('SELECT id FROM athletes WHERE id=?').get(athlete.id),
+    );
+  }
+  sqlite
+    .prepare('INSERT INTO depth_charts (id,team_id,name,unit) VALUES (?,?,?,?)')
+    .run('removal-chart', db.teamId, 'Test', 'Defence');
+  sqlite
+    .prepare(
+      'INSERT INTO install_packages (id,team_id,name,unit,due_at) VALUES (?,?,?,?,?)',
+    )
+    .run('removal-install', db.teamId, 'Test', 'Defence', '2026-11-08');
+  sqlite
+    .prepare(
+      'INSERT INTO install_items (id,package_id,title,item_type,sort_order) VALUES (?,?,?,?,?)',
+    )
+    .run('removal-item', 'removal-install', 'Test', 'Play', 0);
+  for (const kind of ['depth', 'review']) {
+    if (kind === 'depth')
+      sqlite
+        .prepare(
+          'INSERT INTO depth_assignments (id,depth_chart_id,athlete_id,position,rank,x,y) VALUES (?,?,?,?,?,?,?)',
+        )
+        .run(
+          'removal-assignment',
+          'removal-chart',
+          athlete.id,
+          'DB',
+          1,
+          20,
+          40,
+        );
+    else
+      sqlite
+        .prepare(
+          'INSERT INTO athlete_reviews (id,install_item_id,athlete_id) VALUES (?,?,?)',
+        )
+        .run('removal-review', 'removal-item', athlete.id);
+    const linked = await (await info()).json();
+    assert.equal(linked.removal.blocked, true);
+    assert.equal((await remove(linked.removal.version)).status, 409);
+    if (kind === 'depth')
+      sqlite
+        .prepare('DELETE FROM depth_assignments WHERE id=?')
+        .run('removal-assignment');
+    else
+      sqlite
+        .prepare('DELETE FROM athlete_reviews WHERE id=?')
+        .run('removal-review');
+  }
+  assert.equal(
+    (await workspaceState.PUT(request({ key: 'depth-layouts-v3', value: {} })))
+      .status,
+    403,
+  );
+  const current = await (await info()).json();
+  const removed = await remove(current.removal.version);
+  assert.equal(removed.status, 200);
+  const result = await removed.json();
+  assert.equal(result.removedId, athlete.id);
+  assert.deepEqual(result.athletes, []);
+  assert.equal(result.metrics.total, 0);
+  assert.equal((await info()).status, 404);
+  assert.equal((await remove(current.removal.version)).status, 404);
+});
+
+test('a late roster removal cannot leave a dangling depth assignment', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'late-depth-owner',
+    name: 'Depth Coach',
+    email: 'late-depth@example.test',
+  };
+  assert.equal(
+    (
+      await onboarding.POST(
+        request({ name: 'Late depth fixture', season: '2026' }),
+      )
+    ).status,
+    201,
+  );
+  const made = await athletesApi.POST(
+    request({
+      firstName: 'Late',
+      lastName: 'Depth',
+      position: 'DB',
+      unit: 'Defence',
+      graduationYear: 12,
+      weightLb: 180,
+      email: 'late-depth-athlete@example.test',
+    }),
+  );
+  const athlete = (await made.json()).athlete;
+  const before = await (await depthCharts.GET()).json();
+  const layouts = {
+    ...before.layouts,
+    Defence: [
+      { id: 'slot', pos: 'DB', athleteId: athlete.id, x: 20, y: 40, notes: '' },
+    ],
+  };
+  const original = database.prepare;
+  let injected = false;
+  database.prepare = function (sql) {
+    const statement = original.call(this, sql);
+    if (
+      sql.startsWith('INSERT INTO workspace_state') &&
+      sql.includes('json_each')
+    ) {
+      const first = statement.first;
+      statement.first = async function () {
+        injected = true;
+        sqlite.prepare('DELETE FROM athletes WHERE id=?').run(athlete.id);
+        return first.call(this);
+      };
+    }
+    return statement;
+  };
+  try {
+    assert.equal(
+      (await depthCharts.PUT(request({ layouts, version: before.version })))
+        .status,
+      409,
+    );
+  } finally {
+    database.prepare = original;
+  }
+  assert.equal(injected, true);
+  assert.deepEqual(
+    (await (await depthCharts.GET()).json()).layouts,
+    before.layouts,
+  );
 });
