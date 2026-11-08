@@ -325,11 +325,9 @@ export async function POST(request: Request) {
         );
       const clipId = text(body.id) || crypto.randomUUID();
       const existing = await database
-        .prepare(
-          'SELECT id, clip_number FROM film_clips WHERE id = ? AND film_asset_id = ?',
-        )
+        .prepare('SELECT * FROM film_clips WHERE id = ? AND film_asset_id = ?')
         .bind(clipId, assetId)
-        .first<{ id: string; clip_number: number }>();
+        .first<ClipRow>();
       if (
         body.create === true &&
         !existing &&
@@ -409,6 +407,33 @@ export async function POST(request: Request) {
         text(body.result) || null,
         details,
       ];
+      // A lost creation response may be retried, but it must never become an
+      // update that overwrites work saved after the original creation.
+      if (existing && body.create === true) {
+        const columns = [
+          'play_id',
+          'clip_number',
+          'start_seconds',
+          'end_seconds',
+          'odk',
+          'down',
+          'distance',
+          'yard_line',
+          'result',
+          'tags_json',
+        ] as const;
+        if (
+          !columns.every((column, index) => existing[column] === values[index])
+        )
+          throw new WorkspaceAccessError(
+            'This clip was already created and its saved details differ. Your draft is still open. Reload the film to review the saved clip before editing it.',
+            409,
+          );
+        return Response.json({
+          ...(await payload(database, assetId)),
+          savedClipId: clipId,
+        });
+      }
       if (existing) {
         const saved = await database
           .prepare(

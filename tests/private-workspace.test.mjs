@@ -2671,11 +2671,11 @@ test('film client validates real responses and saves/retries the exact clip ID e
   );
   const oneId = crypto.randomUUID(),
     twoId = crypto.randomUUID();
-  const save = async (id, clipNumber, note) => {
+  const save = async (id, clipNumber, note, create = true) => {
     const response = await films.POST(
       request({
         action: 'upsertClip',
-        create: true,
+        create,
         assetId: made.asset.id,
         id,
         clipNumber,
@@ -2689,10 +2689,50 @@ test('film client validates real responses and saves/retries the exact clip ID e
   };
   assert.equal((await save(oneId, 2, 'First')).savedClipId, oneId);
   assert.equal((await save(twoId, 99, 'Last')).savedClipId, twoId);
-  const updated = await save(oneId, 2, 'Updated first');
+  const originalRow = sqlite
+    .prepare('SELECT * FROM film_clips WHERE id = ?')
+    .get(oneId);
+  const replay = await save(oneId, 2, 'First');
+  assert.equal(replay.clips.length, 2);
+  assert.deepEqual(
+    sqlite.prepare('SELECT * FROM film_clips WHERE id = ?').get(oneId),
+    originalRow,
+  );
+  const updated = await save(oneId, 2, 'Updated first', false);
   assert.equal(updated.savedClipId, oneId);
   assert.equal(updated.clips.at(-1).id, twoId);
-  const retried = await save(oneId, 2, 'Updated first');
+  const staleCreation = await films.POST(
+    request({
+      action: 'upsertClip',
+      create: true,
+      assetId: made.asset.id,
+      id: oneId,
+      clipNumber: 2,
+      startSeconds: 0,
+      endSeconds: 1,
+      note: 'First',
+    }),
+  );
+  assert.equal(staleCreation.status, 409);
+  assert.match((await staleCreation.json()).error, /already created/);
+  assert.equal(
+    sqlite.prepare('SELECT tags_json FROM film_clips WHERE id = ?').get(oneId)
+      .tags_json,
+    JSON.stringify({
+      tags: [],
+      note: 'Updated first',
+      concept: '',
+      quarter: '',
+      clock: '',
+    }),
+  );
+  const retried = client.parseFilmPayload(
+    await (
+      await films.GET(
+        new Request('https://pilot.test/api/film?assetId=' + made.asset.id),
+      )
+    ).json(),
+  );
   assert.equal(retried.clips.length, 2);
   assert.equal(
     retried.clips.find((clip) => clip.id === oneId).note,
