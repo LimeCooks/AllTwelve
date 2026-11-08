@@ -16,7 +16,7 @@ A stored progress count makes copying resumable. A retry recognizes previously c
 
 The current prepared download links last 24 hours or until another backup is prepared. Completed preserved snapshots also appear in the collapsed Saved backup history panel; their recovery-copy downloads remain available after those quick links expire or are replaced. Settings shows expiry, hides expired links, and restores current preparation status across navigation and devices. Older pre-copy snapshots remain readable but are explicitly labelled as depending on original uploads; prepare a new backup to gain independent copies.
 
-Completed copy sets/manifests are retained and downloadable from Saved backup history. Scheduled preparation, automatic pruning/retention limits, and an exercised cloud restore procedure are unfinished. Repeated preparation uses additional storage, and unfinished or replaced preparations can leave internal file copies until cleanup is implemented. Do not describe this as a finished unattended disaster-recovery service or imply that the UI can overwrite the live workspace from a retained snapshot. No hosted restore-over-live action exists.
+Completed copy sets/manifests are retained and downloadable from Saved backup history. Preparation is intentionally manual, following the owner's November 8 preference. Automatic pruning/retention limits and an exercised cloud restore procedure are unfinished. Repeated preparation uses additional storage, and unfinished or replaced preparations can leave internal file copies until cleanup is implemented. Do not describe this as an unattended disaster-recovery service or imply that the UI can overwrite the live workspace from a retained snapshot. No hosted restore-over-live action exists.
 
 ## Offline recovery check
 
@@ -50,3 +50,6 @@ History starts collapsed and loads only when opened. It lists complete preserved
 Every listing and archive read derives the team from authenticated identity. IDs accept only UUIDs; page cursors stay within the team's fixed manifest prefix. Invalid, incomplete or failed history reads show an error instead of an apparently empty list. Older preserved manifests without listing metadata are read through the same scoped path. Incomplete preparations are never listed as completed backups.
 
 The actual-handler tests cover old snapshots after replacement/expiry, paging, legacy manifest metadata, malformed IDs/cursors, missing records and cross-account/anonymous rejection. Local browser QA verified the collapsed default, two distinct snapshots after source replacement/deletion, and 390px download controls. Both ZIPs contained their respective original video bytes; the older ZIP restored all domain rows into a new offline workspace. Only disposable local snapshots were removed, and the prior local preparation was restored. The packaged release rehearsal also lists/downloads a saved archive and rejects a foreign owner's archive request.
+
+
+Owner preference, November 8: keep backups manual. No recurring schedule or background tool connection was enabled.
