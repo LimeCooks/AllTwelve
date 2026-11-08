@@ -2157,6 +2157,14 @@ function FilmRoomView({
   } | null>(null);
   const [filmLoading, setFilmLoading] = useState(true);
   const [filmLoadError, setFilmLoadError] = useState('');
+  const [filmClipError, setFilmClipError] = useState('');
+  const [filmDraftUrl, setFilmDraftUrl] = useState('');
+  useEffect(
+    () => () => {
+      if (filmDraftUrl) URL.revokeObjectURL(filmDraftUrl);
+    },
+    [filmDraftUrl],
+  );
   const [filmPlaybackError, setFilmPlaybackError] = useState('');
   const [filmSaving, setFilmSaving] = useState(false);
   const [clipDirty, setClipDirty] = useState(false);
@@ -2252,6 +2260,8 @@ function FilmRoomView({
       if (controller.signal.aborted || ticket !== filmReadSequence.current)
         return;
       newClipRequest.current = null;
+      setFilmClipError('');
+      setFilmDraftUrl('');
       setFilmAsset(data.asset);
       setFilmAssets(data.assets);
       setFilmClips(data.clips);
@@ -2277,6 +2287,8 @@ function FilmRoomView({
       return;
     }
     setClipDirty(false);
+    setFilmClipError('');
+    setFilmDraftUrl('');
     newClipRequest.current = null;
     if (clipId === 0) setNewClipEpoch((value) => value + 1);
     setSelectedClip(clipId);
@@ -2335,6 +2347,7 @@ function FilmRoomView({
       )?.value ?? '';
     const requestedClipId =
       activeClip?.id ?? (newClipRequest.current ??= crypto.randomUUID());
+    setFilmDraftUrl('');
     filmMutationLock.current = true;
     setFilmSaving(true);
     try {
@@ -2346,6 +2359,7 @@ function FilmRoomView({
           assetId: filmAsset.id,
           id: requestedClipId,
           create: !activeClip,
+          version: activeClip?.version,
           clipNumber: activeClip?.clipNumber,
           startSeconds: value('film-start'),
           endSeconds: value('film-end'),
@@ -2387,12 +2401,18 @@ function FilmRoomView({
       }
       onNotify(`Clip ${saved?.clipNumber ?? nextClipNumber} saved.`);
       newClipRequest.current = null;
+      setFilmClipError('');
       setClipDirty(false);
       if (advance) {
         setSelectedClip(0);
         setNote('');
       }
     } catch (error) {
+      setFilmClipError(
+        error instanceof Error
+          ? error.message
+          : 'The clip could not be saved. Your draft is still open.',
+      );
       onNotify(
         error instanceof Error
           ? error.message
@@ -2450,7 +2470,10 @@ function FilmRoomView({
     try {
       const response = await fetch(
         `/api/film?clipId=${encodeURIComponent(activeClip.id)}`,
-        { method: 'DELETE' },
+        {
+          method: 'DELETE',
+          headers: { 'x-chalktalk-clip-version': activeClip.version },
+        },
       );
       const data = (await response.json()) as FilmPayload;
       if (!response.ok)
@@ -2465,8 +2488,14 @@ function FilmRoomView({
       setFilmClips(data.clips);
       setSelectedClip(data.clips[0]?.clipNumber ?? 0);
       setNote(data.clips[0]?.note ?? '');
+      setFilmClipError('');
       onNotify(`Clip ${activeClip.clipNumber} removed.`);
     } catch (error) {
+      setFilmClipError(
+        error instanceof Error
+          ? error.message
+          : 'The clip could not be removed.',
+      );
       onNotify(
         error instanceof Error ? error.message : 'Unable to remove the clip.',
         'error',
@@ -2682,6 +2711,77 @@ function FilmRoomView({
             onClick={() => void openFilm(retryFilmId.current)}
           >
             Retry
+          </Button>
+        </div>
+      ) : null}
+      {filmClipError ? (
+        <div className="pd-error film-clip-recovery" role="alert">
+          <p>{filmClipError}</p>
+          <Button
+            variant="outline"
+            disabled={filmSaving || filmLoading}
+            onClick={() => {
+              const fields = [
+                'start',
+                'end',
+                'unit',
+                'down',
+                'distance',
+                'yardline',
+                'play',
+                'concept',
+                'result',
+                'quarter',
+                'clock',
+                'tags',
+                'note',
+              ];
+              const draft = Object.fromEntries(
+                fields.map((field) => [
+                  field,
+                  (
+                    document.getElementById(`film-${field}`) as
+                      | HTMLInputElement
+                      | HTMLSelectElement
+                      | HTMLTextAreaElement
+                      | null
+                  )?.value ?? '',
+                ]),
+              );
+              const content = JSON.stringify(
+                {
+                  filmId: filmAsset?.id,
+                  filmTitle: filmAsset?.title,
+                  clipId: activeClip?.id ?? newClipRequest.current,
+                  savedVersion: activeClip?.version,
+                  draft,
+                },
+                null,
+                2,
+              );
+              const url = URL.createObjectURL(
+                new Blob([content], { type: 'application/json' }),
+              );
+              setFilmDraftUrl(url);
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = 'chalktalk-clip-draft.json';
+              link.click();
+            }}
+          >
+            Download draft
+          </Button>
+          {filmDraftUrl ? (
+            <a href={filmDraftUrl} download="chalktalk-clip-draft.json">
+              Open draft download
+            </a>
+          ) : null}
+          <Button
+            variant="outline"
+            disabled={filmSaving || filmLoading}
+            onClick={() => void openFilm(filmAsset?.id ?? '')}
+          >
+            Reload saved film
           </Button>
         </div>
       ) : null}
@@ -3147,7 +3247,7 @@ function FilmRoomView({
               </div>
               <div
                 className="film-sheet-grid film-sheet-editor"
-                key={`${filmAsset?.id ?? 'empty'}:${activeClip?.id ?? `new-${filmClips.length}-${newClipEpoch}`}`}
+                key={`${filmAsset?.id ?? 'empty'}:${activeClip ? `${activeClip.id}:${activeClip.version}` : `new-${filmClips.length}-${newClipEpoch}`}`}
               >
                 <strong>
                   {activeClip

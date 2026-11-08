@@ -1,4 +1,10 @@
-import { filmRecordVersion, markFilmForDeletion } from '@/lib/film-record';
+import {
+  clipColumns,
+  filmClipVersion,
+  requireFilmClipVersion,
+  filmRecordVersion,
+  markFilmForDeletion,
+} from '@/lib/film-record';
 import { getDatabase, type TeamDatabase } from '@/db/client';
 import { env } from 'cloudflare:workers';
 import { isPrototype } from '@/lib/request-identity';
@@ -112,8 +118,9 @@ function presentAsset(row: AssetRow) {
   };
 }
 
-function presentClip(row: ClipRow) {
+async function presentClip(row: ClipRow) {
   return {
+    version: await filmClipVersion({ ...row }),
     id: row.id,
     assetId: row.film_asset_id,
     playId: row.play_id,
@@ -161,7 +168,7 @@ async function payload(database: TeamDatabase, assetId = '') {
           ),
         }
       : null,
-    clips: clips.results.map(presentClip),
+    clips: await Promise.all(clips.results.map(presentClip)),
   };
 }
 
@@ -435,16 +442,26 @@ export async function POST(request: Request) {
         });
       }
       if (existing) {
+        await requireFilmClipVersion({ ...existing }, body.version);
         const saved = await database
           .prepare(
             `UPDATE film_clips SET play_id = ?, clip_number = ?, start_seconds = ?, end_seconds = ?, odk = ?, down = ?, distance = ?, yard_line = ?, result = ?, tags_json = ?
-           WHERE id = ? AND film_asset_id = ? AND EXISTS(SELECT 1 FROM film_assets a WHERE a.id = film_clips.film_asset_id AND a.team_id = ? AND a.status != 'deleting') RETURNING id`,
+           WHERE id = ? AND film_asset_id = ? AND EXISTS(SELECT 1 FROM film_assets a WHERE a.id = film_clips.film_asset_id AND a.team_id = ? AND a.status != 'deleting') AND ${clipColumns.map((column) => `${column} IS ?`).join(' AND ')} RETURNING id`,
           )
-          .bind(...values, clipId, assetId, database.teamId)
+          .bind(
+            ...values,
+            clipId,
+            assetId,
+            database.teamId,
+            ...clipColumns.map(
+              (column) =>
+                (({ ...existing }) as Record<string, unknown>)[column],
+            ),
+          )
           .first();
         if (!saved)
           throw new WorkspaceAccessError(
-            'This film is being deleted. Reload the library.',
+            'This clip changed or the film is being deleted. Your draft is still open. Reload the saved film before retrying.',
             409,
           );
       } else {
@@ -501,15 +518,33 @@ export async function DELETE(request: Request) {
     if (clipId) {
       const clip = await database
         .prepare(
-          'SELECT c.film_asset_id FROM film_clips c JOIN film_assets a ON a.id = c.film_asset_id WHERE c.id = ? AND a.team_id = ?',
+          'SELECT c.* FROM film_clips c JOIN film_assets a ON a.id = c.film_asset_id WHERE c.id = ? AND a.team_id = ?',
         )
         .bind(clipId, database.teamId)
-        .first<{ film_asset_id: string }>();
+        .first<ClipRow>();
       if (!clip) throw new WorkspaceAccessError('Clip record not found.', 404);
-      await database
-        .prepare('DELETE FROM film_clips WHERE id = ? AND film_asset_id = ?')
-        .bind(clipId, clip.film_asset_id)
-        .run();
+      await requireFilmClipVersion(
+        { ...clip },
+        request.headers.get('x-chalktalk-clip-version'),
+      );
+      const removed = await database
+        .prepare(
+          `DELETE FROM film_clips WHERE id = ? AND film_asset_id = ? AND EXISTS(SELECT 1 FROM film_assets a WHERE a.id = film_clips.film_asset_id AND a.team_id = ? AND a.status != 'deleting') AND ${clipColumns.map((column) => `${column} IS ?`).join(' AND ')} RETURNING id`,
+        )
+        .bind(
+          clipId,
+          clip.film_asset_id,
+          database.teamId,
+          ...clipColumns.map(
+            (column) => (({ ...clip }) as Record<string, unknown>)[column],
+          ),
+        )
+        .first();
+      if (!removed)
+        throw new WorkspaceAccessError(
+          'This clip changed or the film is being deleted. Reload the saved film before removing it.',
+          409,
+        );
       return Response.json(await payload(database, clip.film_asset_id));
     } else {
       const owned = await markFilmForDeletion(

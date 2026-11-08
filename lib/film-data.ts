@@ -10,6 +10,7 @@ export type FilmAssetRecord = {
   createdAt: string;
 };
 export type FilmClipRecord = {
+  version: string;
   id: string;
   assetId: string;
   playId: string | null;
@@ -87,6 +88,8 @@ export function parseFilmPayload(
         clip &&
         text(clip.id) &&
         Boolean(clip.id) &&
+        typeof clip.version === 'string' &&
+        /^[a-f0-9]{64}$/.test(clip.version) &&
         clip.assetId === data.asset?.id &&
         nullable(clip.playId) &&
         nullable(clip.playName) &&

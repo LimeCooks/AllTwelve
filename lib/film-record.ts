@@ -10,7 +10,7 @@ const assetColumns = [
   'status',
   'created_at',
 ];
-const clipColumns = [
+export const clipColumns = [
   'id',
   'film_asset_id',
   'play_id',
@@ -24,6 +24,29 @@ const clipColumns = [
   'result',
   'tags_json',
 ];
+export async function filmClipVersion(clip: Row) {
+  const bytes = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(
+      JSON.stringify(clipColumns.map((column) => clip[column])),
+    ),
+  );
+  return Array.from(new Uint8Array(bytes), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('');
+}
+export async function requireFilmClipVersion(clip: Row, expected: unknown) {
+  if (typeof expected !== 'string' || !/^[a-f0-9]{64}$/.test(expected))
+    throw new WorkspaceAccessError(
+      'Reload the saved film before changing this clip.',
+      400,
+    );
+  if ((await filmClipVersion(clip)) !== expected)
+    throw new WorkspaceAccessError(
+      'This clip changed on another tab or device. Your draft is still open. Reload the saved film to review the newer version.',
+      409,
+    );
+}
 const orderedClips = (clips: Row[]) =>
   [...clips]
     .sort((a, b) =>

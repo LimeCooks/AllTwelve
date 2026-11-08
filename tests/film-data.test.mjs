@@ -29,6 +29,7 @@ const asset = {
   version: 'a'.repeat(64),
 };
 const clip = {
+  version: 'b'.repeat(64),
   id: 'clip',
   assetId: 'film',
   playId: null,
@@ -67,6 +68,12 @@ test('film responses distinguish a blank library from incomplete or mixed film d
   );
   assert.throws(() =>
     parseFilmPayload({ ...payload(), clips: [{ ...clip, assetId: 'other' }] }),
+  );
+  assert.throws(() =>
+    parseFilmPayload({
+      ...payload(),
+      clips: [{ ...clip, version: undefined }],
+    }),
   );
   assert.throws(() =>
     parseFilmPayload({ ...payload(), clips: [clip, { ...clip, id: 'other' }] }),

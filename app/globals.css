@@ -2084,3 +2084,10 @@ html { background: #f4f7fb; }
  body:has(.teaching-printout) .teaching-diagram { break-inside: avoid; }
  body:has(.teaching-printout) .teaching-diagram .pd-field { max-height: 170mm; object-fit: contain; }
 }
+
+.film-clip-recovery { flex-wrap: wrap; }
+.film-clip-recovery > p { flex: 1 1 240px; margin: 0; }
+.film-clip-recovery > a { color: inherit; text-decoration: underline; }
+@media (max-width: 600px) {
+  .film-clip-recovery > p { flex-basis: 100%; }
+}

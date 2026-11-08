@@ -1289,6 +1289,7 @@ test('blank teams can register multiple films, select independent clips, and can
   const removed = await films.DELETE(
     new Request(`https://pilot.test/api/film?clipId=${firstId}`, {
       method: 'DELETE',
+      headers: { 'x-chalktalk-clip-version': firstData.clips[0].version },
     }),
   );
   assert.equal((await removed.json()).asset.id, one.id);
@@ -2672,10 +2673,16 @@ test('film client validates real responses and saves/retries the exact clip ID e
   const oneId = crypto.randomUUID(),
     twoId = crypto.randomUUID();
   const save = async (id, clipNumber, note, create = true) => {
+    const current = await (
+      await films.GET(
+        new Request('https://pilot.test/api/film?assetId=' + made.asset.id),
+      )
+    ).json();
     const response = await films.POST(
       request({
         action: 'upsertClip',
         create,
+        version: current.clips.find((clip) => clip.id === id)?.version,
         assetId: made.asset.id,
         id,
         clipNumber,
@@ -2745,4 +2752,156 @@ test('film client validates real responses and saves/retries the exact clip ID e
     }),
   );
   assert.equal(remove.status, 200);
+});
+
+test('film clip revisions reject stale and late edits or removals without blocking unrelated clips', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'owner-a',
+    name: 'Coach A',
+    email: 'a@example.test',
+  };
+  const db = await getDatabase(),
+    key = 'clip-conflict-' + crypto.randomUUID();
+  await globalThis.privateTestBucket.put(
+    `teams/${db.teamId}/${key}`,
+    new Uint8Array([1]),
+    { httpMetadata: { contentType: 'video/mp4' } },
+  );
+  const made = await (
+    await films.POST(
+      request({
+        action: 'register',
+        storageKey: key,
+        title: 'Clip conflict fixture',
+      }),
+    )
+  ).json();
+  const assetId = made.asset.id;
+  const read = async () =>
+    (
+      await films.GET(
+        new Request('https://pilot.test/api/film?assetId=' + assetId),
+      )
+    ).json();
+  const create = async (note) => {
+    const response = await films.POST(
+      request({
+        action: 'upsertClip',
+        assetId,
+        startSeconds: 0,
+        endSeconds: 3,
+        note,
+      }),
+    );
+    assert.equal(response.status, 201);
+    return (await response.json()).clips.at(-1);
+  };
+  const first = await create('Original'),
+    second = await create('Unrelated');
+  const edit = (clip, note) =>
+    films.POST(
+      request({
+        action: 'upsertClip',
+        assetId,
+        id: clip.id,
+        version: clip.version,
+        clipNumber: clip.clipNumber,
+        startSeconds: 1,
+        endSeconds: 4,
+        note,
+      }),
+    );
+  const remove = (clip) =>
+    films.DELETE(
+      new Request('https://pilot.test/api/film?clipId=' + clip.id, {
+        method: 'DELETE',
+        headers: { 'x-chalktalk-clip-version': clip.version },
+      }),
+    );
+  const saved = await edit(first, 'Newer note');
+  assert.equal(saved.status, 200);
+  const newer = (await saved.json()).clips.find((c) => c.id === first.id);
+  assert.notEqual(newer.version, first.version);
+  assert.equal((await edit(first, 'Stale device note')).status, 409);
+  assert.equal((await remove(first)).status, 409);
+  assert.equal((await edit(second, 'Other clip changed')).status, 200);
+  assert.equal(
+    (await edit({ ...newer, version: undefined }, 'Missing revision')).status,
+    400,
+  );
+  assert.equal((await remove({ ...newer, version: 'bad' })).status, 400);
+  let current = (await read()).clips.find((c) => c.id === first.id);
+  assert.equal(current.note, 'Newer note');
+  assert.equal(current.startSeconds, 1);
+  // Change the raw row after preflight but before the guarded UPDATE runs.
+  const originalPrepare = database.prepare;
+  let injected = false;
+  database.prepare = function (sql) {
+    const statement = originalPrepare.call(this, sql);
+    if (sql.startsWith('UPDATE film_clips SET')) {
+      const originalFirst = statement.first;
+      statement.first = async function () {
+        injected = true;
+        sqlite
+          .prepare('UPDATE film_clips SET end_seconds=8 WHERE id=?')
+          .run(first.id);
+        return originalFirst.call(this);
+      };
+    }
+    return statement;
+  };
+  try {
+    assert.equal((await edit(current, 'Late stale edit')).status, 409);
+  } finally {
+    database.prepare = originalPrepare;
+  }
+  assert.equal(injected, true);
+  current = (await read()).clips.find((c) => c.id === first.id);
+  assert.equal(current.note, 'Newer note');
+  assert.equal(current.endSeconds, 8);
+  injected = false;
+  database.prepare = function (sql) {
+    const statement = originalPrepare.call(this, sql);
+    if (sql.startsWith('DELETE FROM film_clips WHERE')) {
+      const originalFirst = statement.first;
+      statement.first = async function () {
+        injected = true;
+        sqlite
+          .prepare('UPDATE film_clips SET yard_line=? WHERE id=?')
+          .run('H 32', first.id);
+        return originalFirst.call(this);
+      };
+    }
+    return statement;
+  };
+  try {
+    assert.equal((await remove(current)).status, 409);
+  } finally {
+    database.prepare = originalPrepare;
+  }
+  assert.equal(injected, true);
+  current = (await read()).clips.find((c) => c.id === first.id);
+  assert.equal(current.yardLine, 'H 32');
+  sqlite
+    .prepare("UPDATE film_assets SET status='deleting' WHERE id=?")
+    .run(assetId);
+  assert.equal((await remove(current)).status, 409);
+  assert.ok((await read()).clips.some((c) => c.id === first.id));
+  sqlite
+    .prepare("UPDATE film_assets SET status='ready' WHERE id=?")
+    .run(assetId);
+  assert.equal((await remove(current)).status, 200);
+  assert.ok(!(await read()).clips.some((c) => c.id === first.id));
+  const final = await read();
+  assert.equal(
+    (
+      await films.DELETE(
+        new Request('https://pilot.test/api/film?assetId=' + assetId, {
+          method: 'DELETE',
+          headers: { 'x-chalktalk-film-version': final.asset.version },
+        }),
+      )
+    ).status,
+    200,
+  );
 });
