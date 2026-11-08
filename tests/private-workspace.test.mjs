@@ -2237,3 +2237,79 @@ test('depth charts start blank, preserve custom roles and notes, reject stale or
     200,
   );
 });
+
+test('versioned copies and deletes require identity and cannot target another owner record', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'owner-a',
+    name: 'Coach A',
+    email: 'a@example.test',
+  };
+  const bookResponse = await playbooks.POST(
+    request({ kind: 'book', name: 'Scoped record safety', side: 'Defence' }),
+  );
+  assert.equal(bookResponse.status, 201);
+  const book = await bookResponse.json();
+  const playResponse = await playbooks.POST(
+    request({
+      kind: 'play',
+      name: 'Private source',
+      playbookId: book.createdId,
+    }),
+  );
+  assert.equal(playResponse.status, 201);
+  const library = await playResponse.json(),
+    play = library.plays.find((p) => p.id === library.createdId);
+  globalThis.privateTestIdentity = {
+    id: 'owner-b',
+    name: 'Coach B',
+    email: 'b@example.test',
+  };
+  assert.equal(
+    (
+      await playbooks.POST(
+        request({
+          kind: 'duplicate',
+          id: play.id,
+          version: play.version,
+          creationId: crypto.randomUUID(),
+        }),
+      )
+    ).status,
+    404,
+  );
+  assert.equal(
+    (
+      await playbooks.DELETE(
+        request({ kind: 'play', id: play.id, version: play.version }),
+      )
+    ).status,
+    404,
+  );
+  globalThis.privateTestIdentity = null;
+  assert.equal(
+    (
+      await playbooks.POST(
+        request({ kind: 'duplicate', id: play.id, version: play.version }),
+      )
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await playbooks.DELETE(
+        request({ kind: 'play', id: play.id, version: play.version }),
+      )
+    ).status,
+    401,
+  );
+  globalThis.privateTestIdentity = {
+    id: 'owner-a',
+    name: 'Coach A',
+    email: 'a@example.test',
+  };
+  assert.equal(
+    (await (await playbooks.GET()).json()).plays.find((p) => p.id === play.id)
+      .name,
+    'Private source',
+  );
+});

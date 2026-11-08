@@ -116,17 +116,27 @@ export async function revisionGuard(
   kind: Kind,
   id: string,
   expected: unknown,
-  desired: { side?: unknown; unit?: unknown; scope?: unknown } = {},
+  desired: {
+    side?: unknown;
+    unit?: unknown;
+    scope?: unknown;
+    operation?: 'save' | 'copy' | 'delete';
+  } = {},
 ) {
+  const operation = desired.operation ?? 'save';
   if (typeof expected !== 'string' || !/^[a-f0-9]{64}$/.test(expected))
     throw new RevisionError(
-      'Reload this record before saving. Your draft is still open.',
+      operation === 'save'
+        ? 'Reload this record before saving. Your draft is still open.'
+        : `Reload this record before ${operation === 'copy' ? 'duplicating' : 'deleting'} it.`,
       400,
     );
   const snapshot = await revisionSnapshot(db, kind, id);
   if (snapshot.version !== expected)
     throw new RevisionError(
-      'This record changed on another device. Download your draft, then reload the latest saved version.',
+      operation === 'save'
+        ? 'This record changed on another device. Download your draft, then reload the latest saved version.'
+        : 'This record changed on another device. Close this dialog and reload the latest saved version before continuing.',
     );
   const table = tables[kind],
     guardId = crypto.randomUUID();
@@ -153,9 +163,10 @@ export async function revisionGuard(
         ]),
       ),
     );
-    extra += ` AND NOT EXISTS(SELECT 1 FROM install_items i JOIN install_packages k ON k.id = i.package_id WHERE i.play_id = plays.id AND k.published_at IS NOT NULL)`;
+    if (operation !== 'copy')
+      extra += ` AND NOT EXISTS(SELECT 1 FROM install_items i JOIN install_packages k ON k.id = i.package_id WHERE i.play_id = plays.id AND k.published_at IS NOT NULL)`;
   }
-  if (kind === 'formation')
+  if (kind === 'formation' && operation !== 'copy')
     extra += ` AND NOT EXISTS(SELECT 1 FROM plays p JOIN install_items i ON i.play_id = p.id JOIN install_packages k ON k.id = i.package_id WHERE p.formation_id = formations.id AND k.published_at IS NOT NULL)`;
   if (
     kind === 'book' &&
@@ -166,12 +177,24 @@ export async function revisionGuard(
       ' AND NOT EXISTS(SELECT 1 FROM plays p WHERE p.playbook_id = playbooks.id)';
   if (
     kind === 'formation' &&
+    operation === 'save' &&
     (desired.unit !== snapshot.row.unit ||
       desired.scope !==
         (JSON.parse(String(snapshot.row.layout_json)).scope ?? 'team'))
   )
     extra +=
       ' AND NOT EXISTS(SELECT 1 FROM plays p WHERE p.formation_id = formations.id)';
+  if (operation === 'delete') {
+    if (kind === 'play')
+      extra +=
+        ' AND NOT EXISTS(SELECT 1 FROM install_items i WHERE i.play_id = plays.id)';
+    if (kind === 'formation')
+      extra +=
+        ' AND NOT EXISTS(SELECT 1 FROM plays p WHERE p.formation_id = formations.id)';
+    if (kind === 'book')
+      extra +=
+        ' AND NOT EXISTS(SELECT 1 FROM plays p WHERE p.playbook_id = playbooks.id)';
+  }
   // A failed NOT NULL assertion aborts the entire D1 batch, including assignments.
   // CASE placeholders precede the final timestamp placeholder.
   const statement = db
@@ -185,26 +208,31 @@ export async function revisionGuard(
       ...values,
       new Date().toISOString(),
     );
+  const wrap = (statements: D1PreparedStatement[]) => [
+    statement,
+    ...statements,
+    db
+      .prepare('DELETE FROM workspace_state WHERE id = ? AND team_id = ?')
+      .bind(guardId, db.teamId),
+  ];
+  const failure = (error: unknown) =>
+    error instanceof Error &&
+    error.message.includes('workspace_state.value_json')
+      ? new RevisionError(
+          operation === 'save'
+            ? 'This record changed or was published while saving. Your draft is still open. Download it before reloading.'
+            : 'This record changed or gained linked work before the action completed. Nothing was copied or deleted. Close this dialog and reload before continuing.',
+        )
+      : error;
   return {
     snapshot,
+    wrap,
+    failure,
     async commit(statements: D1PreparedStatement[]) {
       try {
-        await db.batch([
-          statement,
-          ...statements,
-          db
-            .prepare('DELETE FROM workspace_state WHERE id = ? AND team_id = ?')
-            .bind(guardId, db.teamId),
-        ]);
+        await db.batch(wrap(statements));
       } catch (error) {
-        if (
-          error instanceof Error &&
-          error.message.includes('workspace_state.value_json')
-        )
-          throw new RevisionError(
-            'This record changed or was published while saving. Your draft is still open. Download it before reloading.',
-          );
-        throw error;
+        throw failure(error);
       }
     },
   };

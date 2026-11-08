@@ -248,7 +248,13 @@ test('complete package lifecycle, arbitrary cadence, isolation, publication and 
     'Cannot publish with no recipients',
   );
   assert.equal(
-    (await call(playbooks, 'DELETE', { kind: 'play', id: play.id })).status,
+    (
+      await call(playbooks, 'DELETE', {
+        kind: 'play',
+        id: play.id,
+        version: play.version,
+      })
+    ).status,
     409,
     'Installed play cannot silently disappear',
   );
@@ -326,7 +332,11 @@ test('complete package lifecycle, arbitrary cadence, isolation, publication and 
     'Published teaching content cannot change under reviews',
   );
   const copied = ok(
-    await call(playbooks, 'POST', { kind: 'duplicate', id: play.id }),
+    await call(playbooks, 'POST', {
+      kind: 'duplicate',
+      id: play.id,
+      version: play.version,
+    }),
   );
   const copy = copied.plays.find((item) => item.id === copied.createdId);
   assert.equal(copy.locked, false);
@@ -565,7 +575,11 @@ test('defensive/scout formations, custom packages, opponent snapshots and modern
   assert.deepEqual(reloaded.opponentPlayers, shifted.opponentPlayers);
   assert.equal(reloaded.opponentFormationId, scout.id);
   const duplicate = ok(
-    await call(playbooks, 'POST', { kind: 'duplicate', id: play.id }),
+    await call(playbooks, 'POST', {
+      kind: 'duplicate',
+      id: play.id,
+      version: reloaded.version,
+    }),
   );
   const copy = duplicate.plays.find((p) => p.id === duplicate.createdId);
   assert.deepEqual(copy.routes, reloaded.routes);
@@ -734,6 +748,9 @@ test('creation retries return exact IDs without duplicate books, plays, formatio
   const copyBody = {
     kind: 'duplicate',
     id: play.createdId,
+    version: ok(await call(playbooks, 'GET')).plays.find(
+      (p) => p.id === play.createdId,
+    ).version,
     creationId: crypto.randomUUID(),
   };
   const copy = ok(await call(playbooks, 'POST', copyBody));
@@ -763,6 +780,8 @@ test('creation retries return exact IDs without duplicate books, plays, formatio
     await call(playbooks, 'DELETE', {
       kind: 'formation',
       id: formation.createdId,
+      version: formation.formations.find((f) => f.id === formation.createdId)
+        .version,
     }),
   );
   assert.equal((await call(playbooks, 'POST', formationBody)).status, 409);
@@ -1011,5 +1030,320 @@ test('Playbook install client confirms real handler responses and safe repeated 
   assert.equal(
     ok(await call(installs, 'GET', null, '?packageId=' + pack.id)).items.length,
     1,
+  );
+});
+
+test('copy is one coherent source version and failed or retried copies cannot leave partial records', async () => {
+  const madeBook = ok(
+    await call(playbooks, 'POST', {
+      kind: 'book',
+      name: 'Copy transaction',
+      side: 'Defence',
+    }),
+  );
+  const made = ok(
+    await call(playbooks, 'POST', {
+      kind: 'play',
+      name: 'Copy source',
+      playbookId: madeBook.createdId,
+    }),
+  );
+  let source = made.plays.find((p) => p.id === made.createdId);
+  source = ok(
+    await call(playbooks, 'PUT', {
+      ...source,
+      assignments: [
+        {
+          id: 'source-a',
+          position: 'FS',
+          title: 'Old read',
+          detail: 'Old detail',
+        },
+      ],
+    }),
+  ).plays.find((p) => p.id === source.id);
+  const creationId = crypto.randomUUID(),
+    body = {
+      kind: 'duplicate',
+      id: source.id,
+      version: source.version,
+      creationId,
+    };
+  const count = sqlite.prepare('SELECT count(*) n FROM plays').get().n;
+  const originalBatch = database.batch;
+  let injected = false;
+  database.batch = async function (statements) {
+    if (!injected) {
+      injected = true;
+      const diagram = JSON.parse(
+        sqlite
+          .prepare('SELECT diagram_json FROM plays WHERE id = ?')
+          .get(source.id).diagram_json,
+      );
+      diagram.labels = [
+        {
+          id: 'latest-label',
+          x: 200,
+          y: 600,
+          text: 'Latest diagram',
+          colour: '#ffffff',
+        },
+      ];
+      sqlite
+        .prepare(
+          'UPDATE plays SET name = ?, notes = ?, diagram_json = ? WHERE id = ?',
+        )
+        .run(
+          'Latest copy source',
+          'Latest note',
+          JSON.stringify(diagram),
+          source.id,
+        );
+      sqlite
+        .prepare(
+          'UPDATE play_assignments SET title = ?, detail = ? WHERE play_id = ?',
+        )
+        .run('Latest read', 'Latest detail', source.id);
+    }
+    return originalBatch.call(this, statements);
+  };
+  try {
+    assert.equal((await call(playbooks, 'POST', body)).status, 409);
+  } finally {
+    database.batch = originalBatch;
+  }
+  assert.equal(sqlite.prepare('SELECT count(*) n FROM plays').get().n, count);
+  assert.equal(
+    sqlite
+      .prepare('SELECT count(*) n FROM workspace_state WHERE state_key = ?')
+      .get('pb-create-' + creationId).n,
+    0,
+  );
+  assert.equal((await call(playbooks, 'POST', body)).status, 409);
+  const latest = ok(await call(playbooks, 'GET')).plays.find(
+    (p) => p.id === source.id,
+  );
+  const freshBody = { ...body, version: latest.version };
+  const copied = ok(await call(playbooks, 'POST', freshBody));
+  const copy = copied.plays.find((p) => p.id === copied.createdId);
+  assert.equal(copy.name, 'Latest copy source — copy');
+  assert.equal(copy.notes, 'Latest note');
+  assert.equal(copy.labels[0].text, 'Latest diagram');
+  assert.equal(copy.assignments[0].title, 'Latest read');
+  assert.equal(copy.assignments[0].detail, 'Latest detail');
+  assert.notEqual(copy.assignments[0].id, latest.assignments[0].id);
+  assert.equal(
+    (
+      await call(playbooks, 'DELETE', {
+        kind: 'play',
+        id: source.id,
+        version: source.version,
+      })
+    ).status,
+    409,
+  );
+  assert.equal(
+    (await call(playbooks, 'DELETE', { kind: 'play', id: source.id })).status,
+    400,
+  );
+  ok(
+    await call(playbooks, 'DELETE', {
+      kind: 'play',
+      id: source.id,
+      version: latest.version,
+    }),
+  );
+  assert.equal(
+    ok(await call(playbooks, 'POST', freshBody)).createdId,
+    copy.id,
+    'An already confirmed copy retries safely even if its source was removed',
+  );
+  assert.equal(
+    (await call(playbooks, 'POST', { kind: 'duplicate', id: copy.id })).status,
+    400,
+  );
+  assert.equal(
+    sqlite
+      .prepare(
+        "SELECT count(*) n FROM workspace_state WHERE state_key LIKE 'pb-save-%'",
+      )
+      .get().n,
+    0,
+  );
+});
+
+test('delete checks content and new child/install links inside the transaction rather than cascading over newer work', async () => {
+  const madeBook = ok(
+    await call(playbooks, 'POST', {
+      kind: 'book',
+      name: 'Delete transaction',
+      side: 'Defence',
+    }),
+  );
+  let book = madeBook.books.find((b) => b.id === madeBook.createdId);
+  const renamed = ok(
+    await call(playbooks, 'PUT', {
+      ...book,
+      kind: 'book',
+      name: 'New book name',
+    }),
+  );
+  assert.equal(
+    (
+      await call(playbooks, 'DELETE', {
+        kind: 'book',
+        id: book.id,
+        version: book.version,
+      })
+    ).status,
+    409,
+  );
+  book = renamed.books.find((b) => b.id === book.id);
+  const template = ok(
+    await call(playbooks, 'POST', {
+      kind: 'play',
+      name: 'Template for race',
+      playbookId: book.id,
+    }),
+  );
+  const templatePlay = template.plays.find((p) => p.id === template.createdId);
+  const emptyMade = ok(
+    await call(playbooks, 'POST', {
+      kind: 'book',
+      name: 'Empty before race',
+      side: 'Defence',
+    }),
+  );
+  const emptyBook = emptyMade.books.find((b) => b.id === emptyMade.createdId);
+  const originalBatch = database.batch;
+  let injected = false;
+  database.batch = async function (statements) {
+    if (!injected) {
+      injected = true;
+      sqlite
+        .prepare(
+          'INSERT INTO plays (id,team_id,playbook_id,formation_id,name,unit,category,family,concept,diagram_json,notes,created_at,updated_at) SELECT ?,team_id,?,formation_id,?,unit,category,family,concept,diagram_json,notes,created_at,updated_at FROM plays WHERE id = ?',
+        )
+        .run(
+          crypto.randomUUID(),
+          emptyBook.id,
+          'Created during deletion',
+          templatePlay.id,
+        );
+    }
+    return originalBatch.call(this, statements);
+  };
+  try {
+    assert.equal(
+      (
+        await call(playbooks, 'DELETE', {
+          kind: 'book',
+          id: emptyBook.id,
+          version: emptyBook.version,
+        })
+      ).status,
+      409,
+    );
+  } finally {
+    database.batch = originalBatch;
+  }
+  assert.ok(
+    sqlite.prepare('SELECT id FROM playbooks WHERE id = ?').get(emptyBook.id),
+  );
+  assert.equal(
+    sqlite
+      .prepare('SELECT count(*) n FROM plays WHERE playbook_id = ?')
+      .get(emptyBook.id).n,
+    1,
+  );
+  const install = ok(
+    await call(installs, 'POST', {
+      kind: 'package',
+      name: 'Link during delete',
+      unit: 'Defence',
+      dueAt: '',
+    }),
+  ).package;
+  injected = false;
+  database.batch = async function (statements) {
+    if (!injected) {
+      injected = true;
+      sqlite
+        .prepare(
+          "INSERT INTO install_items (id,package_id,play_id,title,item_type,position_group,sort_order) VALUES (?,?,?,?,'Play','Defence',0)",
+        )
+        .run(
+          crypto.randomUUID(),
+          install.id,
+          templatePlay.id,
+          templatePlay.name,
+        );
+    }
+    return originalBatch.call(this, statements);
+  };
+  try {
+    assert.equal(
+      (
+        await call(playbooks, 'DELETE', {
+          kind: 'play',
+          id: templatePlay.id,
+          version: templatePlay.version,
+        })
+      ).status,
+      409,
+    );
+  } finally {
+    database.batch = originalBatch;
+  }
+  assert.ok(
+    sqlite.prepare('SELECT id FROM plays WHERE id = ?').get(templatePlay.id),
+  );
+  assert.equal(
+    ok(await call(installs, 'GET', null, '?packageId=' + install.id)).items
+      .length,
+    1,
+  );
+  const formationMade = ok(
+    await call(playbooks, 'POST', {
+      kind: 'formation',
+      name: 'Delete stale formation',
+      unit: 'Defence',
+      scope: 'team',
+    }),
+  );
+  const formation = formationMade.formations.find(
+    (f) => f.id === formationMade.createdId,
+  );
+  const changed = ok(
+    await call(playbooks, 'PUT', {
+      ...formation,
+      kind: 'formation',
+      name: 'Latest formation name',
+    }),
+  ).formations.find((f) => f.id === formation.id);
+  assert.equal(
+    (
+      await call(playbooks, 'DELETE', {
+        kind: 'formation',
+        id: formation.id,
+        version: formation.version,
+      })
+    ).status,
+    409,
+  );
+  ok(
+    await call(playbooks, 'DELETE', {
+      kind: 'formation',
+      id: formation.id,
+      version: changed.version,
+    }),
+  );
+  assert.equal(
+    sqlite
+      .prepare(
+        "SELECT count(*) n FROM workspace_state WHERE state_key LIKE 'pb-save-%'",
+      )
+      .get().n,
+    0,
   );
 });

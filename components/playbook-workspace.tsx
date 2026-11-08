@@ -85,6 +85,7 @@ export function PlaybookWorkspace({
     | null
   >(null);
   const [deletingId, setDeletingId] = useState('');
+  const deleteTarget = useRef<{ version?: string; name: string }>({ name: '' });
   const [editorEpoch, setEditorEpoch] = useState(0);
   const mutationLock = useRef(false);
   const settingsVersion = useRef<string | undefined>(undefined);
@@ -171,6 +172,18 @@ export function PlaybookWorkspace({
     if (!response.ok)
       throw new Error(result.error || 'Unable to save the playbook.');
     const next = parsePlaybookLibrary(result);
+    if (method === 'DELETE') {
+      const records =
+        payload?.kind === 'book'
+          ? next.books
+          : payload?.kind === 'formation'
+            ? next.formations
+            : next.plays;
+      if (records.some((record) => record.id === payload?.id))
+        throw new Error(
+          'Deletion could not be confirmed. Close this dialog and reload before retrying.',
+        );
+    }
     if (method === 'POST') {
       const records =
         payload?.kind === 'book'
@@ -612,6 +625,11 @@ export function PlaybookWorkspace({
                   </Button>
                   <Button
                     onClick={() => {
+                      deleteTarget.current = {
+                        version: f.version,
+                        name: f.name,
+                      };
+                      setError('');
                       setDeletingId(f.id);
                       setDialog('delete-formation');
                     }}
@@ -751,7 +769,7 @@ export function PlaybookWorkspace({
               onClick={() =>
                 void mutate(
                   'POST',
-                  { kind: 'duplicate', id: viewed.id },
+                  { kind: 'duplicate', id: viewed.id, version: viewed.version },
                   (next) => {
                     if (next.createdId)
                       setEditor({ kind: 'play', id: next.createdId });
@@ -868,6 +886,11 @@ export function PlaybookWorkspace({
             <Button
               disabled={viewed.locked}
               onClick={() => {
+                deleteTarget.current = {
+                  version: viewed.version,
+                  name: viewed.name,
+                };
+                setError('');
                 setDeletingId(viewed.id);
                 setDialog('delete-play');
               }}
@@ -1007,7 +1030,7 @@ export function PlaybookWorkspace({
           <DialogHeader>
             <DialogTitle>
               {dialog?.startsWith('delete')
-                ? 'Delete this record?'
+                ? `Delete “${deleteTarget.current.name}”?`
                 : dialog === 'book-settings'
                   ? 'Playbook settings'
                   : dialog === 'book'
@@ -1025,8 +1048,20 @@ export function PlaybookWorkspace({
             </DialogDescription>
           </DialogHeader>
           {error ? (
-            <p className="pd-error" role="alert">
-              {error}
+            <p className="pd-error pd-recovery-error" role="alert">
+              <span>{error}</span>
+              {dialog?.startsWith('delete') ? (
+                <Button
+                  disabled={busy}
+                  variant="outline"
+                  onClick={() => {
+                    setDialog(null);
+                    void refresh();
+                  }}
+                >
+                  Reload saved records
+                </Button>
+              ) : null}
             </p>
           ) : null}
           {discardRequested ? (
@@ -1052,15 +1087,23 @@ export function PlaybookWorkspace({
           ) : null}
           {dialog?.startsWith('delete') ? (
             <DialogFooter>
-              <Button onClick={() => setDialog(null)} variant="outline">
+              <Button
+                disabled={busy}
+                onClick={() => setDialog(null)}
+                variant="outline"
+              >
                 Cancel
               </Button>
               <Button
-                disabled={busy}
+                disabled={busy || Boolean(error)}
                 onClick={() =>
                   void mutate(
                     'DELETE',
-                    { kind: dialog.replace('delete-', ''), id: deletingId },
+                    {
+                      kind: dialog.replace('delete-', ''),
+                      id: deletingId,
+                      version: deleteTarget.current.version,
+                    },
                     () => {
                       setViewerId('');
                       if (dialog === 'delete-book') setBookId('');
@@ -1183,6 +1226,11 @@ export function PlaybookWorkspace({
                         : undefined
                     }
                     onClick={() => {
+                      deleteTarget.current = {
+                        version: book?.version,
+                        name: book?.name ?? 'Playbook',
+                      };
+                      setError('');
                       setDeletingId(bookId);
                       setDialog('delete-book');
                     }}

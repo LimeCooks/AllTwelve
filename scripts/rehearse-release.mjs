@@ -516,6 +516,52 @@ try {
     'PUT',
     409,
   );
+  const copySource = (await api('/api/playbooks')).plays.find(
+    (record) => record.id === play.createdId,
+  );
+  const duplicateRequest = {
+    kind: 'duplicate',
+    id: copySource.id,
+    version: copySource.version,
+    creationId: crypto.randomUUID(),
+  };
+  const duplicateResult = await api(
+    '/api/playbooks',
+    'a',
+    duplicateRequest,
+    'POST',
+    201,
+  );
+  const duplicatePlay = duplicateResult.plays.find(
+    (record) => record.id === duplicateResult.createdId,
+  );
+  assert.equal(duplicatePlay.notes, 'Saved diagram revision');
+  assert.equal(
+    (await api('/api/playbooks', 'a', duplicateRequest, 'POST', 200)).createdId,
+    duplicatePlay.id,
+  );
+  const changedCopy = await api(
+    '/api/playbooks',
+    'a',
+    { ...duplicatePlay, name: 'Rehearsal revised copy' },
+    'PUT',
+  );
+  await api(
+    '/api/playbooks',
+    'a',
+    { kind: 'play', id: duplicatePlay.id, version: duplicatePlay.version },
+    'DELETE',
+    409,
+  );
+  const currentCopy = changedCopy.plays.find(
+    (record) => record.id === duplicatePlay.id,
+  );
+  await api(
+    '/api/playbooks',
+    'a',
+    { kind: 'play', id: currentCopy.id, version: currentCopy.version },
+    'DELETE',
+  );
   const install = await api(
     '/api/install',
     'a',

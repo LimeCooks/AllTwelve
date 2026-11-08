@@ -274,51 +274,51 @@ export async function POST(request: Request) {
     const now = new Date().toISOString();
     if (body.kind === 'duplicate') {
       const sourceId = text(body.id);
-      const source = await database
-        .prepare('SELECT id, name FROM plays WHERE id = ? AND team_id = ?')
-        .bind(sourceId, database.teamId)
-        .first<{ id: string; name: string }>();
-      if (!source) throw new Error('Play not found.');
+      const guard = await revisionGuard(
+        database,
+        'play',
+        sourceId,
+        body.version,
+        { operation: 'copy' },
+      );
+      const source = guard.snapshot.row;
+      const sourceAssignments = guard.snapshot.assignments;
       let id = creation.id;
-      const sourceAssignments = await database
-        .prepare(
-          'SELECT position, title, detail, sort_order FROM play_assignments WHERE play_id = ?',
-        )
-        .bind(sourceId)
-        .all<{
-          position: string;
-          title: string;
-          detail: string;
-          sort_order: number;
-        }>();
-      id = await creation.commit([
-        database
-          .prepare(
-            `INSERT INTO plays (id, team_id, playbook_id, formation_id, name, unit, category, family, concept, diagram_json, notes, created_at, updated_at) SELECT ?, team_id, playbook_id, formation_id, ?, unit, category, family, concept, diagram_json, notes, ?, ? FROM plays WHERE id = ? AND team_id = ?`,
-          )
-          .bind(
-            id,
-            `${source.name} — copy`,
-            now,
-            now,
-            sourceId,
-            database.teamId,
-          ),
-        ...sourceAssignments.results.map((assignment) =>
-          database
-            .prepare(
-              'INSERT INTO play_assignments (id, play_id, position, title, detail, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
-            )
-            .bind(
-              crypto.randomUUID(),
-              id,
-              assignment.position,
-              assignment.title,
-              assignment.detail,
-              assignment.sort_order,
+      try {
+        id = await creation.commit(
+          guard.wrap([
+            database
+              .prepare(
+                `INSERT INTO plays (id, team_id, playbook_id, formation_id, name, unit, category, family, concept, diagram_json, notes, created_at, updated_at) SELECT ?, team_id, playbook_id, formation_id, ?, unit, category, family, concept, diagram_json, notes, ?, ? FROM plays WHERE id = ? AND team_id = ?`,
+              )
+              .bind(
+                id,
+                `${source.name} — copy`,
+                now,
+                now,
+                sourceId,
+                database.teamId,
+              ),
+            ...sourceAssignments.map((assignment) =>
+              database
+                .prepare(
+                  'INSERT INTO play_assignments (id, play_id, position, title, detail, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+                )
+                .bind(
+                  crypto.randomUUID(),
+                  id,
+                  assignment.position,
+                  assignment.title,
+                  assignment.detail,
+                  assignment.sort_order,
+                ),
             ),
-        ),
-      ]);
+          ]),
+        );
+      } catch (error) {
+        throw guard.failure(error);
+      }
+
       return Response.json(
         { ...(await payload(database)), createdId: id },
         { status: 201 },
@@ -470,7 +470,7 @@ export async function POST(request: Request) {
       { error: errorMessage(error, 'Unable to create record.') },
       {
         status:
-          error instanceof CreationError
+          error instanceof CreationError || error instanceof RevisionError
             ? error.status
             : error instanceof WorkspaceAccessError
               ? error.status
@@ -731,6 +731,13 @@ export async function DELETE(request: Request) {
     if (!id || !['play', 'formation', 'book'].includes(kind))
       throw new Error('A valid record is required.');
     const database = await getDatabase();
+    const guard = await revisionGuard(
+      database,
+      kind as 'book' | 'play' | 'formation',
+      id,
+      body.version,
+      { operation: 'delete' },
+    );
     if (kind === 'formation') {
       const used = await database
         .prepare('SELECT COUNT(*) AS count FROM plays WHERE formation_id = ?')
@@ -741,10 +748,11 @@ export async function DELETE(request: Request) {
           { error: 'Move or delete this formation’s plays first.' },
           { status: 409 },
         );
-      await database
-        .prepare('DELETE FROM formations WHERE id = ? AND team_id = ?')
-        .bind(id, database.teamId)
-        .run();
+      await guard.commit([
+        database
+          .prepare('DELETE FROM formations WHERE id = ? AND team_id = ?')
+          .bind(id, database.teamId),
+      ]);
     } else if (kind === 'play') {
       const installed = await database
         .prepare(
@@ -760,10 +768,11 @@ export async function DELETE(request: Request) {
           },
           { status: 409 },
         );
-      await database
-        .prepare('DELETE FROM plays WHERE id = ? AND team_id = ?')
-        .bind(id, database.teamId)
-        .run();
+      await guard.commit([
+        database
+          .prepare('DELETE FROM plays WHERE id = ? AND team_id = ?')
+          .bind(id, database.teamId),
+      ]);
     } else {
       const used = await database
         .prepare('SELECT COUNT(*) AS count FROM plays WHERE playbook_id = ?')
@@ -774,10 +783,11 @@ export async function DELETE(request: Request) {
           { error: 'Delete or move this playbook’s plays first.' },
           { status: 409 },
         );
-      await database
-        .prepare('DELETE FROM playbooks WHERE id = ? AND team_id = ?')
-        .bind(id, database.teamId)
-        .run();
+      await guard.commit([
+        database
+          .prepare('DELETE FROM playbooks WHERE id = ? AND team_id = ?')
+          .bind(id, database.teamId),
+      ]);
     }
     return Response.json(await payload(database));
   } catch (error) {
@@ -786,7 +796,13 @@ export async function DELETE(request: Request) {
         error:
           error instanceof Error ? error.message : 'Unable to delete record.',
       },
-      { status: 400 },
+      {
+        status:
+          error instanceof RevisionError ||
+          error instanceof WorkspaceAccessError
+            ? error.status
+            : 400,
+      },
     );
   }
 }
