@@ -269,6 +269,7 @@ const { backupTables, createTeamBackup, backupJobKey } = await import(
   backupUrl
 );
 const { backupZip } = await import(zipUrl);
+const filmRecordUrl = await moduleUrl('../lib/film-record.ts', replacements);
 const films = await import(
   await moduleUrl('../app/api/film/route.ts', [
     [
@@ -276,6 +277,7 @@ const films = await import(
       'const env = { MEDIA: globalThis.privateTestBucket };',
     ],
     ["'@/lib/team-backup'", JSON.stringify(backupUrl)],
+    ["'@/lib/film-record'", JSON.stringify(filmRecordUrl)],
     ...replacements,
   ])
 );
@@ -1397,6 +1399,11 @@ test('blank teams can register multiple films, select independent clips, and can
       (
         await films.DELETE(
           new Request(`https://pilot.test/api/film?assetId=${id}`, {
+            headers: {
+              'x-chalktalk-film-version': (
+                await (await get(id)).json()
+              ).asset.version,
+            },
             method: 'DELETE',
           }),
         )
@@ -1408,6 +1415,10 @@ test('blank teams can register multiple films, select independent clips, and can
   globalThis.privateTestIdentity = bob;
   await films.DELETE(
     new Request(`https://pilot.test/api/film?assetId=${bAsset.id}`, {
+      headers: {
+        'x-chalktalk-film-version': (await (await get(bAsset.id)).json()).asset
+          .version,
+      },
       method: 'DELETE',
     }),
   );
@@ -2312,4 +2323,323 @@ test('versioned copies and deletes require identity and cannot target another ow
       .name,
     'Private source',
   );
+});
+
+test('film deletion rejects stale confirmations, removes owned bytes and clips, and retries safely after storage failure', async () => {
+  const alice = { id: 'owner-a', name: 'Coach A', email: 'a@example.test' },
+    bob = { id: 'owner-b', name: 'Coach B', email: 'b@example.test' };
+  globalThis.privateTestIdentity = alice;
+  const a = await getDatabase();
+  const bucket = globalThis.privateTestBucket,
+    key = 'film-delete-test';
+  await bucket.put(`teams/${a.teamId}/${key}`, new Uint8Array([1, 2, 3, 4]), {
+    httpMetadata: { contentType: 'video/mp4' },
+  });
+  const createdResponse = await films.POST(
+    request({ action: 'register', storageKey: key, title: 'Delete test film' }),
+  );
+  assert.equal(createdResponse.status, 201);
+  let current = await createdResponse.json();
+  const id = current.asset.id,
+    firstVersion = current.asset.version;
+  const added = await films.POST(
+    request({
+      action: 'upsertClip',
+      assetId: id,
+      startSeconds: 0.1,
+      endSeconds: 3,
+      note: 'Keep this until deletion finishes',
+    }),
+  );
+  assert.equal(added.status, 201);
+  current = await added.json();
+  const remove = (version = current.asset.version) =>
+    films.DELETE(
+      new Request('https://pilot.test/api/film?assetId=' + id, {
+        method: 'DELETE',
+        headers: { 'x-chalktalk-film-version': version },
+      }),
+    );
+  assert.equal(
+    (await remove(firstVersion)).status,
+    409,
+    'A clip added after confirmation must prevent deletion',
+  );
+  assert.ok(await bucket.head(`teams/${a.teamId}/${key}`));
+  globalThis.privateTestIdentity = bob;
+  assert.equal((await remove()).status, 404);
+  globalThis.privateTestIdentity = null;
+  assert.equal((await remove()).status, 401);
+  globalThis.privateTestIdentity = alice;
+  const originalDelete = bucket.delete;
+  let failed = false;
+  bucket.delete = async function (target) {
+    if (!failed && target === `teams/${a.teamId}/${key}`) {
+      failed = true;
+      throw Error('simulated storage outage');
+    }
+    return originalDelete.call(this, target);
+  };
+  try {
+    assert.equal((await remove()).status, 503);
+  } finally {
+    bucket.delete = originalDelete;
+  }
+  assert.equal(
+    sqlite.prepare('SELECT status FROM film_assets WHERE id = ?').get(id)
+      .status,
+    'deleting',
+  );
+  assert.equal(
+    sqlite
+      .prepare('SELECT count(*) n FROM film_clips WHERE film_asset_id = ?')
+      .get(id).n,
+    1,
+  );
+  assert.ok(await bucket.head(`teams/${a.teamId}/${key}`));
+  assert.ok(
+    (
+      await films.POST(
+        request({
+          action: 'upsertClip',
+          assetId: id,
+          startSeconds: 1,
+          endSeconds: 2,
+        }),
+      )
+    ).status >= 400,
+  );
+  assert.equal(
+    (
+      await films.POST(
+        request({
+          action: 'register',
+          storageKey: key,
+          title: 'Must not revive',
+        }),
+      )
+    ).status,
+    409,
+  );
+  const removed = await remove();
+  assert.equal(removed.status, 200);
+  assert.equal(
+    (await removed.json()).assets.some((asset) => asset.id === id),
+    false,
+  );
+  assert.equal(
+    sqlite
+      .prepare('SELECT count(*) n FROM film_clips WHERE film_asset_id = ?')
+      .get(id).n,
+    0,
+  );
+  assert.equal(await bucket.head(`teams/${a.teamId}/${key}`), null);
+  assert.equal(
+    sqlite
+      .prepare(
+        "SELECT count(*) n FROM workspace_state WHERE state_key LIKE 'film-delete-check-%'",
+      )
+      .get().n,
+    0,
+  );
+});
+
+test('film delete transaction catches late clip edits and keeps shared uploaded bytes until the last film is removed', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'owner-a',
+    name: 'Coach A',
+    email: 'a@example.test',
+  };
+  const a = await getDatabase(),
+    bucket = globalThis.privateTestBucket,
+    key = 'shared-film-delete-test';
+  await bucket.put(`teams/${a.teamId}/${key}`, new Uint8Array([9, 8, 7]), {
+    httpMetadata: { contentType: 'video/mp4' },
+  });
+  const made = await (
+    await films.POST(
+      request({
+        action: 'register',
+        storageKey: key,
+        title: 'Shared original',
+      }),
+    )
+  ).json();
+  const id = made.asset.id;
+  const charted = await (
+    await films.POST(
+      request({
+        action: 'upsertClip',
+        assetId: id,
+        startSeconds: 0,
+        endSeconds: 1.25,
+        note: 'Original',
+      }),
+    )
+  ).json();
+  const originalBatch = database.batch;
+  let injected = false;
+  database.batch = async function (statements) {
+    if (!injected) {
+      injected = true;
+      const details = JSON.stringify({
+        tags: [],
+        note: 'Changed after preflight',
+        concept: '',
+        quarter: '',
+        clock: '',
+      });
+      sqlite
+        .prepare('UPDATE film_clips SET tags_json = ? WHERE film_asset_id = ?')
+        .run(details, id);
+    }
+    return originalBatch.call(this, statements);
+  };
+  try {
+    assert.equal(
+      (
+        await films.DELETE(
+          new Request('https://pilot.test/api/film?assetId=' + id, {
+            method: 'DELETE',
+            headers: { 'x-chalktalk-film-version': charted.asset.version },
+          }),
+        )
+      ).status,
+      409,
+    );
+  } finally {
+    database.batch = originalBatch;
+  }
+  assert.equal(
+    sqlite.prepare('SELECT status FROM film_assets WHERE id = ?').get(id)
+      .status,
+    'ready',
+  );
+  assert.ok(await bucket.head(`teams/${a.teamId}/${key}`));
+  const duplicateId = crypto.randomUUID();
+  sqlite
+    .prepare(
+      'INSERT INTO film_assets (id,team_id,game_id,title,storage_key,duration_seconds,status,created_at) SELECT ?,team_id,game_id,?,storage_key,duration_seconds,status,created_at FROM film_assets WHERE id = ?',
+    )
+    .run(duplicateId, 'Shared second record', id);
+  const remove = async (target) => {
+    const current = await (
+      await films.GET(
+        new Request('https://pilot.test/api/film?assetId=' + target),
+      )
+    ).json();
+    return films.DELETE(
+      new Request('https://pilot.test/api/film?assetId=' + target, {
+        method: 'DELETE',
+        headers: { 'x-chalktalk-film-version': current.asset.version },
+      }),
+    );
+  };
+  assert.equal((await remove(id)).status, 200);
+  assert.ok(await bucket.head(`teams/${a.teamId}/${key}`));
+  assert.ok(
+    sqlite.prepare('SELECT id FROM film_assets WHERE id = ?').get(duplicateId),
+  );
+  assert.equal((await remove(duplicateId)).status, 200);
+  assert.equal(await bucket.head(`teams/${a.teamId}/${key}`), null);
+});
+
+test('film removal can finish after bytes were removed but the final database delete failed', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'owner-a',
+    name: 'Coach A',
+    email: 'a@example.test',
+  };
+  const a = await getDatabase(),
+    key = 'film-final-delete-retry',
+    bucket = globalThis.privateTestBucket;
+  await bucket.put(`teams/${a.teamId}/${key}`, new Uint8Array([5, 6, 7]), {
+    httpMetadata: { contentType: 'video/mp4' },
+  });
+  const made = await (
+    await films.POST(
+      request({
+        action: 'register',
+        storageKey: key,
+        title: 'Final delete retry',
+      }),
+    )
+  ).json();
+  const remove = () =>
+    films.DELETE(
+      new Request('https://pilot.test/api/film?assetId=' + made.asset.id, {
+        method: 'DELETE',
+        headers: { 'x-chalktalk-film-version': made.asset.version },
+      }),
+    );
+  const originalPrepare = database.prepare;
+  let failed = false;
+  database.prepare = function (query) {
+    if (!failed && query.includes('DELETE FROM film_assets WHERE')) {
+      failed = true;
+      throw Error('simulated database outage after file removal');
+    }
+    return originalPrepare.call(this, query);
+  };
+  try {
+    assert.equal((await remove()).status, 500);
+  } finally {
+    database.prepare = originalPrepare;
+  }
+  assert.equal(await bucket.head(`teams/${a.teamId}/${key}`), null);
+  assert.equal(
+    sqlite
+      .prepare('SELECT status FROM film_assets WHERE id = ?')
+      .get(made.asset.id).status,
+    'deleting',
+  );
+  assert.equal((await remove()).status, 200);
+  assert.equal(
+    sqlite
+      .prepare('SELECT id FROM film_assets WHERE id = ?')
+      .get(made.asset.id),
+    undefined,
+  );
+});
+
+test('two confirmed pending removals do not retain orphaned shared bytes', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'owner-a',
+    name: 'Coach A',
+    email: 'a@example.test',
+  };
+  const a = await getDatabase(),
+    key = 'pending-shared-film',
+    bucket = globalThis.privateTestBucket;
+  await bucket.put(`teams/${a.teamId}/${key}`, new Uint8Array([5, 6, 7]), {
+    httpMetadata: { contentType: 'video/mp4' },
+  });
+  const made = await (
+    await films.POST(
+      request({
+        action: 'register',
+        storageKey: key,
+        title: 'Pending shared film',
+      }),
+    )
+  ).json();
+  const secondId = crypto.randomUUID();
+  sqlite
+    .prepare(
+      'INSERT INTO film_assets (id,team_id,title,storage_key,duration_seconds,status,created_at) SELECT ?,team_id,title,storage_key,duration_seconds,status,created_at FROM film_assets WHERE id = ?',
+    )
+    .run(secondId, made.asset.id);
+  sqlite
+    .prepare("UPDATE film_assets SET status = 'deleting' WHERE id IN (?,?)")
+    .run(made.asset.id, secondId);
+  const remove = (id) =>
+    films.DELETE(
+      new Request('https://pilot.test/api/film?assetId=' + id, {
+        method: 'DELETE',
+        headers: { 'x-chalktalk-film-version': made.asset.version },
+      }),
+    );
+  assert.equal((await remove(made.asset.id)).status, 200);
+  assert.equal(await bucket.head(`teams/${a.teamId}/${key}`), null);
+  assert.equal((await remove(secondId)).status, 200);
 });

@@ -1,3 +1,4 @@
+import { filmRecordVersion, markFilmForDeletion } from '@/lib/film-record';
 import { getDatabase, type TeamDatabase } from '@/db/client';
 import { env } from 'cloudflare:workers';
 import { isPrototype } from '@/lib/request-identity';
@@ -151,7 +152,15 @@ async function payload(database: TeamDatabase, assetId = '') {
     : { results: [] as ClipRow[] };
   return {
     assets: assets.results.map(presentAsset),
-    asset: activeAsset ? presentAsset(activeAsset) : null,
+    asset: activeAsset
+      ? {
+          ...presentAsset(activeAsset),
+          version: await filmRecordVersion(
+            { ...activeAsset },
+            clips.results.map((clip) => ({ ...clip })),
+          ),
+        }
+      : null,
     clips: clips.results.map(presentClip),
   };
 }
@@ -216,19 +225,25 @@ export async function POST(request: Request) {
         );
       const existing = await database
         .prepare(
-          'SELECT id, game_id, duration_seconds FROM film_assets WHERE team_id = ? AND storage_key = ?',
+          'SELECT id, game_id, duration_seconds, status FROM film_assets WHERE team_id = ? AND storage_key = ?',
         )
         .bind(database.teamId, storageKey)
         .first<{
           id: string;
           game_id: string | null;
           duration_seconds: number;
+          status: string;
         }>();
       const id = existing?.id ?? crypto.randomUUID();
       if (existing) {
-        await database
+        if (existing.status === 'deleting')
+          throw new WorkspaceAccessError(
+            'This film is being deleted. Finish deletion before registering it again.',
+            409,
+          );
+        const saved = await database
           .prepare(
-            "UPDATE film_assets SET title = ?, duration_seconds = ?, game_id = ?, status = 'ready' WHERE id = ? AND team_id = ?",
+            "UPDATE film_assets SET title = ?, duration_seconds = ?, game_id = ?, status = 'ready' WHERE id = ? AND team_id = ? AND status != 'deleting' RETURNING id",
           )
           .bind(
             title,
@@ -239,7 +254,12 @@ export async function POST(request: Request) {
             id,
             database.teamId,
           )
-          .run();
+          .first();
+        if (!saved)
+          throw new WorkspaceAccessError(
+            'This film changed or is being deleted. Reload before retrying.',
+            409,
+          );
       } else {
         await database
           .prepare(
@@ -268,17 +288,24 @@ export async function POST(request: Request) {
         throw new FilmInputError('A valid film duration is required.');
       if (
         !(await database
-          .prepare('SELECT id FROM film_assets WHERE id = ? AND team_id = ?')
+          .prepare(
+            "SELECT id FROM film_assets WHERE id = ? AND team_id = ? AND status != 'deleting'",
+          )
           .bind(assetId, database.teamId)
           .first())
       )
         throw new WorkspaceAccessError('Film record not found.', 404);
-      await database
+      const saved = await database
         .prepare(
-          'UPDATE film_assets SET duration_seconds = ? WHERE id = ? AND team_id = ?',
+          "UPDATE film_assets SET duration_seconds = ? WHERE id = ? AND team_id = ? AND status != 'deleting' RETURNING id",
         )
         .bind(Math.round(duration), assetId, database.teamId)
-        .run();
+        .first();
+      if (!saved)
+        throw new WorkspaceAccessError(
+          'This film is being deleted. Reload the library.',
+          409,
+        );
       return Response.json(await payload(database, assetId));
     }
     if (action === 'upsertClip') {
@@ -286,7 +313,9 @@ export async function POST(request: Request) {
       if (!assetId)
         throw new FilmInputError('Upload film before charting clips.');
       const asset = await database
-        .prepare('SELECT id FROM film_assets WHERE id = ? AND team_id = ?')
+        .prepare(
+          "SELECT id FROM film_assets WHERE id = ? AND team_id = ? AND status != 'deleting'",
+        )
         .bind(assetId, database.teamId)
         .first<{ id: string }>();
       if (!asset)
@@ -373,21 +402,31 @@ export async function POST(request: Request) {
         details,
       ];
       if (existing) {
-        await database
+        const saved = await database
           .prepare(
             `UPDATE film_clips SET play_id = ?, clip_number = ?, start_seconds = ?, end_seconds = ?, odk = ?, down = ?, distance = ?, yard_line = ?, result = ?, tags_json = ?
-           WHERE id = ? AND film_asset_id = ?`,
+           WHERE id = ? AND film_asset_id = ? AND EXISTS(SELECT 1 FROM film_assets a WHERE a.id = film_clips.film_asset_id AND a.team_id = ? AND a.status != 'deleting') RETURNING id`,
           )
-          .bind(...values, clipId, assetId)
-          .run();
+          .bind(...values, clipId, assetId, database.teamId)
+          .first();
+        if (!saved)
+          throw new WorkspaceAccessError(
+            'This film is being deleted. Reload the library.',
+            409,
+          );
       } else {
-        await database
+        const saved = await database
           .prepare(
             `INSERT INTO film_clips (id, film_asset_id, play_id, clip_number, start_seconds, end_seconds, odk, down, distance, yard_line, result, tags_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS(SELECT 1 FROM film_assets a WHERE a.id = ? AND a.team_id = ? AND a.status != 'deleting') RETURNING id`,
           )
-          .bind(clipId, assetId, ...values)
-          .run();
+          .bind(clipId, assetId, ...values, assetId, database.teamId)
+          .first();
+        if (!saved)
+          throw new WorkspaceAccessError(
+            'This film is being deleted. Reload the library.',
+            409,
+          );
       }
       return Response.json(await payload(database, assetId), {
         status: existing ? 200 : 201,
@@ -437,13 +476,43 @@ export async function DELETE(request: Request) {
         .run();
       return Response.json(await payload(database, clip.film_asset_id));
     } else {
-      const owned = await database
-        .prepare('SELECT id FROM film_assets WHERE id = ? AND team_id = ?')
-        .bind(assetId, database.teamId)
-        .first();
-      if (!owned) throw new WorkspaceAccessError('Film record not found.', 404);
+      const owned = await markFilmForDeletion(
+        database,
+        assetId,
+        request.headers.get('x-chalktalk-film-version'),
+      );
+      const storedKey =
+        typeof owned.storage_key === 'string' ? owned.storage_key : null;
+      if (storedKey && !safeMediaKey(storedKey))
+        throw new FilmInputError(
+          'The stored video key is invalid; this film could not be deleted safely.',
+        );
+      // Keep the record and clips as a retry marker until storage removal succeeds.
+      if (storedKey) {
+        const shared = await database
+          .prepare(
+            "SELECT id FROM film_assets WHERE team_id = ? AND storage_key = ? AND id != ? AND status != 'deleting' LIMIT 1",
+          )
+          .bind(database.teamId, storedKey, assetId)
+          .first();
+        if (!shared) {
+          const key = isPrototype()
+            ? storedKey
+            : `teams/${database.teamId}/${storedKey}`;
+          try {
+            await (env as unknown as { MEDIA: R2Bucket }).MEDIA.delete(key);
+          } catch {
+            throw new WorkspaceAccessError(
+              'Video deletion did not finish. The film and clips remain marked for deletion; retry Delete film to finish.',
+              503,
+            );
+          }
+        }
+      }
       await database
-        .prepare('DELETE FROM film_assets WHERE id = ? AND team_id = ?')
+        .prepare(
+          "DELETE FROM film_assets WHERE id = ? AND team_id = ? AND status = 'deleting'",
+        )
         .bind(assetId, database.teamId)
         .run();
     }
@@ -455,7 +524,7 @@ export async function DELETE(request: Request) {
           error instanceof FilmInputError ||
           error instanceof WorkspaceAccessError
             ? error.message
-            : 'Unable to delete the clip.',
+            : 'Deletion did not finish. Reload the library and retry.',
       },
       {
         status:

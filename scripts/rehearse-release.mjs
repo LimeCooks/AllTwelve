@@ -703,6 +703,76 @@ try {
     'POST',
     200,
   );
+  // Storage lifecycle fixture only; real playback is verified separately with an MP4 in the browser.
+  const disposableVideo = Buffer.from('disposable-film-storage-fixture');
+  const videoUpload = await fetch(
+    `${origin}/api/media?key=film-delete-rehearsal`,
+    {
+      method: 'POST',
+      headers: {
+        ...ownerHeaders('a'),
+        origin,
+        'content-type': 'video/mp4',
+        'x-chalktalk-upload-size': String(disposableVideo.length),
+        'x-chalktalk-filename': 'rehearsal.mp4',
+      },
+      body: disposableVideo,
+    },
+  );
+  assert.equal(videoUpload.status, 200);
+  const videoRecord = await api(
+    '/api/film',
+    'a',
+    {
+      action: 'register',
+      storageKey: 'film-delete-rehearsal',
+      title: 'Disposable film removal',
+    },
+    'POST',
+    201,
+  );
+  const chartedVideo = await api(
+    '/api/film',
+    'a',
+    {
+      action: 'upsertClip',
+      assetId: videoRecord.asset.id,
+      startSeconds: 0,
+      endSeconds: 1.25,
+      note: 'Disposable clip',
+    },
+    'POST',
+    201,
+  );
+  const staleRemove = await fetch(
+    `${origin}/api/film?assetId=${videoRecord.asset.id}`,
+    {
+      method: 'DELETE',
+      headers: {
+        ...ownerHeaders('a'),
+        origin,
+        'x-chalktalk-film-version': videoRecord.asset.version,
+      },
+    },
+  );
+  assert.equal(staleRemove.status, 409);
+  const removeVideo = await fetch(
+    `${origin}/api/film?assetId=${videoRecord.asset.id}`,
+    {
+      method: 'DELETE',
+      headers: {
+        ...ownerHeaders('a'),
+        origin,
+        'x-chalktalk-film-version': chartedVideo.asset.version,
+      },
+    },
+  );
+  assert.equal(removeVideo.status, 200, await removeVideo.text());
+  const removedBytes = await fetch(
+    `${origin}/api/media?key=film-delete-rehearsal`,
+    { method: 'HEAD', headers: ownerHeaders('a') },
+  );
+  assert.equal(removedBytes.status, 404);
   fixture = {
     athlete: athlete.athlete.id,
     team: (await api('/api/session')).team.id,

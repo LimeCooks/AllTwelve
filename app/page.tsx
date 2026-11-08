@@ -2101,6 +2101,7 @@ function FocusModeButton({
 }
 
 type FilmAssetRecord = {
+  version?: string;
   id: string;
   gameId: string | null;
   opponent: string | null;
@@ -2176,7 +2177,16 @@ function FilmRoomView({
   const [filmAssets, setFilmAssets] = useState<FilmAssetRecord[]>([]);
   const [filmClips, setFilmClips] = useState<FilmClipRecord[]>([]);
   const [selectedClip, setSelectedClip] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [deleteFilmOpen, setDeleteFilmOpen] = useState(false);
+  const [deleteFilmError, setDeleteFilmError] = useState('');
+  const deleteFilmLock = useRef(false);
+  const deleteFilmTarget = useRef<{
+    id: string;
+    title: string;
+    clips: number;
+    version?: string;
+    needsReload?: boolean;
+  } | null>(null);
   const [filmLoading, setFilmLoading] = useState(true);
   const [filmLoadError, setFilmLoadError] = useState('');
   const [filmPlaybackError, setFilmPlaybackError] = useState('');
@@ -2199,8 +2209,10 @@ function FilmRoomView({
   const [filmSearch, setFilmSearch] = useState('');
   const [libraryTab, setLibraryTab] = useState<'Games' | 'Clips'>('Games');
   const [libraryCollapsed, setLibraryCollapsed] = useState(true);
-  const [readyFilmSource, setReadyFilmSource] = useState('');
   const videoRef = useRef<HTMLVideoElement>(null);
+  const pendingClipSeek = useRef<{ source: string; seconds: number } | null>(
+    null,
+  );
   const activeClip =
     filmClips.find((clip) => clip.clipNumber === selectedClip) ?? null;
   const nextClipNumber =
@@ -2210,10 +2222,10 @@ function FilmRoomView({
       .toLowerCase()
       .includes(filmSearch.toLowerCase()),
   );
-  const filmSource = filmAsset?.storageKey
-    ? mediaUrl(filmAsset.storageKey, assetRevision)
-    : '';
-  const filmAvailable = Boolean(filmSource && readyFilmSource === filmSource);
+  const filmSource =
+    filmAsset?.storageKey && filmAsset.status !== 'deleting'
+      ? mediaUrl(filmAsset.storageKey, assetRevision)
+      : '';
 
   useEffect(() => {
     fetch(
@@ -2256,8 +2268,6 @@ function FilmRoomView({
       setFilmClips(data.clips);
       setSelectedClip(data.clips[0]?.clipNumber ?? 0);
       setNote(data.clips[0]?.note ?? '');
-      setReadyFilmSource('');
-      setIsPlaying(false);
       setClipDirty(false);
       if (assetId === filmAsset?.id) videoRef.current?.load();
     } catch {
@@ -2279,8 +2289,26 @@ function FilmRoomView({
     setSelectedClip(clipId);
     const clip = filmClips.find((item) => item.clipNumber === clipId);
     setNote(clip?.note ?? '');
-    if (clip && videoRef.current)
-      videoRef.current.currentTime = clip.startSeconds;
+    if (clip && videoRef.current) {
+      const video = videoRef.current;
+      if (video.readyState < 1)
+        pendingClipSeek.current = {
+          source: filmSource,
+          seconds: clip.startSeconds,
+        };
+      else {
+        try {
+          video.currentTime = Number.isFinite(video.duration)
+            ? Math.min(clip.startSeconds, video.duration)
+            : clip.startSeconds;
+        } catch {
+          onNotify(
+            'This clip could not be sought yet. Start playback and choose the clip again.',
+            'warning',
+          );
+        }
+      }
+    }
   };
 
   const moveClip = (direction: number) => {
@@ -2297,6 +2325,10 @@ function FilmRoomView({
 
   const saveBreakdown = async (advance = false) => {
     if (filmSaving || filmLoading) return;
+    if (filmAsset?.status === 'deleting') {
+      onNotify('Finish deleting this film before changing clips.', 'info');
+      return;
+    }
     if (!filmAsset) {
       onNotify('Upload film before charting clips.', 'info');
       return;
@@ -2389,7 +2421,6 @@ function FilmRoomView({
     setFilmClips(data.clips);
     setSelectedClip(data.clips[0]?.clipNumber ?? 0);
     setNote(data.clips[0]?.note ?? '');
-    setReadyFilmSource('');
     setFilmLoadError('');
     setFilmPlaybackError('');
     onAssetsChanged();
@@ -2462,18 +2493,95 @@ function FilmRoomView({
     }
   };
 
-  const toggleFilm = async () => {
-    const video = videoRef.current;
-    if (!video || !filmAvailable) {
-      onNotify('Upload game film before using playback controls.', 'info');
-      return;
+  const beginDeleteFilm = async () => {
+    if (!filmAsset || filmLoading || filmSaving) return;
+    setFilmSaving(true);
+    try {
+      const fresh = await readFilmData(filmAsset.id);
+      if (!fresh.asset?.version)
+        throw new Error('The film could not be confirmed. Reload the library.');
+      deleteFilmTarget.current = {
+        id: fresh.asset.id,
+        title: fresh.asset.title,
+        clips: fresh.clips.length,
+        version: fresh.asset.version,
+      };
+      setDeleteFilmError('');
+      setDeleteFilmOpen(true);
+    } catch (failure) {
+      onNotify(
+        failure instanceof Error
+          ? failure.message
+          : 'Unable to load this film for deletion.',
+        'error',
+      );
+    } finally {
+      setFilmSaving(false);
     }
-    if (video.paused) {
-      await video.play();
-      setIsPlaying(true);
-    } else {
-      video.pause();
-      setIsPlaying(false);
+  };
+  const deleteFilm = async () => {
+    if (!filmAsset || deleteFilmLock.current) return;
+    deleteFilmLock.current = true;
+    setFilmSaving(true);
+    setDeleteFilmError('');
+    const deletingId = deleteFilmTarget.current?.id ?? filmAsset.id;
+    videoRef.current?.pause();
+    try {
+      const response = await fetch(
+        `/api/film?assetId=${encodeURIComponent(deletingId)}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'x-chalktalk-film-version': deleteFilmTarget.current?.version ?? '',
+          },
+        },
+      );
+      const result = (await response.json()) as FilmPayload;
+      if (
+        !response.ok &&
+        [400, 404, 409].includes(response.status) &&
+        deleteFilmTarget.current
+      )
+        deleteFilmTarget.current.needsReload = true;
+      if (
+        !response.ok ||
+        !Array.isArray(result.assets) ||
+        !Array.isArray(result.clips) ||
+        result.assets.some((asset) => asset.id === deletingId)
+      )
+        throw new Error(
+          result.error ||
+            'Deletion could not be confirmed. Reload the film library before retrying.',
+        );
+      videoRef.current?.pause();
+      setFilmAsset(result.asset);
+      setFilmAssets(result.assets);
+      setFilmClips(result.clips);
+      setSelectedClip(result.clips[0]?.clipNumber ?? 0);
+      setNote(result.clips[0]?.note ?? '');
+      setClipDirty(false);
+      setFilmPlaybackError('');
+      setFilmLoadError('');
+      setDeleteFilmOpen(false);
+      onAssetsChanged();
+      onNotify('Film and its charted clips deleted.', 'success');
+    } catch (failure) {
+      try {
+        const latest = await readFilmData(deletingId);
+        setFilmAsset((current) =>
+          current?.id === deletingId ? latest.asset : current,
+        );
+      } catch {
+        /* Keep this confirmation until an explicit library reload. */
+      }
+      setDeleteFilmError(
+        failure instanceof Error
+          ? failure.message
+          : 'Unable to delete the film. Retry when connected.',
+      );
+    } finally {
+      deleteFilmLock.current = false;
+      setFilmSaving(false);
     }
   };
 
@@ -2497,6 +2605,20 @@ function FilmRoomView({
           onNotify={onNotify}
           onUploaded={registerFilm}
         />
+        {filmAsset ? (
+          <Button
+            variant="outline"
+            disabled={filmLoading || filmSaving}
+            onClick={() => {
+              void beginDeleteFilm();
+            }}
+          >
+            <Trash2 />{' '}
+            {filmAsset.status === 'deleting'
+              ? 'Finish deleting film'
+              : 'Delete film'}
+          </Button>
+        ) : null}
         <Button
           className="module-primary"
           disabled={!filmAsset || filmLoading || filmSaving}
@@ -2505,6 +2627,12 @@ function FilmRoomView({
           <Plus /> New clip
         </Button>
       </ModuleHeader>
+      {filmAsset?.status === 'deleting' ? (
+        <p role="alert">
+          Film deletion is unfinished. Use Finish deleting film to retry
+          removing the video and its clips.
+        </p>
+      ) : null}
       {filmLoadError ? (
         <div className="pd-error" role="alert">
           {filmLoadError}
@@ -2728,20 +2856,29 @@ function FilmRoomView({
               {filmSource ? (
                 <video
                   aria-label="Uploaded game film"
-                  className={
-                    filmAvailable ? 'film-video available' : 'film-video'
-                  }
-                  onCanPlay={() => setReadyFilmSource(filmSource)}
-                  onLoadedMetadata={() => void saveFilmDuration()}
-                  onEnded={() => setIsPlaying(false)}
+                  key={filmSource}
+                  controls
+                  className="film-video available"
+                  onLoadedMetadata={(event) => {
+                    const pending = pendingClipSeek.current;
+                    if (pending?.source === filmSource) {
+                      try {
+                        event.currentTarget.currentTime = Math.min(
+                          pending.seconds,
+                          event.currentTarget.duration,
+                        );
+                      } catch {
+                        /* Native controls remain available to retry. */
+                      }
+                      pendingClipSeek.current = null;
+                    }
+                    void saveFilmDuration();
+                  }}
                   onError={() => {
-                    setReadyFilmSource('');
                     setFilmPlaybackError(
-                      'This saved film could not be played in this browser.',
+                      'This video could not be played. Check the connection or try a supported video format.',
                     );
                   }}
-                  onPause={() => setIsPlaying(false)}
-                  onPlay={() => setIsPlaying(true)}
                   playsInline
                   preload="metadata"
                   ref={videoRef}
@@ -2755,38 +2892,33 @@ function FilmRoomView({
                   />
                 </video>
               ) : null}
-              {filmAvailable ? (
-                <>
-                  <button
-                    aria-label={isPlaying ? 'Pause film' : 'Play film'}
-                    className="viewer-play"
-                    onClick={() => void toggleFilm()}
-                    type="button"
-                  >
-                    {isPlaying ? (
-                      <Pause fill="currentColor" />
-                    ) : (
-                      <Play fill="currentColor" />
-                    )}
-                  </button>
-                  {activeClip ? (
-                    <span className="viewer-tag">
-                      <Tag /> {clipLabel(activeClip)}
-                    </span>
-                  ) : null}
-                </>
-              ) : (
+              {!filmSource || filmPlaybackError ? (
                 <div className="viewer-empty-state">
                   <Film />
                   <strong>
-                    {filmPlaybackError ||
-                      (filmSource ? 'Loading film…' : 'No film uploaded')}
+                    {filmAsset?.status === 'deleting'
+                      ? 'Deletion unfinished'
+                      : filmPlaybackError ||
+                        (filmSource ? 'Loading film…' : 'No film uploaded')}
                   </strong>
                   <span>
-                    {filmSource
-                      ? 'Open another saved film or upload a compatible video.'
-                      : 'Upload a video to begin reviewing and charting clips.'}
+                    {filmAsset?.status === 'deleting'
+                      ? 'Retry Finish deleting film to complete removal.'
+                      : filmSource
+                        ? 'Open another saved film or upload a compatible video.'
+                        : 'Upload a video to begin reviewing and charting clips.'}
                   </span>
+                  {filmSource ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setFilmPlaybackError('');
+                        videoRef.current?.load();
+                      }}
+                    >
+                      Retry playback
+                    </Button>
+                  ) : null}
                   <MediaUploadControl
                     accept="video/*"
                     assetKey={() => `film-${crypto.randomUUID()}`}
@@ -2796,80 +2928,35 @@ function FilmRoomView({
                     onUploaded={registerFilm}
                   />
                 </div>
-              )}
+              ) : null}
             </div>
-            <div className="player-controls">
-              <Button
-                aria-label="Previous clip"
-                onClick={() => moveClip(-1)}
-                size="icon-sm"
-                variant="ghost"
-              >
-                <SkipBack />
-              </Button>
-              <Button
-                aria-label={isPlaying ? 'Pause' : 'Play'}
-                className="control-play"
-                disabled={!filmAvailable}
-                size="icon"
-                onClick={() => void toggleFilm()}
-              >
-                <>
-                  {isPlaying ? (
-                    <Pause fill="currentColor" />
-                  ) : (
-                    <Play fill="currentColor" />
-                  )}
-                </>
-              </Button>
-              <Button
-                aria-label="Next clip"
-                onClick={() => moveClip(1)}
-                size="icon-sm"
-                variant="ghost"
-              >
-                <SkipForward />
-              </Button>
-              <span className="timecode">
-                {activeClip
-                  ? `${activeClip.startSeconds}s – ${activeClip.endSeconds}s`
-                  : 'No clip selected'}
-              </span>
-              <Slider
-                aria-label="Film timeline"
-                className="film-slider"
-                disabled={!filmAvailable}
-                value={[
-                  activeClip && filmAsset?.durationSeconds
-                    ? (activeClip.startSeconds / filmAsset.durationSeconds) *
-                      100
-                    : 0,
-                ]}
-                max={100}
-              />
-              <Button
-                aria-label="Volume"
-                disabled={!filmAvailable}
-                onClick={() => {
-                  if (videoRef.current)
-                    videoRef.current.muted = !videoRef.current.muted;
-                }}
-                size="icon-sm"
-                variant="ghost"
-              >
-                <Volume2 />
-              </Button>
-              <Button
-                aria-label="Fullscreen"
-                onClick={() =>
-                  document.querySelector('.viewer')?.requestFullscreen?.()
-                }
-                size="icon-sm"
-                variant="ghost"
-              >
-                <Maximize2 />
-              </Button>
-            </div>
+            {filmClips.length ? (
+              <div className="player-controls">
+                <Button
+                  aria-label="Previous clip"
+                  disabled={filmLoading || filmSaving}
+                  onClick={() => moveClip(-1)}
+                  size="icon-sm"
+                  variant="ghost"
+                >
+                  <SkipBack />
+                </Button>
+                <span className="timecode">
+                  {activeClip
+                    ? `${clipLabel(activeClip)} · ${activeClip.startSeconds}s – ${activeClip.endSeconds}s`
+                    : 'Full film'}
+                </span>
+                <Button
+                  aria-label="Next clip"
+                  disabled={filmLoading || filmSaving}
+                  onClick={() => moveClip(1)}
+                  size="icon-sm"
+                  variant="ghost"
+                >
+                  <SkipForward />
+                </Button>
+              </div>
+            ) : null}
           </div>
 
           <div className="film-lower">
@@ -3151,6 +3238,69 @@ function FilmRoomView({
           </section>
         </div>
       </div>
+      <Dialog
+        open={deleteFilmOpen}
+        onOpenChange={(open) => {
+          if (!deleteFilmLock.current) setDeleteFilmOpen(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Delete “{deleteFilmTarget.current?.title}”?
+            </DialogTitle>
+            <DialogDescription>
+              This permanently deletes this film, its{' '}
+              {deleteFilmTarget.current?.clips ?? 0} charted clips and their
+              notes. The uploaded video is removed when no other saved film uses
+              it. Unsaved clip changes will also be discarded. This cannot be
+              undone.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteFilmError ? <p role="alert">{deleteFilmError}</p> : null}
+          <DialogFooter>
+            {deleteFilmError ? (
+              <Button
+                disabled={filmSaving}
+                variant="outline"
+                onClick={async () => {
+                  try {
+                    const result = await readFilmData();
+                    setFilmAsset(result.asset);
+                    setFilmAssets(result.assets);
+                    setFilmClips(result.clips);
+                    setSelectedClip(result.clips[0]?.clipNumber ?? 0);
+                    setNote(result.clips[0]?.note ?? '');
+                    setClipDirty(false);
+                    setFilmPlaybackError('');
+                    setDeleteFilmOpen(false);
+                  } catch {
+                    setDeleteFilmError(
+                      'The film library could not be reloaded. Your current selection is still open.',
+                    );
+                  }
+                }}
+              >
+                Reload library
+              </Button>
+            ) : null}
+            <Button
+              disabled={filmSaving}
+              variant="outline"
+              onClick={() => setDeleteFilmOpen(false)}
+            >
+              {deleteFilmError ? 'Close' : 'Keep film'}
+            </Button>
+            <Button
+              disabled={filmSaving || deleteFilmTarget.current?.needsReload}
+              variant="destructive"
+              onClick={() => void deleteFilm()}
+            >
+              {filmSaving ? 'Deleting…' : 'Delete film and clips'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={Boolean(pendingSelection)}
         onOpenChange={(open) => {
