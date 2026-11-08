@@ -78,7 +78,9 @@ export function PlaybookWorkspace({
     | null
   >(null);
   const [deletingId, setDeletingId] = useState('');
+  const [editorEpoch, setEditorEpoch] = useState(0);
   const mutationLock = useRef(false);
+  const settingsVersion = useRef<string | undefined>(undefined);
   const creationIds = useRef(new Map<string, string>());
   const [loadFailed, setLoadFailed] = useState(false);
   const [formDirty, setFormDirty] = useState(false);
@@ -319,6 +321,7 @@ export function PlaybookWorkspace({
     if (dialog === 'book-settings')
       void mutate('PUT', {
         kind: 'book',
+        version: settingsVersion.current,
         id: bookId,
         name: values.name,
         side: book?.side,
@@ -380,7 +383,7 @@ export function PlaybookWorkspace({
   if (editor && (editedPlay || editedFormation))
     return (
       <PlayDesigner
-        key={`${editor.kind}:${editor.id}`}
+        key={`${editor.kind}:${editor.id}:${editorEpoch}`}
         play={editedPlay}
         formation={editedFormation}
         formations={data.formations}
@@ -388,6 +391,19 @@ export function PlaybookWorkspace({
         onBack={() => {
           setEditor(null);
           onEditingChange(false);
+        }}
+        onReload={async () => {
+          const next = await request('GET');
+          const record =
+            editor.kind === 'play'
+              ? next.plays.find((p) => p.id === editor.id)
+              : next.formations.find((f) => f.id === editor.id);
+          if (!record)
+            throw new Error(
+              'This record was removed. Your draft is still open; download it before leaving.',
+            );
+          setData(next);
+          setEditorEpoch((value) => value + 1);
         }}
         onSave={async (payload) => {
           const next = await request('PUT', { ...payload, kind: editor.kind });
@@ -785,7 +801,10 @@ export function PlaybookWorkspace({
             </div>
             <Button
               aria-label="Playbook settings"
-              onClick={() => setDialog('book-settings')}
+              onClick={() => (
+                (settingsVersion.current = book?.version),
+                setDialog('book-settings')
+              )}
               size="icon"
               variant="outline"
             >

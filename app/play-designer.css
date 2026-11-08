@@ -31,3 +31,16 @@
 @media(max-width:1000px) { .pd-camera-controls { top: 16px; bottom: auto; } }
 @media(pointer:coarse) { .pd-camera-controls button,.pd-properties > header button,.pd-field-controls > summary { min-width: 44px; min-height: 44px; }.pd-colours button { width: 38px; height: 38px; }.pd-properties-body { max-height: min(45dvh,340px); overflow-y: auto; } }
 @media(max-width:1000px) and (pointer:coarse) { .pd-main-tools { top: 86px; }.pd-properties > header { flex-wrap: wrap; }.pd-properties > header > strong { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } }
+
+.pd-recovery-error {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pd-recovery-error > span {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.pd-recovery-error > button,
+.pd-recovery-error > a {
+  flex: 0 0 auto;
+}

@@ -68,6 +68,10 @@ const validatorUrl = await moduleUrl('../lib/validate-play.ts');
 const designerUrl = await moduleUrl('../lib/play-designer.ts');
 const replacements = [
   [
+    "'@/lib/playbook-revision'",
+    JSON.stringify(await moduleUrl('../lib/playbook-revision.ts')),
+  ],
+  [
     "'@/lib/playbook-creation'",
     JSON.stringify(await moduleUrl('../lib/playbook-creation.ts')),
   ],
@@ -607,7 +611,7 @@ test('deleting an opponent persists coherent routes and detached coverage, while
       name: 'Linked defence',
     }),
   );
-  const play = created.plays.find((item) => item.id === created.createdId);
+  let play = created.plays.find((item) => item.id === created.createdId);
   const scene = designer.normalizeDrawing(play);
   const own = scene.players[0];
   scene.opponentPlayers = [
@@ -639,7 +643,9 @@ test('deleting an opponent persists coherent routes and detached coverage, while
       colour: '#ffffff',
     },
   ];
-  ok(await call(playbooks, 'PUT', { ...play, ...scene }));
+  play = ok(await call(playbooks, 'PUT', { ...play, ...scene })).plays.find(
+    (p) => p.id === play.id,
+  );
   const removed = designer.removeSceneItem(scene, 'opponent', 'opponent-q');
   ok(await call(playbooks, 'PUT', { ...play, ...removed }));
   const reopened = ok(await call(playbooks, 'GET')).plays.find(
@@ -768,4 +774,174 @@ test('the browser library validator accepts real saved payloads', async () => {
   );
   const data = ok(await call(playbooks, 'GET'));
   assert.equal(parsePlaybookLibrary(data).plays.length, data.plays.length);
+});
+
+test('stale designer, formation and book saves cannot overwrite newer content or assignments', async () => {
+  const first = ok(
+    await call(playbooks, 'POST', {
+      kind: 'book',
+      name: 'Concurrency',
+      side: 'Defence',
+    }),
+  );
+  const book = first.books.find((b) => b.id === first.createdId);
+  assert.match(book.version, /^[a-f0-9]{64}$/);
+  const bookUpdate = { kind: 'book', ...book, name: 'Newer name' };
+  ok(await call(playbooks, 'PUT', bookUpdate));
+  assert.equal(
+    (await call(playbooks, 'PUT', { ...bookUpdate, name: 'Stale name' }))
+      .status,
+    409,
+  );
+  assert.equal(
+    (await call(playbooks, 'PUT', { ...bookUpdate, version: null })).status,
+    400,
+  );
+  assert.equal(
+    ok(await call(playbooks, 'GET')).books.find((b) => b.id === book.id).name,
+    'Newer name',
+  );
+  const made = ok(
+    await call(playbooks, 'POST', {
+      kind: 'play',
+      playbookId: book.id,
+      name: 'Old drawing',
+    }),
+  );
+  const old = made.plays.find((p) => p.id === made.createdId);
+  const updated = ok(
+    await call(playbooks, 'PUT', {
+      ...old,
+      name: 'New drawing',
+      notes: 'Latest note',
+      assignments: [
+        { id: 'a', position: 'FS', title: 'Deep', detail: 'Middle' },
+      ],
+    }),
+  ).plays.find((p) => p.id === old.id);
+  assert.notEqual(updated.version, old.version);
+  assert.equal(
+    (
+      await call(playbooks, 'PUT', {
+        ...old,
+        name: 'Stale drawing',
+        assignments: [],
+      })
+    ).status,
+    409,
+  );
+  const reopened = ok(await call(playbooks, 'GET')).plays.find(
+    (p) => p.id === old.id,
+  );
+  assert.equal(reopened.name, 'New drawing');
+  assert.equal(reopened.notes, 'Latest note');
+  assert.equal(reopened.assignments[0].title, 'Deep');
+  // Change an assignment after preflight but before the actual transaction.
+  const originalBatch = database.batch;
+  let injected = false;
+  database.batch = async function (statements) {
+    if (!injected) {
+      injected = true;
+      sqlite
+        .prepare('UPDATE play_assignments SET detail = ? WHERE play_id = ?')
+        .run('Changed during save', old.id);
+    }
+    return originalBatch.call(this, statements);
+  };
+  try {
+    assert.equal(
+      (
+        await call(playbooks, 'PUT', {
+          ...updated,
+          name: 'Must roll back',
+          assignments: [],
+        })
+      ).status,
+      409,
+    );
+  } finally {
+    database.batch = originalBatch;
+  }
+  const raced = ok(await call(playbooks, 'GET')).plays.find(
+    (p) => p.id === old.id,
+  );
+  assert.equal(raced.name, 'New drawing');
+  assert.equal(raced.assignments[0].detail, 'Changed during save');
+  const draftInstall = ok(
+    await call(installs, 'POST', {
+      kind: 'package',
+      name: 'Publication race',
+      unit: 'Defence',
+      dueAt: '',
+    }),
+  ).package;
+  ok(
+    await call(installs, 'POST', {
+      packageId: draftInstall.id,
+      playId: raced.id,
+    }),
+  );
+  injected = false;
+  database.batch = async function (statements) {
+    if (!injected) {
+      injected = true;
+      sqlite
+        .prepare('UPDATE install_packages SET published_at = ? WHERE id = ?')
+        .run(new Date().toISOString(), draftInstall.id);
+    }
+    return originalBatch.call(this, statements);
+  };
+  try {
+    assert.equal(
+      (
+        await call(playbooks, 'PUT', {
+          ...raced,
+          name: 'Must not change after publication',
+        })
+      ).status,
+      409,
+    );
+  } finally {
+    database.batch = originalBatch;
+  }
+  assert.equal(
+    ok(await call(playbooks, 'GET')).plays.find((p) => p.id === raced.id).name,
+    raced.name,
+  );
+  const formationCreated = ok(
+    await call(playbooks, 'POST', {
+      kind: 'formation',
+      name: 'Concurrent 6-Pack',
+      unit: 'Defence',
+      scope: 'team',
+    }),
+  );
+  const formation = formationCreated.formations.find(
+    (f) => f.id === formationCreated.createdId,
+  );
+  ok(
+    await call(playbooks, 'PUT', {
+      ...formation,
+      kind: 'formation',
+      name: 'Latest 6-Pack',
+    }),
+  );
+  assert.equal(
+    (
+      await call(playbooks, 'PUT', {
+        ...formation,
+        kind: 'formation',
+        name: 'Stale 6-Pack',
+      })
+    ).status,
+    409,
+  );
+  assert.equal(
+    sqlite
+      .prepare(
+        "SELECT count(*) n FROM workspace_state WHERE state_key LIKE 'pb-save-%'",
+      )
+      .get().n,
+    0,
+  );
 });

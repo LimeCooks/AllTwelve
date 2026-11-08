@@ -1,10 +1,15 @@
+import {
+  recordVersion,
+  revisionGuard,
+  RevisionError,
+} from '@/lib/playbook-revision';
 import { prepareCreation, CreationError } from '@/lib/playbook-creation';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
 import { getDatabase, type TeamDatabase } from '@/db/client';
 import { validatePlayDiagram } from '@/lib/validate-play';
 import { startingPlayers } from '@/lib/play-designer';
 
-type PlayRow = {
+type PlayRow = Record<string, string | number | null> & {
   id: string;
   playbook_id: string | null;
   formation_id: string | null;
@@ -121,7 +126,7 @@ async function payload(database: TeamDatabase) {
     await Promise.all([
       database
         .prepare(
-          `SELECT b.id, b.name, b.side, b.archived, b.updated_at,
+          `SELECT b.*,
         COUNT(p.id) AS play_count, COUNT(DISTINCT p.formation_id) AS formation_count
        FROM playbooks b LEFT JOIN plays p ON p.playbook_id = b.id
        WHERE b.team_id = ? GROUP BY b.id ORDER BY b.archived, b.created_at`,
@@ -130,7 +135,7 @@ async function payload(database: TeamDatabase) {
         .all<Record<string, string | number>>(),
       database
         .prepare(
-          `SELECT f.id, f.name, f.unit, f.personnel, f.layout_json, COUNT(p.id) AS play_count
+          `SELECT f.*, COUNT(p.id) AS play_count
        FROM formations f LEFT JOIN plays p ON p.formation_id = f.id
        WHERE f.team_id = ? GROUP BY f.id ORDER BY f.created_at`,
         )
@@ -138,8 +143,7 @@ async function payload(database: TeamDatabase) {
         .all<Record<string, string | number>>(),
       database
         .prepare(
-          `SELECT p.id, p.playbook_id, p.formation_id, f.name AS formation, f.layout_json AS formation_layout_json, p.name, p.unit,
-        p.category, p.family, p.concept, p.diagram_json, p.notes, p.updated_at,
+          `SELECT p.*, f.name AS formation, f.layout_json AS formation_layout_json,
         EXISTS(SELECT 1 FROM install_items i JOIN install_packages k ON k.id = i.package_id WHERE i.play_id = p.id AND k.published_at IS NOT NULL) AS locked
        FROM plays p LEFT JOIN formations f ON f.id = p.formation_id
        WHERE p.team_id = ? ORDER BY p.created_at`,
@@ -163,63 +167,76 @@ async function payload(database: TeamDatabase) {
     return groups;
   }, {});
   return {
-    books: bookResult.results.map((row) => ({
-      id: String(row.id),
-      name: String(row.name),
-      side: String(row.side),
-      archived: Boolean(row.archived),
-      plays: Number(row.play_count),
-      formations: Number(row.formation_count),
-      updated: String(row.updated_at),
-    })),
-    formations: formationResult.results.map((row) => {
-      const layout = parseDiagram(String(row.layout_json));
-      return {
-        ...layout,
+    books: await Promise.all(
+      bookResult.results.map(async (row) => ({
+        version: await recordVersion('book', row),
         id: String(row.id),
-        name: layout.formationName || String(row.name),
-        unit: String(row.unit),
-        personnel: String(row.personnel),
-        count: Number(row.play_count),
-      };
-    }),
-    plays: playResult.results.map((row, variant) => {
-      const diagram = parseDiagram(row.diagram_json);
-      return {
-        id: row.id,
-        playbookId: row.playbook_id ?? 'offence',
-        formationId: row.formation_id,
-        name: row.name,
-        formation: row.formation_layout_json
-          ? parseDiagram(row.formation_layout_json).formationName ||
-            row.formation ||
-            'Unassigned'
-          : 'Unassigned',
-        unit: row.unit,
-        category: row.category,
-        family: row.family,
-        concept: row.concept,
-        variant,
-        routes: diagram.routes,
-        players: diagram.players,
-        zones: diagram.zones,
-        labels: diagram.labels,
-        fieldPosition: diagram.fieldPosition,
-        showOpponent: diagram.showOpponent,
-        diagramVersion: diagram.diagramVersion,
-        opponentFormationId: diagram.opponentFormationId,
-        opponentPlayers: diagram.opponentPlayers,
-        notes: row.notes,
-        locked: Boolean(row.locked),
-        assignments: (assignments[row.id] ?? []).map((item) => ({
-          id: item.id,
-          position: item.position,
-          title: item.title,
-          detail: item.detail,
-          sortOrder: item.sort_order,
-        })),
-      };
-    }),
+        name: String(row.name),
+        side: String(row.side),
+        archived: Boolean(row.archived),
+        plays: Number(row.play_count),
+        formations: Number(row.formation_count),
+        updated: String(row.updated_at),
+      })),
+    ),
+    formations: await Promise.all(
+      formationResult.results.map(async (row) => {
+        const layout = parseDiagram(String(row.layout_json));
+        return {
+          ...layout,
+          version: await recordVersion('formation', row),
+          id: String(row.id),
+          name: layout.formationName || String(row.name),
+          unit: String(row.unit),
+          personnel: String(row.personnel),
+          count: Number(row.play_count),
+        };
+      }),
+    ),
+    plays: await Promise.all(
+      playResult.results.map(async (row, variant) => {
+        const diagram = parseDiagram(row.diagram_json);
+        return {
+          id: row.id,
+          version: await recordVersion(
+            'play',
+            row,
+            (assignments[row.id] ?? []).map((a) => ({ ...a })),
+          ),
+          playbookId: row.playbook_id ?? 'offence',
+          formationId: row.formation_id,
+          name: row.name,
+          formation: row.formation_layout_json
+            ? parseDiagram(row.formation_layout_json).formationName ||
+              row.formation ||
+              'Unassigned'
+            : 'Unassigned',
+          unit: row.unit,
+          category: row.category,
+          family: row.family,
+          concept: row.concept,
+          variant,
+          routes: diagram.routes,
+          players: diagram.players,
+          zones: diagram.zones,
+          labels: diagram.labels,
+          fieldPosition: diagram.fieldPosition,
+          showOpponent: diagram.showOpponent,
+          diagramVersion: diagram.diagramVersion,
+          opponentFormationId: diagram.opponentFormationId,
+          opponentPlayers: diagram.opponentPlayers,
+          notes: row.notes,
+          locked: Boolean(row.locked),
+          assignments: (assignments[row.id] ?? []).map((item) => ({
+            id: item.id,
+            position: item.position,
+            title: item.title,
+            detail: item.detail,
+            sortOrder: item.sort_order,
+          })),
+        };
+      }),
+    ),
   };
 }
 
@@ -472,6 +489,13 @@ export async function PUT(request: Request) {
       const name = text(body.name);
       if (!id || !name) throw new Error('Formation id and name are required.');
       validatePlayDiagram(body);
+      const guard = await revisionGuard(
+        database,
+        'formation',
+        id,
+        body.version,
+        { unit: body.unit, scope: body.scope === 'scout' ? 'scout' : 'team' },
+      );
       const prior = await database
         .prepare(
           'SELECT unit, layout_json FROM formations WHERE id = ? AND team_id = ?',
@@ -513,26 +537,27 @@ export async function PUT(request: Request) {
         throw new Error(
           'This formation is used in a published install. Create a new formation to revise it.',
         );
-      await database
-        .prepare(
-          `UPDATE formations SET name = ?, unit = ?, personnel = ?, layout_json = ? WHERE id = ? AND team_id = ?`,
-        )
-        .bind(
-          JSON.stringify([name, scope, opponent, packageName]),
-          unit,
-          text(body.personnel, 'Custom personnel'),
-          JSON.stringify({
-            ...body,
-            formationName: name,
-            scope,
-            opponent,
-            packageName,
-            players: Array.isArray(body.players) ? body.players : [],
-          }),
-          id,
-          database.teamId,
-        )
-        .run();
+      await guard.commit([
+        database
+          .prepare(
+            `UPDATE formations SET name = ?, unit = ?, personnel = ?, layout_json = ? WHERE id = ? AND team_id = ?`,
+          )
+          .bind(
+            JSON.stringify([name, scope, opponent, packageName]),
+            unit,
+            text(body.personnel, 'Custom personnel'),
+            JSON.stringify({
+              ...body,
+              formationName: name,
+              scope,
+              opponent,
+              packageName,
+              players: Array.isArray(body.players) ? body.players : [],
+            }),
+            id,
+            database.teamId,
+          ),
+      ]);
       return Response.json(await payload(database));
     }
     if (body.kind === 'book') {
@@ -540,6 +565,9 @@ export async function PUT(request: Request) {
       const name = text(body.name);
       if (!id || !name || !validSide(body.side))
         throw new Error('Valid playbook details are required.');
+      const guard = await revisionGuard(database, 'book', id, body.version, {
+        side: body.side,
+      });
       const book = await database
         .prepare('SELECT side FROM playbooks WHERE id = ? AND team_id = ?')
         .bind(id, database.teamId)
@@ -555,19 +583,20 @@ export async function PUT(request: Request) {
         throw new Error(
           'A playbook with saved plays cannot change units. Create another playbook for that unit.',
         );
-      await database
-        .prepare(
-          'UPDATE playbooks SET name = ?, side = ?, archived = ?, updated_at = ? WHERE id = ? AND team_id = ?',
-        )
-        .bind(
-          name,
-          body.side,
-          body.archived ? 1 : 0,
-          new Date().toISOString(),
-          id,
-          database.teamId,
-        )
-        .run();
+      await guard.commit([
+        database
+          .prepare(
+            'UPDATE playbooks SET name = ?, side = ?, archived = ?, updated_at = ? WHERE id = ? AND team_id = ?',
+          )
+          .bind(
+            name,
+            body.side,
+            body.archived ? 1 : 0,
+            new Date().toISOString(),
+            id,
+            database.teamId,
+          ),
+      ]);
       return Response.json(await payload(database));
     }
     const id = text(body.id);
@@ -643,7 +672,8 @@ export async function PUT(request: Request) {
       detail: text(item.detail),
       sortOrder: index,
     }));
-    await database.batch([
+    const guard = await revisionGuard(database, 'play', id, body.version);
+    await guard.commit([
       database
         .prepare(
           `UPDATE plays SET formation_id = ?, name = ?, category = ?, family = ?, concept = ?, diagram_json = ?, notes = ?, updated_at = ? WHERE id = ? AND team_id = ?`,
@@ -682,7 +712,13 @@ export async function PUT(request: Request) {
   } catch (error) {
     return Response.json(
       { error: errorMessage(error, 'Unable to save play.') },
-      { status: 400 },
+      {
+        status:
+          error instanceof RevisionError ||
+          error instanceof WorkspaceAccessError
+            ? error.status
+            : 400,
+      },
     );
   }
 }

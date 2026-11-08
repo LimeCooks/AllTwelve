@@ -306,6 +306,11 @@ async function verifySaved(label) {
       .name,
     'Rehearsal defence',
   );
+  assert.equal(
+    (await api('/api/playbooks')).plays.find((play) => play.id === fixture.play)
+      .notes,
+    'Saved diagram revision',
+  );
   const savedInstall = await api(`/api/install?packageId=${fixture.install}`);
   assert.equal(savedInstall.items[0].playId, fixture.play);
   assert.equal(savedInstall.package.name, 'Corrected rehearsal install');
@@ -496,6 +501,20 @@ try {
     { kind: 'play', playbookId: book.books[0].id, name: 'Rehearsal defence' },
     'POST',
     201,
+  );
+  const openedPlay = play.plays.find((record) => record.id === play.createdId);
+  await api(
+    '/api/playbooks',
+    'a',
+    { ...openedPlay, notes: 'Saved diagram revision' },
+    'PUT',
+  );
+  await api(
+    '/api/playbooks',
+    'a',
+    { ...openedPlay, name: 'Stale overwrite' },
+    'PUT',
+    409,
   );
   const install = await api(
     '/api/install',

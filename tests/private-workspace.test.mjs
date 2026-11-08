@@ -78,6 +78,10 @@ const dbUrl = await moduleUrl('../db/client.ts', [
 ]);
 const replacements = [
   [
+    "'@/lib/playbook-revision'",
+    JSON.stringify(await moduleUrl('../lib/playbook-revision.ts')),
+  ],
+  [
     "'@/lib/playbook-creation'",
     JSON.stringify(await moduleUrl('../lib/playbook-creation.ts')),
   ],

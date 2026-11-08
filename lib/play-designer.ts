@@ -38,6 +38,7 @@ export type Assignment = {
   detail: string;
 };
 export type Drawing = {
+  version?: string;
   diagramVersion?: number;
   fieldPosition?: number;
   players?: Player[];
@@ -87,6 +88,7 @@ export type Formation = Drawing & {
   count: number;
 };
 export type Book = {
+  version?: string;
   id: string;
   name: string;
   side: string;

@@ -108,6 +108,7 @@ export function PlayDesigner({
   formation,
   formations,
   onSave,
+  onReload,
   onBack,
   onEditingChange,
 }: {
@@ -115,10 +116,20 @@ export function PlayDesigner({
   formation?: Formation;
   formations: Formation[];
   onSave: (value: Record<string, unknown>) => Promise<void>;
+  onReload: () => Promise<void>;
   onBack: () => void;
   onEditingChange: (editing: boolean) => void;
 }) {
   const source = play ?? formation!;
+  const saveLock = useRef(false);
+  const [reloadOpen, setReloadOpen] = useState(false);
+  const [draftDownload, setDraftDownload] = useState('');
+  useEffect(
+    () => () => {
+      if (draftDownload) URL.revokeObjectURL(draftDownload);
+    },
+    [draftDownload],
+  );
   const side = (play?.unit ?? formation?.unit ?? 'Offence') as Side;
   const [draft, setDraft] = useState<Draft>(() => {
     const scene = normalizeDrawing(source);
@@ -592,8 +603,63 @@ export function PlayDesigner({
       ).pan,
     );
   };
+  const savePayload = () => ({
+    ...(play ?? formation),
+    ...draft.scene,
+    name: draft.name.trim(),
+    concept: draft.concept.trim(),
+    notes: draft.notes,
+    family: draft.family,
+    formationId: draft.formationId,
+    assignments: draft.assignments,
+    scope: draft.scope,
+    opponent: draft.opponent.trim(),
+    packageName: draft.packageName.trim(),
+  });
+  const downloadDraft = () => {
+    const url = URL.createObjectURL(
+      new Blob(
+        [
+          JSON.stringify(
+            {
+              format: 'chalktalk-designer-draft-v1',
+              kind: formation ? 'formation' : 'play',
+              savedAt: new Date().toISOString(),
+              data: savePayload(),
+            },
+            null,
+            2,
+          ),
+        ],
+        { type: 'application/json' },
+      ),
+    );
+    setDraftDownload(url);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'chalktalk-designer-draft.json';
+    link.click();
+  };
+  const reloadSaved = async () => {
+    if (saveLock.current) return;
+    saveLock.current = true;
+    setBusy(true);
+    try {
+      await onReload();
+    } catch (failure) {
+      setError(
+        failure instanceof Error
+          ? failure.message
+          : 'Unable to reload. Your draft is still open.',
+      );
+      setReloadOpen(false);
+    } finally {
+      saveLock.current = false;
+      setBusy(false);
+    }
+  };
   const save = async () => {
-    if (busy) return;
+    if (saveLock.current) return;
     if (!draft.name.trim() || (!formation && !draft.concept.trim())) {
       setDetailsOpen(true);
       setError('Enter a name and concept before saving.');
@@ -604,22 +670,11 @@ export function PlayDesigner({
       setError('Name the scout opponent before saving.');
       return;
     }
+    saveLock.current = true;
     setBusy(true);
     setError('');
     try {
-      await onSave({
-        ...(play ?? formation),
-        ...draft.scene,
-        name: draft.name.trim(),
-        concept: draft.concept.trim(),
-        notes: draft.notes,
-        family: draft.family,
-        formationId: draft.formationId,
-        assignments: draft.assignments,
-        scope: draft.scope,
-        opponent: draft.opponent.trim(),
-        packageName: draft.packageName.trim(),
-      });
+      await onSave(savePayload());
       setDirty(false);
       onEditingChange(false);
     } catch (failure) {
@@ -629,6 +684,7 @@ export function PlayDesigner({
           : 'Unable to save. Your draft is still open.',
       );
     } finally {
+      saveLock.current = false;
       setBusy(false);
     }
   };
@@ -736,8 +792,23 @@ export function PlayDesigner({
         </div>
       </header>
       {error ? (
-        <div className="pd-error" role="alert">
-          {error}
+        <div className="pd-error pd-recovery-error" role="alert">
+          <span>{error}</span>
+          <Button disabled={busy} variant="outline" onClick={downloadDraft}>
+            Download draft
+          </Button>
+          <Button
+            disabled={busy}
+            variant="outline"
+            onClick={() => setReloadOpen(true)}
+          >
+            Reload saved version
+          </Button>
+          {draftDownload ? (
+            <a href={draftDownload} download="chalktalk-designer-draft.json">
+              Save draft file
+            </a>
+          ) : null}
           <button
             aria-label="Dismiss message"
             onClick={() => setError('')}
@@ -1619,6 +1690,39 @@ export function PlayDesigner({
           </aside>
         ) : null}
       </div>
+      <Dialog
+        open={reloadOpen}
+        onOpenChange={(open) => {
+          if (!busy) setReloadOpen(open);
+        }}
+      >
+        <DialogContent className="athlete-dialog">
+          <DialogHeader>
+            <DialogTitle>
+              Replace this draft with the saved version?
+            </DialogTitle>
+            <DialogDescription>
+              Download your draft first if you want to keep it. Reloading
+              replaces the drawing, notes and assignments in this editor.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              disabled={busy}
+              variant="outline"
+              onClick={() => setReloadOpen(false)}
+            >
+              Keep editing
+            </Button>
+            <Button disabled={busy} variant="outline" onClick={downloadDraft}>
+              Download draft
+            </Button>
+            <Button disabled={busy} onClick={() => void reloadSaved()}>
+              {busy ? 'Reloading…' : 'Reload and discard draft'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={leaveOpen} onOpenChange={setLeaveOpen}>
         <DialogContent className="athlete-dialog">
           <DialogHeader>
