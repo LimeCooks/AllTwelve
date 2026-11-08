@@ -945,3 +945,71 @@ test('stale designer, formation and book saves cannot overwrite newer content or
     0,
   );
 });
+
+test('Playbook install client confirms real handler responses and safe repeated additions', async () => {
+  const parserUrl = await moduleUrl('../lib/install-data.ts');
+  const client = await import(
+    await moduleUrl('../lib/playbook-install.ts', [
+      ["'@/lib/install-data'", JSON.stringify(parserUrl)],
+    ])
+  );
+  const fetcher = async (_path, options = {}) =>
+    installs[options.method ?? 'GET'](
+      new Request('http://test/api/install', options),
+    );
+  const library = ok(
+    await call(playbooks, 'POST', {
+      kind: 'book',
+      name: 'Client handoff',
+      side: 'Defence',
+    }),
+  );
+  const made = ok(
+    await call(playbooks, 'POST', {
+      kind: 'play',
+      name: 'Client saved play',
+      playbookId: library.createdId,
+    }),
+  );
+  const pack = ok(
+    await call(installs, 'POST', {
+      kind: 'package',
+      name: 'No fixed cadence',
+      unit: 'Team',
+      dueAt: '',
+    }),
+  ).package;
+  const choices = await client.loadInstallDestinations(
+    'Defence',
+    undefined,
+    fetcher,
+  );
+  assert.ok(choices.some((choice) => choice.id === pack.id));
+  assert.ok(
+    choices.every(
+      (choice) =>
+        !choice.publishedAt && ['Team', 'Defence'].includes(choice.unit),
+    ),
+  );
+  assert.equal(
+    (
+      await client.addSavedPlayToInstall(
+        pack.id,
+        made.createdId,
+        'Defence',
+        fetcher,
+      )
+    ).id,
+    pack.id,
+  );
+  await client.addSavedPlayToInstall(
+    pack.id,
+    made.createdId,
+    'Defence',
+    fetcher,
+  );
+  assert.equal(
+    ok(await call(installs, 'GET', null, '?packageId=' + pack.id)).items.length,
+    1,
+  );
+});

@@ -46,11 +46,13 @@ const empty: Payload = { packages: [], package: null, items: [], reviews: [] };
 
 export function InstallWorkspace<T extends InstallPlay>({
   onNavigate,
+  initialPackageId = '',
   renderDiagram,
   playerView,
   onEditingChange,
 }: {
   onNavigate: (view: string) => void;
+  initialPackageId?: string;
   renderDiagram: (play: T) => ReactNode;
   playerView: boolean;
   onEditingChange: (editing: boolean) => void;
@@ -147,11 +149,11 @@ export function InstallWorkspace<T extends InstallPlay>({
   }, []);
 
   useEffect(() => {
-    if (!playerView) void Promise.resolve().then(() => load());
+    if (!playerView) void Promise.resolve().then(() => load(initialPackageId));
     return () => {
       requestId.current++;
     };
-  }, [load, playerView]);
+  }, [load, playerView, initialPackageId]);
 
   useEffect(() => {
     onEditingChange(formDirty || busy);
@@ -296,7 +298,7 @@ export function InstallWorkspace<T extends InstallPlay>({
             disabled={busy || loading}
             onClick={() => {
               if (formDirty) setReloadOpen(true);
-              else void load(data.package?.id);
+              else void load(data.package?.id ?? initialPackageId);
             }}
             size="sm"
             variant="outline"

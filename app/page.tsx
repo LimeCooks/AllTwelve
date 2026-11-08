@@ -398,6 +398,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
     (SearchResult & { revision: number }) | null
   >(null);
   const [activeView, setActiveViewUnsafe] = useState('Home');
+  const [installTarget, setInstallTarget] = useState('');
   const [pendingView, setPendingView] = useState('');
   const editingPlayRef = useRef(false);
   const onPlayEditingChange = useCallback((editing: boolean) => {
@@ -407,6 +408,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
     if (editingPlayRef.current) setPendingView(view);
     else {
       setSearchTarget(null);
+      if (view !== 'Install') setInstallTarget('');
       setActiveViewUnsafe(view);
     }
   }, []);
@@ -1545,6 +1547,11 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
             )
           ) : (
             <ModuleView
+              initialInstallId={installTarget}
+              onOpenInstall={(id) => {
+                setInstallTarget(id);
+                setActiveView('Install');
+              }}
               onOpenDataset={openDataset}
               key={searchTarget?.revision ?? 'workspace'}
               searchTarget={searchTarget}
@@ -1892,6 +1899,8 @@ function PlayerDashboard({
 }
 
 type ModuleProps = {
+  initialInstallId: string;
+  onOpenInstall: (id: string) => void;
   onOpenDataset: (
     selection: string,
     destination: 'Film Room' | 'Reports' | 'Gameplanning',
@@ -1911,6 +1920,8 @@ type ModuleProps = {
 };
 
 function ModuleView({
+  initialInstallId,
+  onOpenInstall,
   onOpenDataset,
   searchTarget,
   view,
@@ -1952,6 +1963,7 @@ function ModuleView({
   if (['Playbook', 'Formations', 'Learn', 'Leaderboard'].includes(view))
     return (
       <PlaybookWorkspace
+        onOpenInstall={onOpenInstall}
         initialPlayId={searchTarget?.kind === 'play' ? searchTarget.id : ''}
         view={view}
         onEditingChange={onPlayEditingChange}
@@ -1991,6 +2003,7 @@ function ModuleView({
   if (view === 'Install')
     return (
       <InstallWorkspace<StudioPlay>
+        initialPackageId={initialInstallId}
         onEditingChange={onPlayEditingChange}
         onNavigate={onNavigate}
         playerView={userRole === 'Player'}

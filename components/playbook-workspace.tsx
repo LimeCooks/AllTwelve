@@ -8,6 +8,11 @@ import {
 } from 'react';
 import { parsePlaybookLibrary } from '@/lib/playbook-library';
 import {
+  loadInstallDestinations,
+  addSavedPlayToInstall,
+} from '@/lib/playbook-install';
+import type { InstallPackage } from '@/lib/install-data';
+import {
   ArrowLeft,
   BookOpen,
   Copy,
@@ -40,11 +45,13 @@ export function PlaybookWorkspace({
   view = 'Playbook',
   initialPlayId = '',
   onNavigate,
+  onOpenInstall,
   onEditingChange,
 }: {
   view?: string;
   initialPlayId?: string;
   onNavigate: (view: string) => void;
+  onOpenInstall: (id: string) => void;
   onEditingChange: (editing: boolean) => void;
 }) {
   const [data, setData] = useState<Library>({
@@ -108,8 +115,19 @@ export function PlaybookWorkspace({
   };
   const [packs, setPacks] = useState<Pack[]>([]),
     [reviews, setReviews] = useState<Review[]>([]);
-  const [draftInstalls, setDraftInstalls] = useState<Pack[]>([]),
-    [destination, setDestination] = useState('');
+  const [installChoices, setInstallChoices] = useState<{
+    source: string;
+    status: 'loading' | 'ready' | 'error';
+    packages: InstallPackage[];
+    error: string;
+  }>({ source: '', status: 'loading', packages: [], error: '' });
+  const [destination, setDestination] = useState('');
+  const [installReload, setInstallReload] = useState(0);
+  const [installFeedback, setInstallFeedback] = useState<{
+    source: string;
+    error: string;
+    notice: string;
+  }>({ source: '', error: '', notice: '' });
   const book = data.books.find((item) => item.id === bookId);
   const editedPlay =
     editor?.kind === 'play'
@@ -120,6 +138,12 @@ export function PlaybookWorkspace({
       ? data.formations.find((item) => item.id === editor.id)
       : undefined;
   const viewed = data.plays.find((item) => item.id === viewerId);
+  const installSource = viewed ? `${viewed.id}:${viewed.unit}` : '';
+  const installReady = Boolean(
+    installSource &&
+    installChoices.source === installSource &&
+    installChoices.status === 'ready',
+  );
   const request = async (
     method: string,
     payload?: Record<string, unknown>,
@@ -200,55 +224,73 @@ export function PlaybookWorkspace({
     void Promise.resolve().then(() => refresh());
   }, [refresh]);
   useEffect(() => {
-    if (!viewerId) return;
-    let active = true;
-    fetch('/api/install')
-      .then(async (response) => {
-        const result = (await response.json()) as {
-          packages: Pack[];
-          error?: string;
-        };
-        if (!response.ok)
-          throw new Error(result.error || 'Unable to load installs.');
-        return result;
-      })
-      .then((result) => {
-        if (active)
-          setDraftInstalls(result.packages.filter((pack) => !pack.publishedAt));
+    const controller = new AbortController();
+    setDestination('');
+    setInstallChoices({
+      source: installSource,
+      status: 'loading',
+      packages: [],
+      error: '',
+    });
+    if (!installSource || !viewed) return () => controller.abort();
+    void loadInstallDestinations(viewed.unit ?? '', controller.signal)
+      .then((packages) => {
+        if (!controller.signal.aborted)
+          setInstallChoices({
+            source: installSource,
+            status: 'ready',
+            packages,
+            error: '',
+          });
       })
       .catch((failure: unknown) => {
-        if (active)
-          setError(
-            failure instanceof Error
-              ? failure.message
-              : 'Unable to load installs.',
-          );
+        if (!controller.signal.aborted)
+          setInstallChoices({
+            source: installSource,
+            status: 'error',
+            packages: [],
+            error:
+              failure instanceof Error
+                ? failure.message
+                : 'Unable to load installs.',
+          });
       });
-    return () => {
-      active = false;
-    };
-  }, [viewerId]);
+    return () => controller.abort();
+  }, [installSource, viewed?.unit, installReload]);
   const addToInstall = async () => {
-    if (!destination || !viewerId || busy) return;
+    if (
+      !installReady ||
+      !viewed ||
+      !destination ||
+      mutationLock.current ||
+      !installChoices.packages.some((pack) => pack.id === destination)
+    )
+      return;
+    mutationLock.current = true;
     setBusy(true);
-    setError('');
+    setInstallFeedback({ source: installSource, error: '', notice: '' });
     try {
-      const response = await fetch('/api/install', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ packageId: destination, playId: viewerId }),
-      });
-      const result = (await response.json()) as { error?: string };
-      if (!response.ok)
-        throw new Error(result.error || 'Unable to add play to install.');
-      setNotice('Saved play added to the selected draft install.');
-    } catch (failure) {
-      setError(
-        failure instanceof Error
-          ? failure.message
-          : 'Unable to add play to install.',
+      const saved = await addSavedPlayToInstall(
+        destination,
+        viewed.id,
+        viewed.unit ?? '',
       );
+      setInstallFeedback({
+        source: installSource,
+        error: '',
+        notice: `“${viewed.name}” is in “${saved.name}”.`,
+      });
+    } catch (failure) {
+      setInstallFeedback({
+        source: installSource,
+        error:
+          failure instanceof Error
+            ? failure.message
+            : 'Unable to add the saved play.',
+        notice: '',
+      });
     } finally {
+      mutationLock.current = false;
       setBusy(false);
     }
   };
@@ -618,7 +660,11 @@ export function PlaybookWorkspace({
                 ? 'Player review and completion require a linked player account.'
                 : 'No published learning packages yet. Build one in Install.'}
             </p>
-            <Button onClick={() => onNavigate('Install')} variant="outline">
+            <Button
+              disabled={busy}
+              onClick={() => onNavigate('Install')}
+              variant="outline"
+            >
               Open installs
             </Button>
           </div>
@@ -734,28 +780,78 @@ export function PlaybookWorkspace({
           </div>
           <details className="pd-saved-details">
             <summary>Add to install</summary>
+            {!installSource ||
+            installChoices.source !== installSource ||
+            installChoices.status === 'loading' ? (
+              <p role="status">Loading draft installs…</p>
+            ) : null}
+            {installChoices.source === installSource &&
+            installChoices.status === 'error' ? (
+              <p role="alert">{installChoices.error}</p>
+            ) : null}
+            {installReady && !installChoices.packages.length ? (
+              <p>
+                No matching draft installs. Create a {viewed.unit} or Team
+                install in Manage installs; choose any name or schedule that
+                suits your team.
+              </p>
+            ) : null}
+            {installFeedback.source === installSource &&
+            installFeedback.error ? (
+              <p role="alert">{installFeedback.error}</p>
+            ) : null}
+            {installFeedback.source === installSource &&
+            installFeedback.notice ? (
+              <p role="status">{installFeedback.notice}</p>
+            ) : null}
             <div className="pd-install-destination">
               <NativeSelect
                 aria-label="Destination draft install"
                 value={destination}
+                disabled={
+                  !installReady || busy || !installChoices.packages.length
+                }
                 onChange={(event) => setDestination(event.target.value)}
               >
                 <NativeSelectOption value="">
                   Choose a draft…
                 </NativeSelectOption>
-                {draftInstalls.map((pack) => (
+                {(installReady ? installChoices.packages : []).map((pack) => (
                   <NativeSelectOption key={pack.id} value={pack.id}>
-                    {pack.name}
+                    {pack.name} · {pack.unit}
+                    {pack.dueAt ? ` · ${pack.dueAt}` : ''}
                   </NativeSelectOption>
                 ))}
               </NativeSelect>
               <Button
-                disabled={!destination || busy}
+                disabled={!installReady || !destination || busy}
                 onClick={() => void addToInstall()}
               >
                 Add saved play
               </Button>
-              <Button onClick={() => onNavigate('Install')} variant="outline">
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  setInstallFeedback({
+                    source: installSource,
+                    error: '',
+                    notice: '',
+                  });
+                  setInstallReload((value) => value + 1);
+                }}
+                variant="outline"
+              >
+                Refresh drafts
+              </Button>
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  installReady && destination
+                    ? onOpenInstall(destination)
+                    : onNavigate('Install')
+                }
+                variant="outline"
+              >
                 Manage installs
               </Button>
             </div>
