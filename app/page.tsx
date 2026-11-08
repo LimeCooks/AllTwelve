@@ -3684,11 +3684,36 @@ function AthletesView({
   const [rosterRetry, setRosterRetry] = useState(0);
   const [rosterSaveError, setRosterSaveError] = useState('');
   const [noteDraft, setNoteDraft] = useState('');
+  const [noteBaseline, setNoteBaseline] = useState('');
+  const [noteReloadOpen, setNoteReloadOpen] = useState(false);
+  const [noteReloadError, setNoteReloadError] = useState('');
+  const [noteDownload, setNoteDownload] = useState('');
+  const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
+  const athleteDetailRef = useRef<HTMLElement | null>(null);
+  const rosterListRef = useRef<HTMLDivElement | null>(null);
+  const revealAthlete = () => {
+    setMobileDetailsOpen(true);
+    requestAnimationFrame(() => {
+      if (window.matchMedia('(max-width: 1100px)').matches) {
+        athleteDetailRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+        athleteDetailRef.current?.focus({ preventScroll: true });
+      }
+    });
+  };
+  useEffect(
+    () => () => {
+      if (noteDownload) URL.revokeObjectURL(noteDownload);
+    },
+    [noteDownload],
+  );
   const [pendingAthlete, setPendingAthlete] = useState<AthleteRecord | null>(
     null,
   );
   const rosterWriteLock = useRef(false);
-  const noteDirty = Boolean(selected && noteDraft !== selected.staffNote);
+  const noteDirty = Boolean(selected && noteDraft !== noteBaseline);
   useEffect(() => {
     onEditingChange(noteDirty || profileFormDirty || saving);
     return () => onEditingChange(false);
@@ -3740,6 +3765,8 @@ function AthletesView({
           : data.athletes[0];
         setSelected(requested ?? null);
         setNoteDraft(requested?.staffNote ?? '');
+        setNoteBaseline(requested?.staffNote ?? '');
+        if (initialAthleteId && requested) revealAthlete();
         if (initialAthleteId && !requested)
           onNotify('That athlete is no longer available.', 'info');
         setDataMessage(
@@ -3824,6 +3851,8 @@ function AthletesView({
       setMetrics(data.metrics);
       setSelected(data.athlete);
       setNoteDraft(data.athlete.staffNote);
+      setNoteBaseline(data.athlete.staffNote);
+      revealAthlete();
       setAddOpen(false);
       setProfileFormDirty(false);
       setProfileEditor(null);
@@ -3864,6 +3893,8 @@ function AthletesView({
           id: selected.id,
           status: changes.status,
           staffNote: changes.staffNote,
+          expectedStaffNote:
+            changes.staffNote !== undefined ? noteBaseline : undefined,
           installPercent: changes.install,
           attendancePercent: changes.attendance,
         }),
@@ -3884,7 +3915,11 @@ function AthletesView({
         ),
       );
       setMetrics(data.metrics);
-      if (changes.staffNote !== undefined) setNoteDraft(data.athlete.staffNote);
+      if (changes.staffNote !== undefined || !noteDirty) {
+        setNoteDraft(data.athlete.staffNote);
+        setNoteBaseline(data.athlete.staffNote);
+        setNoteDownload('');
+      }
       setDataMessage('Changes saved');
       onNotify(`${data.athlete.name} updated.`);
       return true;
@@ -3903,14 +3938,21 @@ function AthletesView({
   };
 
   const chooseAthlete = (athlete: AthleteRecord) => {
-    if (rosterWriteLock.current || athlete.id === selected?.id) return;
+    if (rosterWriteLock.current) return;
+    if (athlete.id === selected?.id) {
+      revealAthlete();
+      return;
+    }
     if (noteDirty) {
       setPendingAthlete(athlete);
       return;
     }
     setSelected(athlete);
     setNoteDraft(athlete.staffNote);
+    setNoteBaseline(athlete.staffNote);
+    setNoteDownload('');
     setRosterSaveError('');
+    revealAthlete();
   };
   if (loading || rosterLoadError)
     return (
@@ -4098,7 +4140,7 @@ function AthletesView({
       </div>
 
       <div className={selected ? 'roster-grid' : 'roster-grid no-selection'}>
-        <div className="roster-table-wrap">
+        <div className="roster-table-wrap" ref={rosterListRef}>
           <table className="roster-table">
             <thead>
               <tr>
@@ -4217,7 +4259,24 @@ function AthletesView({
         </div>
 
         {selected ? (
-          <aside className="athlete-detail">
+          <aside
+            className={`athlete-detail${mobileDetailsOpen ? ' mobile-open' : ''}`}
+            ref={athleteDetailRef}
+            tabIndex={-1}
+            aria-label="Athlete details"
+          >
+            <Button
+              className="mobile-roster-back"
+              variant="outline"
+              onClick={() =>
+                rosterListRef.current?.scrollIntoView({
+                  behavior: 'smooth',
+                  block: 'start',
+                })
+              }
+            >
+              Back to roster
+            </Button>
             <div className="athlete-detail-head">
               <MediaAvatar
                 assetKey={`athlete-${selected.id}`}
@@ -4376,12 +4435,144 @@ function AthletesView({
               >
                 {saving ? 'Saving…' : 'Save note'}
               </Button>
-              {rosterSaveError ? <p role="alert">{rosterSaveError}</p> : null}
+              {rosterSaveError ? (
+                <div role="alert">
+                  <p>{rosterSaveError}</p>
+                  <Button
+                    variant="outline"
+                    disabled={saving}
+                    onClick={() => {
+                      const url = URL.createObjectURL(
+                        new Blob(
+                          [
+                            JSON.stringify(
+                              {
+                                athleteId: selected.id,
+                                athleteName: selected.name,
+                                savedNote: noteBaseline,
+                                draft: noteDraft,
+                              },
+                              null,
+                              2,
+                            ),
+                          ],
+                          { type: 'application/json' },
+                        ),
+                      );
+                      setNoteDownload(url);
+                      const link = document.createElement('a');
+                      link.href = url;
+                      link.download = 'chalktalk-note-draft.json';
+                      link.click();
+                    }}
+                  >
+                    Download note draft
+                  </Button>
+                  {noteDownload ? (
+                    <a href={noteDownload} download="chalktalk-note-draft.json">
+                      Open note draft download
+                    </a>
+                  ) : null}
+                  <Button
+                    variant="outline"
+                    disabled={saving}
+                    onClick={() => {
+                      setNoteReloadError('');
+                      setNoteReloadOpen(true);
+                    }}
+                  >
+                    Reload saved note
+                  </Button>
+                </div>
+              ) : null}
             </div>
           </aside>
         ) : null}
       </div>
 
+      <Dialog
+        open={noteReloadOpen}
+        onOpenChange={(open) => {
+          if (!saving) setNoteReloadOpen(open);
+        }}
+      >
+        <DialogContent className="athlete-dialog">
+          <DialogHeader>
+            <DialogTitle>Reload {selected?.name}’s saved note?</DialogTitle>
+            <DialogDescription>
+              Your unsaved note will be replaced only after the saved athlete
+              loads successfully. Download your draft first if you want to keep
+              it.
+            </DialogDescription>
+          </DialogHeader>
+          {noteReloadError ? <p role="alert">{noteReloadError}</p> : null}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={saving}
+              onClick={() => setNoteReloadOpen(false)}
+            >
+              Keep editing
+            </Button>
+            <Button
+              disabled={saving}
+              onClick={async () => {
+                if (!selected || rosterWriteLock.current) return;
+                const targetId = selected.id;
+                rosterWriteLock.current = true;
+                setSaving(true);
+                setNoteReloadError('');
+                try {
+                  const response = await fetch('/api/athletes', {
+                    cache: 'no-store',
+                  });
+                  const data = (await response.json()) as {
+                    athletes?: AthleteRecord[];
+                    metrics?: AthleteMetrics;
+                    error?: string;
+                  };
+                  if (
+                    !response.ok ||
+                    !Array.isArray(data.athletes) ||
+                    !data.metrics
+                  )
+                    throw new Error(
+                      data.error ?? 'Saved roster could not be loaded.',
+                    );
+                  const fresh = data.athletes.find(
+                    (athlete) => athlete.id === targetId,
+                  );
+                  if (!fresh || typeof fresh.staffNote !== 'string')
+                    throw new Error(
+                      'This athlete’s saved note is no longer available. Your draft is still open.',
+                    );
+                  setRoster(data.athletes);
+                  setMetrics(data.metrics);
+                  setSelected(fresh);
+                  setNoteDraft(fresh.staffNote);
+                  setNoteBaseline(fresh.staffNote);
+                  setNoteDownload('');
+                  setRosterSaveError('');
+                  setNoteReloadOpen(false);
+                  setDataMessage('Saved note reloaded');
+                  revealAthlete();
+                } catch (failure) {
+                  setNoteReloadError(
+                    failure instanceof Error
+                      ? failure.message
+                      : 'The note could not be reloaded.',
+                  );
+                } finally {
+                  rosterWriteLock.current = false;
+                  setSaving(false);
+                }
+              }}
+            >
+              {saving ? 'Loading saved note…' : 'Discard draft and reload'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={profileLeaveOpen} onOpenChange={setProfileLeaveOpen}>
         <DialogContent className="athlete-dialog">
           <DialogHeader>
@@ -4433,8 +4624,11 @@ function AthletesView({
                 if (!pendingAthlete) return;
                 setSelected(pendingAthlete);
                 setNoteDraft(pendingAthlete.staffNote);
+                setNoteBaseline(pendingAthlete.staffNote);
+                setNoteDownload('');
                 setPendingAthlete(null);
                 setRosterSaveError('');
+                revealAthlete();
               }}
             >
               Discard note

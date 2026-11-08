@@ -983,6 +983,7 @@ test('roster create/update responses cannot reveal another owner’s athlete or 
       id: athlete.id,
       status: 'Limited',
       staffNote: 'Saved note',
+      expectedStaffNote: 'Private coaching note',
       attendancePercent: 75,
     }),
   );
@@ -3271,4 +3272,103 @@ test('retained backup history preserves older downloads after replacement and ex
     401,
   );
   assert.equal((await oldDownload()).status, 401);
+});
+
+test('staff-note writes reject stale baselines atomically and remain independent of availability updates', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'note-conflict-owner',
+    name: 'Note Coach',
+    email: 'note-coach@example.test',
+  };
+  assert.equal(
+    (
+      await onboarding.POST(
+        request({ name: 'Note conflict fixture', season: '2026' }),
+      )
+    ).status,
+    201,
+  );
+  const made = await athletesApi.POST(
+    request({
+      firstName: 'Note',
+      lastName: 'Fixture',
+      position: 'DB',
+      unit: 'Defence',
+      graduationYear: 12,
+      weightLb: 180,
+      email: 'note-fixture@example.test',
+      staffNote: 'Original',
+    }),
+  );
+  assert.equal(made.status, 201);
+  const athlete = (await made.json()).athlete;
+  const save = (note, expected, extra = {}) =>
+    athletesApi.PATCH(
+      request({
+        id: athlete.id,
+        staffNote: note,
+        expectedStaffNote: expected,
+        ...extra,
+      }),
+    );
+  assert.equal((await save('Missing baseline', undefined)).status, 400);
+  assert.equal((await save('Newer saved note', 'Original')).status, 200);
+  const stale = await save('Old device draft', 'Original', { status: 'Out' });
+  assert.equal(stale.status, 409);
+  assert.match((await stale.json()).error, /saved note changed/);
+  let current = (await (await athletesApi.GET()).json()).athletes.find(
+    (a) => a.id === athlete.id,
+  );
+  assert.equal(current.staffNote, 'Newer saved note');
+  assert.equal(current.status, 'Active');
+  assert.equal(
+    (await athletesApi.PATCH(request({ id: athlete.id, status: 'Limited' })))
+      .status,
+    200,
+  );
+  assert.equal(
+    (await save('Saved after availability change', 'Newer saved note')).status,
+    200,
+  );
+  current = (await (await athletesApi.GET()).json()).athletes.find(
+    (a) => a.id === athlete.id,
+  );
+  assert.equal(current.status, 'Limited');
+  const originalPrepare = database.prepare;
+  let injected = false;
+  database.prepare = function (sql) {
+    const statement = originalPrepare.call(this, sql);
+    if (sql.startsWith('UPDATE athletes SET')) {
+      const first = statement.first;
+      statement.first = async function () {
+        injected = true;
+        sqlite
+          .prepare('UPDATE athletes SET staff_note=? WHERE id=?')
+          .run('Late saved note', athlete.id);
+        return first.call(this);
+      };
+    }
+    return statement;
+  };
+  try {
+    assert.equal(
+      (await save('Late stale draft', current.staffNote, { status: 'Out' }))
+        .status,
+      409,
+    );
+  } finally {
+    database.prepare = originalPrepare;
+  }
+  assert.equal(injected, true);
+  current = (await (await athletesApi.GET()).json()).athletes.find(
+    (a) => a.id === athlete.id,
+  );
+  assert.equal(current.staffNote, 'Late saved note');
+  assert.equal(current.status, 'Limited');
+  globalThis.privateTestIdentity = {
+    id: 'owner-b',
+    name: 'Coach B',
+    email: 'b@example.test',
+  };
+  assert.equal((await save('Foreign note', 'Late saved note')).status, 404);
 });

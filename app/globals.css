@@ -548,6 +548,7 @@
 .install-cell i { display: block; height: 100%; background: #3b9464; }
 .install-cell b { font-size: 10px; }
 .athlete-detail { border-left: 1px solid #e1dcd3; background: #faf9f6; padding: 16px; }
+.mobile-roster-back { display: none; }
 .athlete-detail-head { display: grid; grid-template-columns: 52px minmax(0,1fr) auto; gap: 10px; align-items: start; }
 .detail-avatar { display: grid; width: 52px; height: 52px; place-items: center; border-radius: 14px; background: #192a40; color: white; font-size: 14px; font-weight: 800; }
 .athlete-detail h2 { margin: 5px 0 2px; font-size: 18px; }
@@ -767,6 +768,8 @@
   .properties-panel { display: none; }
   .roster-grid { grid-template-columns: minmax(0,1fr); }
   .athlete-detail { display: none; }
+  .athlete-detail.mobile-open { display: block; border-left: 0; border-top: 1px solid #304150; scroll-margin-top: 76px; }
+  .athlete-detail.mobile-open .mobile-roster-back { display: inline-flex; margin-bottom: 16px; }
   .roster-stats { grid-template-columns: 1fr 1fr; }
   .install-layout { grid-template-columns: 1fr; }
   .install-rail { display: grid; grid-template-columns: 1fr 1fr; }

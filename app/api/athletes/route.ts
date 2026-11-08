@@ -14,13 +14,15 @@ function failure(error: unknown) {
   return Response.json(
     {
       error:
-        status === 500
-          ? 'Unable to access the roster. Please retry.'
-          : status === 409
-            ? 'That jersey number or email is already in use.'
-            : error instanceof Error
-              ? error.message
-              : 'Unable to save the athlete.',
+        error instanceof WorkspaceAccessError
+          ? error.message
+          : status === 500
+            ? 'Unable to access the roster. Please retry.'
+            : status === 409
+              ? 'That jersey number or email is already in use.'
+              : error instanceof Error
+                ? error.message
+                : 'Unable to save the athlete.',
     },
     { status },
   );
@@ -319,6 +321,13 @@ export async function PATCH(request: Request) {
     if (body.staffNote !== undefined) {
       if (typeof body.staffNote !== 'string' || body.staffNote.length > 10000)
         throw new AthleteInputError('Use a note of up to 10,000 characters.');
+      if (
+        typeof body.expectedStaffNote !== 'string' ||
+        body.expectedStaffNote.length > 10000
+      )
+        throw new AthleteInputError(
+          'Reload the saved athlete note before changing it.',
+        );
       assign('staff_note', body.staffNote);
     }
     if (body.installPercent !== undefined)
@@ -328,12 +337,22 @@ export async function PATCH(request: Request) {
     if (updates.length === 0)
       throw new AthleteInputError('No supported changes were supplied.');
     assign('updated_at', new Date().toISOString());
-    await database
+    const saved = await database
       .prepare(
-        `UPDATE athletes SET ${updates.join(', ')} WHERE id = ? AND team_id = ?`,
+        `UPDATE athletes SET ${updates.join(', ')} WHERE id = ? AND team_id = ?${body.staffNote !== undefined ? ' AND staff_note IS ?' : ''} RETURNING id`,
       )
-      .bind(...values, id, database.teamId)
-      .run();
+      .bind(
+        ...values,
+        id,
+        database.teamId,
+        ...(body.staffNote !== undefined ? [body.expectedStaffNote] : []),
+      )
+      .first();
+    if (!saved)
+      throw new WorkspaceAccessError(
+        'This athlete’s saved note changed or the athlete was removed. Your draft is still open. Reload the saved note before retrying.',
+        409,
+      );
     const row = await database
       .prepare(`${athleteSelect} WHERE id = ? AND team_id = ?`)
       .bind(id, database.teamId)

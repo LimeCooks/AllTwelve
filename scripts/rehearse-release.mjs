@@ -288,6 +288,24 @@ async function verifySaved(label) {
   );
   assert.equal(ownAthlete.firstName, 'Corrected');
   assert.equal(ownAthlete.staffNote, 'Private rehearsal note');
+  const staleNote = await api(
+    '/api/athletes',
+    'a',
+    {
+      id: fixture.athlete,
+      staffNote: 'Must not replace newer saved work',
+      expectedStaffNote: 'An obsolete note baseline',
+      status: 'Out',
+    },
+    'PATCH',
+    409,
+  );
+  assert.match(staleNote.error, /saved note changed/);
+  const intactAthlete = (await api('/api/athletes')).athletes.find(
+    (athlete) => athlete.id === fixture.athlete,
+  );
+  assert.equal(intactAthlete.staffNote, 'Private rehearsal note');
+  assert.equal(intactAthlete.status, 'Active');
   const foreignAthlete = await api(
     '/api/athletes',
     'b',
