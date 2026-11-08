@@ -14,7 +14,7 @@ The former Subscribe action is now labelled Export calendar: it downloads a snap
 
 ## Remaining limits
 
-Calendar uses the viewing device's time zone; there is no separate team-zone preference yet. New or changed ambiguous repeated daylight-saving times use the browser's default choice. Physical-device input and importing the export into the owner's real calendar app still need verification. Availability loading also needs its own explicit failure treatment. These checks do not establish a fully polished calendar handoff.
+Calendar uses the viewing device's time zone; there is no separate team-zone preference yet. New or changed ambiguous repeated daylight-saving times use the browser's default choice. Physical-device input and importing the export into the owner's real calendar app still need verification. Availability failure handling was subsequently added below. These checks do not establish a fully polished calendar handoff.
 
 ## Correcting saved events
 
@@ -31,3 +31,10 @@ Week layout splits records at local midnight across the visible days, including 
 Events use minute positions rather than rounded hour blocks. Overlap groups use separate columns, including transitive overlaps and the minimum visual footprint of short events, so no button is hidden under another. Each event has a full accessible label and tooltip; dense weeks also have Agenda view. A minimum half-hour footprint keeps short entries readable and is clamped inside the day. The wall-clock grid compresses a repeated daylight-saving hour: an event whose end clock precedes its start clock still has a visible footprint; exact instants remain in its details/export. This is not a timeline with a separate repeated-hour row.
 
 Thirty automated tests pass. Added layout checks cover incoming overnight events, exclusive midnight ends, bounded splitting of long events, minute positioning, chained overlaps, short-event collisions, local DST midnights, and month carry-over without mutating saved data. Local browser checks rendered Friday/Saturday continuations of one travel event and separately opened two overlapping Saturday events. Read-only DOM geometry confirmed half-width lanes with distinct horizontal bounds and a 15-minute vertical offset. At 390 × 844 the continuation opened the original record with both correct dates/times. Physical touch and keyboard behavior remain unverified.
+
+
+## Independent availability loading and recovery
+
+Calendar's Team status panel no longer starts from zero-count fallback metrics or silently ignores a failed roster request. It has loading, unavailable, confirmed empty-roster, and populated states. A dedicated Retry availability action reloads only roster availability, retaining the chosen calendar period/view and leaving event editing independent. The roster navigation action remains usable. Responses must be successful and contain complete, internally consistent counts; partial, malformed, failed, or offline responses cannot masquerade as an empty team. Unmount aborts the request and ignores late results.
+
+Validation: all 78 tests pass, including response failures, malformed JSON, missing/unsafe/inconsistent counts, a genuine empty roster, no-store/cancellation plumbing, and recovery after a failed read. Local browser QA used a read-only loopback proxy to return a roster 503 and then an incomplete successful payload while continuing to serve the real schedule. Both showed an unavailable message with no fabricated counts. At 390px, retry recovered the actual empty local roster without resetting the selected next-week Agenda view or overflowing the page; View roster availability opened Athletes. No prototype or hosted records were added or changed for this check. This closes the explicit availability-loading gap, not the separate calendar time-zone, device-input, and export verification limits.

@@ -6,6 +6,7 @@ import {
   type FilmClipRecord,
   type FilmPayload,
 } from '@/lib/film-data';
+import { CalendarAvailability } from '@/components/calendar-availability';
 import { PrintoutsWorkspace } from '@/components/printouts-workspace';
 import { MessagesWorkspace } from '@/components/messages-workspace';
 import { BackupControls } from '@/components/backup-controls';
@@ -7024,8 +7025,6 @@ function CalendarView({
   const [calendarMessage, setCalendarMessage] = useState(
     'Loading saved schedule…',
   );
-  const [calendarRoster, setCalendarRoster] =
-    useState<AthleteMetrics>(fallbackMetrics);
   const [newEventLocation, setNewEventLocation] = useState('');
   useEffect(() => {
     onEditingChange(eventDirty || eventSaving);
@@ -7108,15 +7107,6 @@ function CalendarView({
           );
         }
       });
-    fetch('/api/athletes', { cache: 'no-store' })
-      .then(
-        async (response) =>
-          (await response.json()) as { metrics?: AthleteMetrics },
-      )
-      .then((data) => {
-        if (active && data.metrics) setCalendarRoster(data.metrics);
-      })
-      .catch(() => undefined);
     return () => {
       active = false;
     };
@@ -7536,33 +7526,7 @@ function CalendarView({
               </div>
             )}
           </section>
-          <section className="analytics-card">
-            <div className="analytics-head">
-              <div>
-                <p className="eyebrow">Availability</p>
-                <h3>Team status</h3>
-              </div>
-              <Users />
-            </div>
-            <div className="availability-metrics">
-              <span>
-                <strong>{calendarRoster.active}</strong>Available
-              </span>
-              <span>
-                <strong>{calendarRoster.limited}</strong>Limited
-              </span>
-              <span>
-                <strong>{calendarRoster.out}</strong>Out
-              </span>
-            </div>
-            <Button
-              className="w-full"
-              onClick={() => onNavigate('Athletes')}
-              variant="outline"
-            >
-              View roster availability
-            </Button>
-          </section>
+          <CalendarAvailability onOpenRoster={() => onNavigate('Athletes')} />
         </aside>
       </div>
 
