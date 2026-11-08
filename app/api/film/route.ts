@@ -330,7 +330,15 @@ export async function POST(request: Request) {
         )
         .bind(clipId, assetId)
         .first<{ id: string; clip_number: number }>();
-      if (text(body.id) && !existing)
+      if (
+        body.create === true &&
+        !existing &&
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+          clipId,
+        )
+      )
+        throw new FilmInputError('Use a valid new clip request ID.');
+      if (text(body.id) && !existing && body.create !== true)
         throw new WorkspaceAccessError(
           'Clip record not found in this film.',
           404,
@@ -428,9 +436,12 @@ export async function POST(request: Request) {
             409,
           );
       }
-      return Response.json(await payload(database, assetId), {
-        status: existing ? 200 : 201,
-      });
+      return Response.json(
+        { ...(await payload(database, assetId)), savedClipId: clipId },
+        {
+          status: existing ? 200 : 201,
+        },
+      );
     }
     throw new FilmInputError('Choose a valid film action.');
   } catch (error) {

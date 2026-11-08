@@ -2643,3 +2643,66 @@ test('two confirmed pending removals do not retain orphaned shared bytes', async
   assert.equal(await bucket.head(`teams/${a.teamId}/${key}`), null);
   assert.equal((await remove(secondId)).status, 200);
 });
+
+test('film client validates real responses and saves/retries the exact clip ID even when it is not last', async () => {
+  const client = await import(await moduleUrl('../lib/film-data.ts'));
+  globalThis.privateTestIdentity = {
+    id: 'owner-a',
+    name: 'Coach A',
+    email: 'a@example.test',
+  };
+  const a = await getDatabase(),
+    key = 'film-exact-clip-test';
+  await globalThis.privateTestBucket.put(
+    `teams/${a.teamId}/${key}`,
+    new Uint8Array([1, 2, 3]),
+    { httpMetadata: { contentType: 'video/mp4' } },
+  );
+  const made = client.parseFilmPayload(
+    await (
+      await films.POST(
+        request({
+          action: 'register',
+          storageKey: key,
+          title: 'Exact clip source',
+        }),
+      )
+    ).json(),
+  );
+  const oneId = crypto.randomUUID(),
+    twoId = crypto.randomUUID();
+  const save = async (id, clipNumber, note) => {
+    const response = await films.POST(
+      request({
+        action: 'upsertClip',
+        create: true,
+        assetId: made.asset.id,
+        id,
+        clipNumber,
+        startSeconds: 0,
+        endSeconds: 1,
+        note,
+      }),
+    );
+    assert.ok(response.ok, JSON.stringify(await response.clone().json()));
+    return client.parseFilmPayload(await response.json(), made.asset.id);
+  };
+  assert.equal((await save(oneId, 2, 'First')).savedClipId, oneId);
+  assert.equal((await save(twoId, 99, 'Last')).savedClipId, twoId);
+  const updated = await save(oneId, 2, 'Updated first');
+  assert.equal(updated.savedClipId, oneId);
+  assert.equal(updated.clips.at(-1).id, twoId);
+  const retried = await save(oneId, 2, 'Updated first');
+  assert.equal(retried.clips.length, 2);
+  assert.equal(
+    retried.clips.find((clip) => clip.id === oneId).note,
+    'Updated first',
+  );
+  const remove = await films.DELETE(
+    new Request('https://pilot.test/api/film?assetId=' + made.asset.id, {
+      method: 'DELETE',
+      headers: { 'x-chalktalk-film-version': retried.asset.version },
+    }),
+  );
+  assert.equal(remove.status, 200);
+});

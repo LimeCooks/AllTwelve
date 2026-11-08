@@ -1,4 +1,11 @@
 'use client';
+import {
+  readFilmData,
+  parseFilmPayload,
+  type FilmAssetRecord,
+  type FilmClipRecord,
+  type FilmPayload,
+} from '@/lib/film-data';
 import { PrintoutsWorkspace } from '@/components/printouts-workspace';
 import { MessagesWorkspace } from '@/components/messages-workspace';
 import { BackupControls } from '@/components/backup-controls';
@@ -340,6 +347,7 @@ function MediaUploadControl({
   accept = 'image/*',
   label,
   onUploaded,
+  onUploadingChange,
   onNotify,
   disabled = false,
 }: {
@@ -347,6 +355,7 @@ function MediaUploadControl({
   accept?: string;
   label: string;
   onUploaded: (file?: File, storageKey?: string) => void | Promise<void>;
+  onUploadingChange?: (uploading: boolean) => void;
   onNotify: Notify;
   disabled?: boolean;
 }) {
@@ -354,9 +363,10 @@ function MediaUploadControl({
   const upload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file) return;
+    if (!file || busy || disabled) return;
     setBusy(true);
     try {
+      onUploadingChange?.(true);
       const storageKey = typeof assetKey === 'function' ? assetKey() : assetKey;
       await uploadMedia(storageKey, file);
       await onUploaded(file, storageKey);
@@ -369,6 +379,7 @@ function MediaUploadControl({
         'error',
       );
     } finally {
+      onUploadingChange?.(false);
       setBusy(false);
     }
   };
@@ -2100,54 +2111,6 @@ function FocusModeButton({
   );
 }
 
-type FilmAssetRecord = {
-  version?: string;
-  id: string;
-  gameId: string | null;
-  opponent: string | null;
-  title: string;
-  storageKey: string | null;
-  durationSeconds: number;
-  status: string;
-  createdAt: string;
-};
-type FilmClipRecord = {
-  id: string;
-  assetId: string;
-  playId: string | null;
-  playName: string | null;
-  clipNumber: number;
-  startSeconds: number;
-  endSeconds: number;
-  odk: string;
-  down: number | null;
-  distance: number | null;
-  yardLine: string;
-  result: string;
-  tags: string[];
-  note: string;
-  concept: string;
-  quarter: string;
-  clock: string;
-};
-type FilmPayload = {
-  assets: FilmAssetRecord[];
-  asset: FilmAssetRecord | null;
-  clips: FilmClipRecord[];
-  error?: string;
-};
-
-async function readFilmData(assetId = ''): Promise<FilmPayload> {
-  const response = await fetch(
-    `/api/film${assetId ? `?assetId=${encodeURIComponent(assetId)}` : ''}`,
-    { cache: 'no-store' },
-  );
-  const data = (await response.json()) as FilmPayload;
-  if (!response.ok || !Array.isArray(data.assets) || !Array.isArray(data.clips))
-    throw new Error(data.error ?? 'Saved film could not be loaded.');
-  return data;
-}
-
 function clipLabel(
   clip: Pick<FilmClipRecord, 'playName' | 'concept' | 'clipNumber'>,
 ) {
@@ -2177,9 +2140,14 @@ function FilmRoomView({
   const [filmAssets, setFilmAssets] = useState<FilmAssetRecord[]>([]);
   const [filmClips, setFilmClips] = useState<FilmClipRecord[]>([]);
   const [selectedClip, setSelectedClip] = useState(0);
+  const newClipRequest = useRef<string | null>(null);
+  const [newClipEpoch, setNewClipEpoch] = useState(0);
   const [deleteFilmOpen, setDeleteFilmOpen] = useState(false);
   const [deleteFilmError, setDeleteFilmError] = useState('');
-  const deleteFilmLock = useRef(false);
+  const filmMutationLock = useRef(false);
+  const filmReadSequence = useRef(0);
+  const filmReadController = useRef<AbortController | null>(null);
+  const retryFilmId = useRef(initialAssetId);
   const deleteFilmTarget = useRef<{
     id: string;
     title: string;
@@ -2228,41 +2196,62 @@ function FilmRoomView({
       : '';
 
   useEffect(() => {
-    fetch(
-      `/api/film${initialAssetId ? `?assetId=${encodeURIComponent(initialAssetId)}` : ''}`,
-      { cache: 'no-store' },
-    )
-      .then(async (response) => {
-        const data = (await response.json()) as FilmPayload;
-        if (!response.ok) throw new Error(data.error ?? 'Unable to load film.');
+    const controller = new AbortController();
+    const ticket = ++filmReadSequence.current;
+    filmReadController.current?.abort();
+    filmReadController.current = controller;
+    retryFilmId.current = initialAssetId;
+    setFilmLoading(true);
+    setFilmLoadError('');
+    void readFilmData(initialAssetId, controller.signal)
+      .then((data) => {
+        if (controller.signal.aborted || ticket !== filmReadSequence.current)
+          return;
+        newClipRequest.current = null;
         setFilmAsset(data.asset);
         setFilmAssets(data.assets);
         setFilmClips(data.clips);
-        setSelectedClip((current) =>
-          data.clips.some((clip) => clip.clipNumber === current)
-            ? current
-            : (data.clips[0]?.clipNumber ?? 0),
-        );
+        setSelectedClip(data.clips[0]?.clipNumber ?? 0);
         setNote(data.clips[0]?.note ?? '');
       })
-      .catch(() =>
-        setFilmLoadError('Saved film could not be loaded. Try again.'),
-      )
-      .finally(() => setFilmLoading(false));
-  }, [onNotify, initialAssetId]);
+      .catch((failure: unknown) => {
+        if (!controller.signal.aborted && ticket === filmReadSequence.current)
+          setFilmLoadError(
+            failure instanceof Error
+              ? failure.message
+              : 'Saved film could not be loaded. Retry to continue.',
+          );
+      })
+      .finally(() => {
+        if (ticket === filmReadSequence.current) setFilmLoading(false);
+      });
+    return () => {
+      controller.abort();
+      filmReadController.current?.abort();
+      filmReadSequence.current++;
+    };
+  }, [initialAssetId]);
 
   const openFilm = async (assetId: string, discard = false) => {
-    if (filmSaving) return;
+    if (filmMutationLock.current) return;
     if (clipDirty && !discard) {
       setPendingSelection({ type: 'film', id: assetId });
       return;
     }
     videoRef.current?.pause();
+    const controller = new AbortController();
+    const ticket = ++filmReadSequence.current;
+    filmReadController.current?.abort();
+    filmReadController.current = controller;
+    retryFilmId.current = assetId;
     setFilmLoading(true);
     setFilmLoadError('');
     setFilmPlaybackError('');
     try {
-      const data = await readFilmData(assetId);
+      const data = await readFilmData(assetId, controller.signal);
+      if (controller.signal.aborted || ticket !== filmReadSequence.current)
+        return;
+      newClipRequest.current = null;
       setFilmAsset(data.asset);
       setFilmAssets(data.assets);
       setFilmClips(data.clips);
@@ -2271,21 +2260,25 @@ function FilmRoomView({
       setClipDirty(false);
       if (assetId === filmAsset?.id) videoRef.current?.load();
     } catch {
+      if (controller.signal.aborted || ticket !== filmReadSequence.current)
+        return;
       setFilmLoadError(
         'This film could not be opened. Your current film is still selected. Try again.',
       );
     } finally {
-      setFilmLoading(false);
+      if (ticket === filmReadSequence.current) setFilmLoading(false);
     }
   };
 
   const chooseClip = (clipId: number, discard = false) => {
-    if (filmSaving) return;
+    if (filmMutationLock.current) return;
     if (clipDirty && !discard) {
       setPendingSelection({ type: 'clip', number: clipId });
       return;
     }
     setClipDirty(false);
+    newClipRequest.current = null;
+    if (clipId === 0) setNewClipEpoch((value) => value + 1);
     setSelectedClip(clipId);
     const clip = filmClips.find((item) => item.clipNumber === clipId);
     setNote(clip?.note ?? '');
@@ -2324,7 +2317,7 @@ function FilmRoomView({
   };
 
   const saveBreakdown = async (advance = false) => {
-    if (filmSaving || filmLoading) return;
+    if (filmMutationLock.current || filmLoading) return;
     if (filmAsset?.status === 'deleting') {
       onNotify('Finish deleting this film before changing clips.', 'info');
       return;
@@ -2340,6 +2333,9 @@ function FilmRoomView({
           | HTMLSelectElement
           | null
       )?.value ?? '';
+    const requestedClipId =
+      activeClip?.id ?? (newClipRequest.current ??= crypto.randomUUID());
+    filmMutationLock.current = true;
     setFilmSaving(true);
     try {
       const response = await fetch('/api/film', {
@@ -2348,7 +2344,8 @@ function FilmRoomView({
         body: JSON.stringify({
           action: 'upsertClip',
           assetId: filmAsset.id,
-          id: activeClip?.id,
+          id: requestedClipId,
+          create: !activeClip,
           clipNumber: activeClip?.clipNumber,
           startSeconds: value('film-start'),
           endSeconds: value('film-end'),
@@ -2371,17 +2368,25 @@ function FilmRoomView({
       const data = (await response.json()) as FilmPayload;
       if (!response.ok)
         throw new Error(data.error ?? 'Unable to save the clip.');
+      parseFilmPayload(data, filmAsset.id);
+      if (data.savedClipId !== requestedClipId)
+        throw new Error(
+          'The saved clip could not be confirmed. Your draft is still open.',
+        );
+      const saved = data.clips.find((clip) => clip.id === requestedClipId);
+      if (!saved)
+        throw new Error(
+          'The saved clip could not be confirmed. Your draft is still open.',
+        );
       setFilmAsset(data.asset);
       setFilmAssets(data.assets);
       setFilmClips(data.clips);
-      const saved = activeClip
-        ? data.clips.find((clip) => clip.id === activeClip.id)
-        : data.clips.at(-1);
       if (saved) {
         setSelectedClip(saved.clipNumber);
         setNote(saved.note);
       }
       onNotify(`Clip ${saved?.clipNumber ?? nextClipNumber} saved.`);
+      newClipRequest.current = null;
       setClipDirty(false);
       if (advance) {
         setSelectedClip(0);
@@ -2395,6 +2400,7 @@ function FilmRoomView({
         'error',
       );
     } finally {
+      filmMutationLock.current = false;
       setFilmSaving(false);
     }
   };
@@ -2416,6 +2422,13 @@ function FilmRoomView({
         data.error ??
           'The video uploaded, but its library record could not be saved. Try again.',
       );
+    parseFilmPayload(data);
+    if (data.asset?.storageKey !== storageKey)
+      throw new Error(
+        'The uploaded film could not be confirmed. Reload the library before retrying.',
+      );
+    filmReadController.current?.abort();
+    filmReadSequence.current++;
     setFilmAsset(data.asset);
     setFilmAssets(data.assets);
     setFilmClips(data.clips);
@@ -2428,10 +2441,12 @@ function FilmRoomView({
 
   const deleteChartedClip = async () => {
     if (!activeClip) return;
-    if (filmSaving || filmLoading || clipDirty) {
+    if (filmMutationLock.current || filmLoading || clipDirty) {
       onNotify('Save or discard your clip changes before removing it.', 'info');
       return;
     }
+    filmMutationLock.current = true;
+    setFilmSaving(true);
     try {
       const response = await fetch(
         `/api/film?clipId=${encodeURIComponent(activeClip.id)}`,
@@ -2440,6 +2455,11 @@ function FilmRoomView({
       const data = (await response.json()) as FilmPayload;
       if (!response.ok)
         throw new Error(data.error ?? 'Unable to remove the clip.');
+      parseFilmPayload(data, filmAsset!.id);
+      if (data.clips.some((clip) => clip.id === activeClip.id))
+        throw new Error(
+          'Clip removal could not be confirmed. Reload before retrying.',
+        );
       setFilmAsset(data.asset);
       setFilmAssets(data.assets);
       setFilmClips(data.clips);
@@ -2451,6 +2471,9 @@ function FilmRoomView({
         error instanceof Error ? error.message : 'Unable to remove the clip.',
         'error',
       );
+    } finally {
+      filmMutationLock.current = false;
+      setFilmSaving(false);
     }
   };
 
@@ -2494,7 +2517,8 @@ function FilmRoomView({
   };
 
   const beginDeleteFilm = async () => {
-    if (!filmAsset || filmLoading || filmSaving) return;
+    if (!filmAsset || filmLoading || filmMutationLock.current) return;
+    filmMutationLock.current = true;
     setFilmSaving(true);
     try {
       const fresh = await readFilmData(filmAsset.id);
@@ -2516,12 +2540,13 @@ function FilmRoomView({
         'error',
       );
     } finally {
+      filmMutationLock.current = false;
       setFilmSaving(false);
     }
   };
   const deleteFilm = async () => {
-    if (!filmAsset || deleteFilmLock.current) return;
-    deleteFilmLock.current = true;
+    if (!filmAsset || filmMutationLock.current) return;
+    filmMutationLock.current = true;
     setFilmSaving(true);
     setDeleteFilmError('');
     const deletingId = deleteFilmTarget.current?.id ?? filmAsset.id;
@@ -2553,6 +2578,7 @@ function FilmRoomView({
           result.error ||
             'Deletion could not be confirmed. Reload the film library before retrying.',
         );
+      parseFilmPayload(result);
       videoRef.current?.pause();
       setFilmAsset(result.asset);
       setFilmAssets(result.assets);
@@ -2580,7 +2606,7 @@ function FilmRoomView({
           : 'Unable to delete the film. Retry when connected.',
       );
     } finally {
-      deleteFilmLock.current = false;
+      filmMutationLock.current = false;
       setFilmSaving(false);
     }
   };
@@ -2601,9 +2627,19 @@ function FilmRoomView({
           accept="video/*"
           assetKey={() => `film-${crypto.randomUUID()}`}
           label="Upload film"
-          disabled={clipDirty || filmLoading || filmSaving}
+          disabled={
+            clipDirty ||
+            filmLoading ||
+            filmSaving ||
+            Boolean(filmLoadError && !filmAsset)
+          }
           onNotify={onNotify}
           onUploaded={registerFilm}
+          onUploadingChange={(uploading) => {
+            if (uploading) videoRef.current?.pause();
+            filmMutationLock.current = uploading;
+            setFilmSaving(uploading);
+          }}
         />
         {filmAsset ? (
           <Button
@@ -2621,7 +2657,12 @@ function FilmRoomView({
         ) : null}
         <Button
           className="module-primary"
-          disabled={!filmAsset || filmLoading || filmSaving}
+          disabled={
+            !filmAsset ||
+            filmLoading ||
+            filmSaving ||
+            Boolean(filmLoadError && !filmAsset)
+          }
           onClick={() => chooseClip(0)}
         >
           <Plus /> New clip
@@ -2638,7 +2679,7 @@ function FilmRoomView({
           {filmLoadError}
           <Button
             variant="outline"
-            onClick={() => void openFilm(filmAsset?.id ?? '')}
+            onClick={() => void openFilm(retryFilmId.current)}
           >
             Retry
           </Button>
@@ -2680,6 +2721,9 @@ function FilmRoomView({
       </div>
 
       <div
+        inert={
+          filmSaving || filmLoading || Boolean(filmLoadError && !filmAsset)
+        }
         className={
           libraryCollapsed
             ? 'film-workspace library-collapsed'
@@ -2718,7 +2762,12 @@ function FilmRoomView({
                 <div>
                   <Button
                     aria-label="Add clip"
-                    disabled={!filmAsset || filmLoading || filmSaving}
+                    disabled={
+                      !filmAsset ||
+                      filmLoading ||
+                      filmSaving ||
+                      Boolean(filmLoadError && !filmAsset)
+                    }
                     onClick={() => chooseClip(0)}
                     size="icon-sm"
                     variant="ghost"
@@ -2832,7 +2881,12 @@ function FilmRoomView({
                   </div>
                   <button
                     className="add-clips"
-                    disabled={!filmAsset || filmLoading || filmSaving}
+                    disabled={
+                      !filmAsset ||
+                      filmLoading ||
+                      filmSaving ||
+                      Boolean(filmLoadError && !filmAsset)
+                    }
                     onClick={() => chooseClip(0)}
                     type="button"
                   >
@@ -2923,9 +2977,19 @@ function FilmRoomView({
                     accept="video/*"
                     assetKey={() => `film-${crypto.randomUUID()}`}
                     label="Choose video"
-                    disabled={clipDirty || filmLoading || filmSaving}
+                    disabled={
+                      clipDirty ||
+                      filmLoading ||
+                      filmSaving ||
+                      Boolean(filmLoadError && !filmAsset)
+                    }
                     onNotify={onNotify}
                     onUploaded={registerFilm}
+                    onUploadingChange={(uploading) => {
+                      if (uploading) videoRef.current?.pause();
+                      filmMutationLock.current = uploading;
+                      setFilmSaving(uploading);
+                    }}
                   />
                 </div>
               ) : null}
@@ -3036,7 +3100,12 @@ function FilmRoomView({
               <div className="notes-actions">
                 <span>{note.length}/280</span>
                 <Button
-                  disabled={!filmAsset || filmLoading || filmSaving}
+                  disabled={
+                    !filmAsset ||
+                    filmLoading ||
+                    filmSaving ||
+                    Boolean(filmLoadError && !filmAsset)
+                  }
                   onClick={() => void saveBreakdown(false)}
                   size="sm"
                 >
@@ -3078,7 +3147,7 @@ function FilmRoomView({
               </div>
               <div
                 className="film-sheet-grid film-sheet-editor"
-                key={activeClip?.id ?? `new-${filmClips.length}`}
+                key={`${filmAsset?.id ?? 'empty'}:${activeClip?.id ?? `new-${filmClips.length}-${newClipEpoch}`}`}
               >
                 <strong>
                   {activeClip
@@ -3167,7 +3236,12 @@ function FilmRoomView({
                 <div className="film-sheet-actions">
                   <Button
                     aria-label="Save clip"
-                    disabled={!filmAsset || filmLoading || filmSaving}
+                    disabled={
+                      !filmAsset ||
+                      filmLoading ||
+                      filmSaving ||
+                      Boolean(filmLoadError && !filmAsset)
+                    }
                     onClick={() => void saveBreakdown(false)}
                     size="icon-sm"
                   >
@@ -3175,7 +3249,12 @@ function FilmRoomView({
                   </Button>
                   <Button
                     aria-label="Save and start a new clip"
-                    disabled={!filmAsset || filmLoading || filmSaving}
+                    disabled={
+                      !filmAsset ||
+                      filmLoading ||
+                      filmSaving ||
+                      Boolean(filmLoadError && !filmAsset)
+                    }
                     onClick={() => void saveBreakdown(true)}
                     size="icon-sm"
                     variant="outline"
@@ -3241,7 +3320,7 @@ function FilmRoomView({
       <Dialog
         open={deleteFilmOpen}
         onOpenChange={(open) => {
-          if (!deleteFilmLock.current) setDeleteFilmOpen(open);
+          if (!filmMutationLock.current) setDeleteFilmOpen(open);
         }}
       >
         <DialogContent>
