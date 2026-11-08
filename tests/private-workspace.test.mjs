@@ -164,10 +164,22 @@ globalThis.FixedLengthStream = class extends TransformStream {
 };
 globalThis.privateTestBucket = {
   async put(key, body, options) {
+    const previous = objects.get(key);
+    if (previous && options?.onlyIf?.etagDoesNotMatch === '*') return null;
+    if (
+      options?.onlyIf?.etagMatches &&
+      (!previous ||
+        options.onlyIf.etagMatches !==
+          createHash('md5')
+            .update(new Uint8Array(previous.bytes))
+            .digest('hex'))
+    )
+      return null;
     objects.set(key, {
       bytes: await new Response(body).arrayBuffer(),
       options,
     });
+    return this.head(key);
   },
   async get(key, options) {
     const object = objects.get(key);
@@ -180,6 +192,11 @@ globalThis.privateTestBucket = {
       return {};
     return object
       ? {
+          size: object.bytes.byteLength,
+          etag: createHash('md5')
+            .update(new Uint8Array(object.bytes))
+            .digest('hex'),
+          customMetadata: object.options?.customMetadata,
           body: new Response(
             options?.range
               ? object.bytes.slice(
@@ -226,6 +243,7 @@ globalThis.privateTestBucket = {
             );
           },
           httpMetadata: object.options?.httpMetadata,
+          customMetadata: object.options?.customMetadata,
         }
       : null;
   },
@@ -1683,7 +1701,11 @@ test('complete backup restores all team tables and file bytes offline without to
   const changed = await backups.GET(
     new Request(`https://pilot.test/api/backups?id=${job.id}&part=1`),
   );
-  await assert.rejects(changed.arrayBuffer(), /changed|removed/);
+  const preservedFiles = unzipSync(new Uint8Array(await changed.arrayBuffer()));
+  assert.equal(
+    new TextDecoder().decode(preservedFiles['media/film-backup']),
+    'real film bytes for recovery',
+  );
   const next = await backups.POST();
   assert.equal(next.status, 200);
   assert.equal(
@@ -2942,4 +2964,187 @@ test('film clip revisions reject stale and late edits or removals without blocki
     ).status,
     200,
   );
+});
+
+test('preserved backups resume bounded batches and survive original-file changes without crossing owners', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'backup-copy-owner',
+    name: 'Backup Copy Owner',
+    email: 'copy@example.test',
+  };
+  assert.equal(
+    (
+      await onboarding.POST(
+        request({ name: 'Isolated copy team', season: '2026' }),
+      )
+    ).status,
+    201,
+  );
+  const db = await getDatabase(),
+    bucket = globalThis.privateTestBucket,
+    root = `teams/${db.teamId}/`;
+  for (let i = 0; i < 11; i++)
+    await bucket.put(root + 'copy-' + i, 'original-' + i, {
+      httpMetadata: { contentType: 'text/plain' },
+    });
+  const made = await backups.POST();
+  assert.equal(made.status, 200, await made.clone().text());
+  let job = await made.json();
+  assert.equal(job.state, 'copying');
+  assert.equal(job.copiedFiles, 5);
+  const status = async () =>
+    await (
+      await backups.GET(new Request('https://pilot.test/api/backups?status=1'))
+    ).json();
+  assert.equal((await status()).backup.copiedFiles, 5);
+  assert.equal(
+    (
+      await backups.GET(
+        new Request(`https://pilot.test/api/backups?id=${job.id}&part=1`),
+      )
+    ).status,
+    409,
+  );
+  await bucket.put(root + 'copy-0', 'changed after preservation', {
+    httpMetadata: { contentType: 'text/plain' },
+  });
+  // A file not yet copied must still match the snapshot; failure cannot publish an incomplete archive.
+  const snapshot = await (await bucket.get(backupJobKey(db.teamId))).json();
+  const missing = snapshot.media[5].key;
+  const original = await (
+    await bucket.get(root + missing)
+  ).body
+    .getReader()
+    .read();
+  await bucket.delete(root + missing);
+  assert.equal((await backups.PATCH(request({ id: job.id }))).status, 400);
+  assert.equal((await status()).backup.copiedFiles, 5);
+  await bucket.put(root + missing, original.value, {
+    httpMetadata: { contentType: 'text/plain' },
+  });
+  while (job.state === 'copying') {
+    const next = await backups.PATCH(request({ id: job.id }));
+    assert.equal(next.status, 200, await next.clone().text());
+    job = await next.json();
+  }
+  assert.equal(job.copiedFiles, 11);
+  assert.equal(job.preserved, true);
+  const archivedManifest = await bucket.get(
+    `_backups/${db.teamId}/manifests/${job.id}.json`,
+  );
+  assert.equal((await archivedManifest.json()).copiedFiles, 11);
+  await bucket.delete(root + 'copy-1');
+  const zip = await backups.GET(
+    new Request(`https://pilot.test/api/backups?id=${job.id}&part=1`),
+  );
+  assert.equal(zip.status, 200);
+  const files = unzipSync(new Uint8Array(await zip.arrayBuffer()));
+  assert.equal(new TextDecoder().decode(files['media/copy-0']), 'original-0');
+  assert.equal(new TextDecoder().decode(files['media/copy-1']), 'original-1');
+  globalThis.privateTestIdentity = {
+    id: 'owner-b',
+    name: 'Coach B',
+    email: 'b@example.test',
+  };
+  assert.equal((await backups.PATCH(request({ id: job.id }))).status, 400);
+  assert.equal(
+    (
+      await backups.GET(
+        new Request(`https://pilot.test/api/backups?id=${job.id}&part=1`),
+      )
+    ).status,
+    404,
+  );
+  globalThis.privateTestIdentity = null;
+  assert.equal((await backups.PATCH(request({ id: job.id }))).status, 401);
+});
+
+test('a delayed backup batch cannot replace a newer preparation', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'backup-copy-owner',
+    name: 'Backup Copy Owner',
+    email: 'copy@example.test',
+  };
+  const db = await getDatabase(),
+    bucket = globalThis.privateTestBucket;
+  const response = await backups.POST();
+  assert.equal(response.status, 200);
+  const job = await response.json();
+  assert.equal(job.state, 'copying');
+  const originalPut = bucket.put,
+    replacementId = crypto.randomUUID();
+  let replaced = false;
+  bucket.put = async function (key, body, options) {
+    if (key === backupJobKey(db.teamId) && options?.onlyIf) {
+      const newer = await (await bucket.get(key)).json();
+      newer.id = replacementId;
+      newer.copiedFiles = 0;
+      await originalPut.call(this, key, JSON.stringify(newer), {
+        httpMetadata: { contentType: 'application/json' },
+      });
+      replaced = true;
+    }
+    return originalPut.call(this, key, body, options);
+  };
+  try {
+    assert.equal((await backups.PATCH(request({ id: job.id }))).status, 400);
+  } finally {
+    bucket.put = originalPut;
+  }
+  assert.equal(replaced, true);
+  const saved = await (await bucket.get(backupJobKey(db.teamId))).json();
+  assert.equal(saved.id, replacementId);
+  assert.equal(saved.copiedFiles, 0);
+});
+
+test('legacy prepared manifests remain readable through their original-file path', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'legacy-backup-owner',
+    name: 'Legacy Backup Owner',
+    email: 'legacy-backup@example.test',
+  };
+  assert.equal(
+    (
+      await onboarding.POST(
+        request({ name: 'Legacy backup fixture', season: '2026' }),
+      )
+    ).status,
+    201,
+  );
+  const db = await getDatabase(),
+    bucket = globalThis.privateTestBucket,
+    key = `teams/${db.teamId}/legacy-file`;
+  await bucket.put(key, 'legacy bytes', {
+    httpMetadata: { contentType: 'text/plain' },
+  });
+  const response = await backups.POST();
+  assert.equal(response.status, 200);
+  const job = await response.json();
+  const snapshot = await (await bucket.get(backupJobKey(db.teamId))).json();
+  delete snapshot.copiedFiles;
+  await bucket.put(backupJobKey(db.teamId), JSON.stringify(snapshot), {
+    httpMetadata: { contentType: 'application/json' },
+  });
+  const status = await (
+    await backups.GET(new Request('https://pilot.test/api/backups?status=1'))
+  ).json();
+  assert.equal(status.backup.preserved, false);
+  assert.equal(status.backup.state, 'ready');
+  const zip = await backups.GET(
+    new Request(`https://pilot.test/api/backups?id=${job.id}&part=1`),
+  );
+  assert.equal(zip.status, 200);
+  assert.equal(
+    new TextDecoder().decode(
+      unzipSync(new Uint8Array(await zip.arrayBuffer()))['media/legacy-file'],
+    ),
+    'legacy bytes',
+  );
+  await bucket.put(key, 'changed legacy source', {
+    httpMetadata: { contentType: 'text/plain' },
+  });
+  const changed = await backups.GET(
+    new Request(`https://pilot.test/api/backups?id=${job.id}&part=1`),
+  );
+  await assert.rejects(changed.arrayBuffer(), /changed|removed/);
 });

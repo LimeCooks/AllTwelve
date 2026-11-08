@@ -1,16 +1,22 @@
 # Team backups and offline recovery
 
-## Download
+## Prepare and download
 
-Open Settings → Data & privacy → Prepare backup. This creates a consistent database snapshot and a list of the team's current uploaded files. Download every ZIP part and keep the parts together. Preparing is not the same as downloading; check your device's download status.
+Open Settings → Data & privacy → Prepare backup. The database records are captured in one transaction. Uploaded files are then streamed into separate, private recovery objects, five per request. Settings shows progress and offers Continue preparing backup after an interruption or device change. A source upload must still match the snapshot when copied; a changed or missing source blocks completion and requires recovering that source or preparing a new snapshot. Incomplete backups have no download links.
 
-The export includes all 19 team/domain tables and the actual image/video bytes, their content types, original filenames, and stored upload metadata. It excludes account ownership grants. Every query and file prefix is scoped to the signed-in owner's team. Another account cannot use a backup ID to retrieve it.
+Once ready, the backup uses the preserved file copies. Replacing or deleting an original film/image does not change those bytes or break that prepared backup. Download every ZIP part and keep the parts together. Preparing is not the same as downloading; check your device's download status.
 
-Large libraries are split at file boundaries into parts containing up to 512 MiB of uploaded files, plus the manifest. Files are streamed with backpressure; the Worker does not load the film library into memory. Each part contains the same `chalktalk-backup.json` manifest and its own `media/` files. The streaming ZIP implementation uses [fflate](https://github.com/101arrowz/fflate); object version checks and metadata listing use the [R2 Workers API](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/).
+The export contains all 19 team/domain tables plus uploaded image/video bytes and their original metadata. Ownership grants are excluded. All database reads, source objects, recovery copies and manifests are scoped to the authenticated owner's team. Another account cannot retrieve a backup using its ID. Internal `_backups/` objects are excluded from future source-media enumeration, preventing recursive backups.
 
-Download links expire after 24 hours or when a new backup is prepared. A team has one cached snapshot manifest; preparing another replaces it. If a referenced film is missing, preparation fails. If a file changes or disappears after preparation, the download fails instead of silently creating an incomplete archive. Prepare again after changes finish.
+Large libraries are split at file boundaries into parts containing up to 512 MiB of media plus the manifest. Each ZIP part contains the same `chalktalk-backup.json` and its own `media/` files. Copying and ZIP downloads use streaming backpressure, not whole-library buffering. The current limits remain 10,000 uploaded files, 16 MiB of structured records, and 512 MiB per file/ZIP media part; normal uploads remain limited to 250 MiB. Large-limit performance has not been load-tested.
 
-These are manual recovery copies, not scheduled backups or a verified cloud disaster-recovery service. The current pilot limit is 10,000 uploaded files and 16 MiB of structured records per snapshot. A single uploaded file cannot exceed the 512 MiB part size (the current normal upload limit is 250 MiB).
+## Interruption, replacement and retention
+
+A stored progress count makes copying resumable. A retry recognizes previously copied matching objects. Progress updates compare the current manifest's ETag, so a delayed request cannot replace a newer preparation from another device. A completed snapshot also stores a write-once manifest alongside its independently preserved file set.
+
+The current prepared download links last 24 hours or until another backup is prepared. Settings shows expiry, hides expired links, and restores current preparation status across navigation and devices. Older pre-copy snapshots remain readable but are explicitly labelled as depending on original uploads; prepare a new backup to gain independent copies.
+
+Completed copy sets/manifests are retained internally; scheduled preparation, a history/download picker, automatic pruning/retention limits, and an exercised cloud restore procedure are unfinished. Repeated preparation uses additional storage, and unfinished or replaced preparations can leave internal file copies until cleanup is implemented. Do not describe this as a finished unattended disaster-recovery service or imply that the UI can restore an older retained snapshot yet. No hosted restore-over-live action exists.
 
 ## Offline recovery check
 
@@ -20,28 +26,18 @@ Requires this checkout's dependencies and Node 22.13+. Use an entirely new outpu
 node scripts/restore-backup.mjs --out outputs/recovery-check --owner-id recovery-check "C:\Downloads\chalktalk-part-1.zip"
 ```
 
-For multipart backups, supply all part paths in the same command. Their order does not matter. The tool never contacts the hosted pilot, never changes the original prototype, and refuses an existing output directory. It creates:
+Supply every part path for multipart backups; order does not matter. The tool never contacts the hosted pilot, never changes the prototype, and refuses an existing output directory. It creates `workspace.sqlite`, the original uploaded bytes under `media/`, and `recovery.json` with team/file metadata. The explicit owner ID binds the offline team; it is not a login credential and grants no hosted access.
 
-- `workspace.sqlite`: the complete restored database with original IDs and JSON preserved.
-- `media/`: the original uploaded file bytes.
-- `recovery.json`: the recovered team's identity and file metadata.
+Recovery verifies ZIP CRCs, sizes, available MD5 ETags, complete/matching parts, safe paths, schema/columns, team ownership and foreign keys. A failed attempt leaves `RESTORE_INCOMPLETE.txt`; retry into a different new directory. Never replace the live database with an offline recovery without a separate reviewed procedure.
 
-The explicit recovery owner ID binds the restored team in this offline database. It is not a login credential and does not grant hosted access. A future cloud recovery must use the correct authenticated, Site-scoped identity and a separate empty destination. Do not upload the offline database over the live pilot without an explicit, reviewed recovery procedure.
+## Verification and limits
 
-The tool verifies ZIP CRCs, file sizes, available MD5 ETags, complete and matching parts, safe paths, schema/columns, team ownership, and foreign-key relationships. A failed recovery leaves a `RESTORE_INCOMPLETE.txt` marker in its new output directory; do not treat that directory as a complete recovery. Retry into a different new directory. Existing data is never deleted to make a recovery fit.
+The actual handler/SQLite suite exports every domain table and uploaded bytes, restores into a new database, compares rows and metadata, and rejects corrupt/incomplete/duplicate archives, expired or replaced jobs, foreign owners and overwrite attempts. Preserved-copy cases cover 11-file batching, interruption/resume, missing sources, changed/deleted originals, and a competing preparation inserted immediately before progress commits.
 
-## Verification
+Local browser QA showed a 5-of-6 preparation, blocked a missing sixth source, resumed after restoring identical source bytes, and exposed download links only at completion. All six disposable original videos were then removed; the backup still restored every original byte and every row across the 19 tables into a separate offline workspace. Disposable recovery objects were removed and the previous local prepared manifest restored. The hosted owner's records/files were not used for destructive QA.
 
-`tests/private-workspace.test.mjs` builds fixtures in every exported table, invokes the actual authenticated backup handlers, downloads the streaming ZIP, and restores it into a separate SQLite database. It compares every restored row and uploaded byte, checks metadata and relationships, tests multipart recovery, and rejects damaged/incomplete/duplicate archives, cross-account access, changed source files, expired/replaced jobs, and overwrite attempts.
+The packaged production-Worker rehearsal checks the real streaming copy path and downloads original bytes after deliberately replacing a disposable source upload. Rollback compatibility keeps older prepared manifests readable through their original-source path; those older snapshots do not gain preserved bytes retroactively.
 
-The development prototype stores messages in workspace JSON and lacks two unused relational messaging tables. Prototype export preserves that JSON and exports those absent tables as empty. Hosted export requires the complete deployed schema and does not silently substitute missing tables.
+The prototype stores old messages in workspace JSON and lacks two unused relational messaging tables. Prototype export preserves that JSON and exports those absent tables as empty. Hosted export requires the complete deployed schema.
 
-An actual local browser export was also downloaded and restored into a new ignored recovery directory. Every row across the 19 exported tables matched, including all three existing plays. The prototype had no uploaded files at that check; uploaded-byte and metadata recovery were verified separately with the isolated fixtures. No prototype records were imported into the hosted pilot.
-
-## Returning to a prepared backup
-
-Settings now reads the team's current prepared snapshot on opening Data & privacy. Its download links survive navigation, refresh, and opening Settings on another device using the same authenticated account. The status response exposes only the current team's summary, never ownership grants or another team's ID. It uses private no-store responses. Missing and expired snapshots are distinct from a failed read; an initial status failure requires Refresh backup status before preparing another copy. Concurrent clicks are locked, reads are cancelled on unmount, and incomplete summaries are rejected before links are rendered.
-
-Settings shows preparation time, record/file counts and the 24-hour expiry. Expired links are hidden, including when expiry occurs while the screen remains open. Refresh backup status picks up replacement snapshots prepared elsewhere. A corrupt or future timestamp cannot bypass server download expiry checks. Preparing another backup still replaces the cached manifest; this change does not add scheduled backups, retained cloud archive history or a hosted restore action.
-
-Verification: authenticated handler tests cover persisted status, replacement, expiry, invalid timestamps and sign-in boundaries; client contract tests cover malformed summaries, failed requests and cancellation. Local browser QA prepared a backup, navigated away and returned to the identical saved download ID and expiry without preparing again. That persisted backup was downloaded through the local API and restored into a separate new offline workspace, with every row across all 19 exported domain tables compared to the manifest. The prototype's domain records and hosted pilot were not modified by this check.
+Implementation references: [R2 streaming and conditional operations](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/), [fflate streaming ZIP](https://github.com/101arrowz/fflate).

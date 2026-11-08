@@ -62,7 +62,7 @@ export function BackupControls() {
     );
     return () => window.clearTimeout(timer);
   }, [backup]);
-  const prepare = async () => {
+  const prepare = async (resume?: PreparedBackup) => {
     if (operation.current || !known) return;
     operation.current = true;
     const ticket = ++sequence.current,
@@ -70,11 +70,13 @@ export function BackupControls() {
     controller.current = request;
     setBusy(true);
     setError('');
-    setBackup(null);
+    if (!resume) setBackup(null);
     setExpiredNotice(false);
     try {
       const response = await fetch('/api/backups', {
-        method: 'POST',
+        method: resume ? 'PATCH' : 'POST',
+        headers: resume ? { 'content-type': 'application/json' } : undefined,
+        body: resume ? JSON.stringify({ id: resume.id }) : undefined,
         signal: request.signal,
       });
       const data = (await response.json()) as { error?: unknown } | null;
@@ -84,8 +86,33 @@ export function BackupControls() {
             ? data.error
             : 'Unable to prepare your backup.',
         );
-      const prepared = parsePreparedBackup(data);
-      if (ticket === sequence.current) setBackup(prepared);
+      let prepared = parsePreparedBackup(data);
+      while (ticket === sequence.current) {
+        setBackup(prepared);
+        if (prepared.state !== 'copying') break;
+        const previous = prepared;
+        const next = await fetch('/api/backups', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id: previous.id }),
+          signal: request.signal,
+        });
+        const value = (await next.json()) as { error?: unknown };
+        if (!next.ok)
+          throw new Error(
+            typeof value?.error === 'string'
+              ? value.error
+              : 'Backup preparation stopped. Refresh status to continue.',
+          );
+        prepared = parsePreparedBackup(value);
+        if (
+          prepared.id !== previous.id ||
+          (prepared.copiedFiles ?? 0) <= (previous.copiedFiles ?? 0)
+        )
+          throw new Error(
+            'Backup preparation changed. Refresh status to continue.',
+          );
+      }
     } catch (failure) {
       if (ticket === sequence.current && !request.signal.aborted)
         setError(
@@ -114,13 +141,31 @@ export function BackupControls() {
         images and film. Keep every ZIP part together as a recovery copy on your
         device.
       </p>
-      <Button onClick={() => void prepare()} disabled={busy || !known}>
+      <Button
+        onClick={() =>
+          void prepare(
+            backup?.state === 'copying' && !expired ? backup : undefined,
+          )
+        }
+        disabled={busy || !known}
+      >
         {busy
           ? 'Checking or preparing backup…'
-          : backup || expired
-            ? 'Prepare a new backup'
-            : 'Prepare backup'}
+          : backup?.state === 'copying' && !expired
+            ? 'Continue preparing backup'
+            : backup || expired
+              ? 'Prepare a new backup'
+              : 'Prepare backup'}
       </Button>
+      {backup?.state === 'copying' ? (
+        <Button
+          variant="outline"
+          disabled={busy}
+          onClick={() => void prepare()}
+        >
+          Start a new backup
+        </Button>
+      ) : null}
       <Button variant="outline" onClick={() => void load()} disabled={busy}>
         Refresh backup status
       </Button>
@@ -137,7 +182,14 @@ export function BackupControls() {
           has been downloaded.
         </p>
       ) : null}
-      {backup && !expired ? (
+      {backup?.state === 'copying' && !expired ? (
+        <p role="status">
+          Preserving uploads: {backup.copiedFiles ?? 0} of {backup.mediaFiles}.
+          You can return here to continue if interrupted. Download links appear
+          only when all copies are ready.
+        </p>
+      ) : null}
+      {backup && backup.state !== 'copying' && !expired ? (
         <div aria-live="polite">
           <p>
             Prepared {new Date(backup.createdAt).toLocaleString()} ·{' '}
@@ -171,9 +223,12 @@ export function BackupControls() {
             ))}
           </div>
           <p>
+            {backup.preserved
+              ? 'Uploaded files have independent recovery copies; later changes to the originals do not alter this backup. '
+              : 'This older prepared backup still relies on unchanged original uploads. Prepare a new one to preserve them. '}
             Check that every download finishes. Preparing another backup
-            replaces these links. If files changed, prepare again. Recovery uses
-            a separate empty workspace; there is no in-place restore here.
+            replaces these links. Recovery uses a separate empty workspace;
+            there is no in-place restore here.
           </p>
         </div>
       ) : null}

@@ -1,4 +1,7 @@
 export type PreparedBackup = {
+  state?: 'copying' | 'ready';
+  preserved?: boolean;
+  copiedFiles?: number;
   id: string;
   createdAt: string;
   expiresAt: string;
@@ -26,7 +29,15 @@ export function parsePreparedBackup(value: unknown): PreparedBackup {
     !integer(data.mediaFiles) ||
     data.mediaFiles > 10000 ||
     !integer(data.mediaBytes) ||
-    !integer(data.records)
+    !integer(data.records) ||
+    (data.state !== undefined && !['copying', 'ready'].includes(data.state)) ||
+    (data.preserved !== undefined && typeof data.preserved !== 'boolean') ||
+    (data.preserved === true &&
+      (!data.state ||
+        !integer(data.copiedFiles) ||
+        data.copiedFiles! > data.mediaFiles ||
+        (data.state === 'ready' && data.copiedFiles !== data.mediaFiles) ||
+        (data.state === 'copying' && data.copiedFiles === data.mediaFiles)))
   )
     throw new Error(
       'The prepared backup details were incomplete. Refresh backup status before downloading.',

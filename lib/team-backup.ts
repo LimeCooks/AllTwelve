@@ -55,6 +55,7 @@ export type BackupMedia = {
   customMetadata: Record<string, string>;
 };
 export type TeamBackup = {
+  copiedFiles?: number;
   format: 'chalktalk-team-backup';
   version: 1;
   id: string;
@@ -68,6 +69,90 @@ export type TeamBackup = {
 export const PART_BYTES = 512 * 1024 * 1024;
 export const backupJobKey = (teamId: string) =>
   `_backups/${teamId}/current.json`;
+export const backupCopyPrefix = (teamId: string, id: string) =>
+  `_backups/${teamId}/copies/${id}/`;
+export const backupArchiveKey = (teamId: string, id: string) =>
+  `_backups/${teamId}/manifests/${id}.json`;
+
+export async function advanceBackupCopy(
+  bucket: R2Bucket,
+  teamId: string,
+  sourcePrefix: string,
+  id: string,
+) {
+  const object = await bucket.get(backupJobKey(teamId));
+  if (!object) throw new BackupError('Prepare a backup first.');
+  const snapshot = await object.json<TeamBackup>();
+  if (snapshot.teamId !== teamId || snapshot.id !== id)
+    throw new BackupError(
+      'This preparation was replaced. Refresh backup status.',
+    );
+  if (
+    !Number.isFinite(Date.parse(snapshot.createdAt)) ||
+    Date.now() - Date.parse(snapshot.createdAt) >= 86400000
+  )
+    throw new BackupError('This preparation expired. Prepare a new backup.');
+  if (snapshot.copiedFiles === undefined)
+    throw new BackupError(
+      'Prepare a new backup to preserve its uploaded files.',
+    );
+  if (
+    !Number.isInteger(snapshot.copiedFiles) ||
+    snapshot.copiedFiles < 0 ||
+    snapshot.copiedFiles > snapshot.media.length
+  )
+    throw new BackupError(
+      'Backup progress could not be verified. Prepare a new backup.',
+    );
+  const archive = async () => {
+    await bucket.put(backupArchiveKey(teamId, id), JSON.stringify(snapshot), {
+      onlyIf: { etagDoesNotMatch: '*' },
+      httpMetadata: { contentType: 'application/json' },
+    });
+  };
+  if (snapshot.copiedFiles === snapshot.media.length) {
+    await archive();
+    return snapshot;
+  }
+  const end = Math.min(snapshot.media.length, snapshot.copiedFiles + 5);
+  for (let index = snapshot.copiedFiles; index < end; index++) {
+    const file = snapshot.media[index],
+      target = backupCopyPrefix(teamId, id) + file.key;
+    const existing = await bucket.head(target);
+    if (
+      existing?.size === file.size &&
+      existing.customMetadata?.backupSourceEtag === file.etag
+    )
+      continue;
+    const source = await bucket.get(sourcePrefix + file.key, {
+      onlyIf: { etagMatches: file.etag },
+    });
+    if (!source || !('body' in source) || !source.body)
+      throw new BackupError(
+        'An upload changed before it was preserved. Prepare a new backup; incomplete copies are not downloadable.',
+      );
+    const fixed = new FixedLengthStream(file.size);
+    await bucket.put(target, source.body.pipeThrough(fixed), {
+      httpMetadata: { contentType: file.contentType },
+      customMetadata: { backupSourceEtag: file.etag },
+    });
+  }
+  snapshot.copiedFiles = end;
+  if (end === snapshot.media.length) await archive();
+  const saved = await bucket.put(
+    backupJobKey(teamId),
+    JSON.stringify(snapshot),
+    {
+      onlyIf: { etagMatches: object.etag },
+      httpMetadata: { contentType: 'application/json' },
+    },
+  );
+  if (!saved)
+    throw new BackupError(
+      'Backup preparation changed in another tab. Refresh backup status to continue.',
+    );
+  return snapshot;
+}
 export const safeMediaKey = (key: string) =>
   /^[a-z0-9][a-z0-9._/-]{0,159}$/i.test(key) &&
   key.split('/').every((part) => part !== '' && part !== '.' && part !== '..');

@@ -4,6 +4,8 @@ import { isPrototype } from '@/lib/request-identity';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
 import {
   backupJobKey,
+  backupCopyPrefix,
+  advanceBackupCopy,
   BackupError,
   createTeamBackup,
   type TeamBackup,
@@ -13,6 +15,13 @@ import { backupZip } from '@/lib/backup-zip';
 const bucket = () => (env as unknown as { MEDIA: R2Bucket }).MEDIA;
 const prefix = (teamId: string) => (isPrototype() ? '' : `teams/${teamId}/`);
 const summary = (snapshot: TeamBackup) => ({
+  copiedFiles: snapshot.copiedFiles,
+  preserved: snapshot.copiedFiles !== undefined,
+  state:
+    snapshot.copiedFiles !== undefined &&
+    snapshot.copiedFiles < snapshot.media.length
+      ? 'copying'
+      : 'ready',
   id: snapshot.id,
   createdAt: snapshot.createdAt,
   expiresAt: new Date(
@@ -54,14 +63,43 @@ export async function POST() {
       prefix(database.teamId),
       isPrototype(),
     );
+    snapshot.copiedFiles = 0;
     await bucket().put(
       backupJobKey(database.teamId),
       JSON.stringify(snapshot),
       { httpMetadata: { contentType: 'application/json' } },
     );
-    return Response.json(summary(snapshot), {
+    const copied = await advanceBackupCopy(
+      bucket(),
+      database.teamId,
+      prefix(database.teamId),
+      snapshot.id,
+    );
+    return Response.json(summary(copied), {
       headers: { 'cache-control': 'no-store' },
     });
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const database = await getDatabase(),
+      body = (await request.json()) as { id?: unknown };
+    if (typeof body?.id !== 'string')
+      throw new BackupError('Choose a prepared backup to continue.');
+    return Response.json(
+      summary(
+        await advanceBackupCopy(
+          bucket(),
+          database.teamId,
+          prefix(database.teamId),
+          body.id,
+        ),
+      ),
+      { headers: { 'cache-control': 'private, no-store' } },
+    );
   } catch (error) {
     return failure(error);
   }
@@ -107,13 +145,32 @@ export async function GET(request: Request) {
         { status: 409 },
       );
     const part = Number(params.get('part'));
+    if (
+      snapshot.copiedFiles !== undefined &&
+      snapshot.copiedFiles < snapshot.media.length
+    )
+      return Response.json(
+        {
+          error:
+            'This backup is still preserving uploaded files. Continue preparation before downloading.',
+        },
+        { status: 409 },
+      );
     if (!Number.isInteger(part) || part < 1 || part > snapshot.parts)
       return Response.json(
         { error: 'Choose a valid backup part.' },
         { status: 400 },
       );
     return new Response(
-      backupZip(snapshot, part, bucket(), prefix(database.teamId)),
+      backupZip(
+        snapshot,
+        part,
+        bucket(),
+        snapshot.copiedFiles !== undefined
+          ? backupCopyPrefix(database.teamId, snapshot.id)
+          : prefix(database.teamId),
+        snapshot.copiedFiles !== undefined,
+      ),
       {
         headers: {
           'content-type': 'application/zip',

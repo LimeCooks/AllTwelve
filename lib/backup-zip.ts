@@ -6,6 +6,7 @@ export function backupZip(
   part: number,
   bucket: R2Bucket,
   prefix: string,
+  preserved = false,
 ) {
   async function* chunks(): AsyncGenerator<Uint8Array> {
     const queue: Uint8Array[] = [];
@@ -23,10 +24,17 @@ export function backupZip(
     );
     while (queue.length) yield queue.shift()!;
     for (const file of snapshot.media.filter((m) => m.part === part)) {
-      const object = await bucket.get(`${prefix}${file.key}`, {
-        onlyIf: { etagMatches: file.etag },
-      });
-      if (!object || !('body' in object))
+      const object = await bucket.get(
+        `${prefix}${file.key}`,
+        preserved ? undefined : { onlyIf: { etagMatches: file.etag } },
+      );
+      if (
+        !object ||
+        !('body' in object) ||
+        (preserved &&
+          (object.size !== file.size ||
+            object.customMetadata?.backupSourceEtag !== file.etag))
+      )
         throw new Error(
           'A file changed or was removed while downloading. Create a new backup and retry.',
         );

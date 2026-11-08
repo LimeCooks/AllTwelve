@@ -410,12 +410,41 @@ async function verifySaved(label) {
   const backup = await api('/api/backups', 'a', undefined, 'POST');
   assert.equal(backup.parts, 1);
   const backupPath = `/api/backups?id=${backup.id}&part=1`;
+  if (backup.preserved) {
+    assert.equal(backup.state, 'ready');
+    const changedSource = await fetch(`${origin}/api/media?key=team-logo`, {
+      method: 'POST',
+      headers: {
+        ...ownerHeaders('a'),
+        origin,
+        'content-type': 'image/png',
+        'x-chalktalk-upload-size': '7',
+        'x-chalktalk-filename': 'changed.png',
+      },
+      body: Buffer.from('changed'),
+    });
+    assert.equal(changedSource.status, 200);
+  }
   const backupResponse = await fetch(`${origin}${backupPath}`, {
     headers: ownerHeaders('a'),
   });
   assert.equal(backupResponse.status, 200);
   const zip = unzipSync(new Uint8Array(await backupResponse.arrayBuffer()));
   assert.deepEqual(Buffer.from(zip['media/team-logo']), media);
+  if (backup.preserved) {
+    const restoredSource = await fetch(`${origin}/api/media?key=team-logo`, {
+      method: 'POST',
+      headers: {
+        ...ownerHeaders('a'),
+        origin,
+        'content-type': 'image/png',
+        'x-chalktalk-upload-size': String(media.length),
+        'x-chalktalk-filename': 'rehearsal.png',
+      },
+      body: media,
+    });
+    assert.equal(restoredSource.status, 200);
+  }
   const manifest = JSON.parse(
     new TextDecoder().decode(zip['chalktalk-backup.json']),
   );
