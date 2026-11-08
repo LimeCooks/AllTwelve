@@ -12,6 +12,20 @@ import { backupZip } from '@/lib/backup-zip';
 
 const bucket = () => (env as unknown as { MEDIA: R2Bucket }).MEDIA;
 const prefix = (teamId: string) => (isPrototype() ? '' : `teams/${teamId}/`);
+const summary = (snapshot: TeamBackup) => ({
+  id: snapshot.id,
+  createdAt: snapshot.createdAt,
+  expiresAt: new Date(
+    Date.parse(snapshot.createdAt) + 24 * 60 * 60 * 1000,
+  ).toISOString(),
+  parts: snapshot.parts,
+  mediaBytes: snapshot.mediaBytes,
+  mediaFiles: snapshot.media.length,
+  records: Object.values(snapshot.tables).reduce(
+    (n, rows) => n + rows.length,
+    0,
+  ),
+});
 const failure = (error: unknown) =>
   Response.json(
     {
@@ -21,6 +35,7 @@ const failure = (error: unknown) =>
           : 'Unable to prepare your backup.',
     },
     {
+      headers: { 'cache-control': 'private, no-store' },
       status:
         error instanceof WorkspaceAccessError
           ? error.status
@@ -44,20 +59,9 @@ export async function POST() {
       JSON.stringify(snapshot),
       { httpMetadata: { contentType: 'application/json' } },
     );
-    return Response.json(
-      {
-        id: snapshot.id,
-        createdAt: snapshot.createdAt,
-        parts: snapshot.parts,
-        mediaBytes: snapshot.mediaBytes,
-        mediaFiles: snapshot.media.length,
-        records: Object.values(snapshot.tables).reduce(
-          (n, rows) => n + rows.length,
-          0,
-        ),
-      },
-      { headers: { 'cache-control': 'no-store' } },
-    );
+    return Response.json(summary(snapshot), {
+      headers: { 'cache-control': 'no-store' },
+    });
   } catch (error) {
     return failure(error);
   }
@@ -67,18 +71,35 @@ export async function GET(request: Request) {
   try {
     const database = await getDatabase(),
       params = new URL(request.url).searchParams;
+    const statusOnly = params.get('status') === '1';
     const object = await bucket().get(backupJobKey(database.teamId));
+    if (!object && statusOnly)
+      return Response.json(
+        { backup: null, reason: 'none' },
+        { headers: { 'cache-control': 'private, no-store' } },
+      );
     if (!object)
       return Response.json(
         { error: 'Prepare a backup first.' },
         { status: 404 },
       );
     const snapshot = await object.json<TeamBackup>();
-    if (
-      snapshot.teamId !== database.teamId ||
-      snapshot.id !== params.get('id') ||
-      Date.now() - Date.parse(snapshot.createdAt) > 24 * 60 * 60 * 1000
-    )
+    const createdAt = Date.parse(snapshot.createdAt);
+    if (snapshot.teamId !== database.teamId)
+      throw new BackupError('This backup could not be verified for your team.');
+    const expired =
+      !Number.isFinite(createdAt) ||
+      createdAt > Date.now() + 5 * 60 * 1000 ||
+      Date.now() - createdAt >= 24 * 60 * 60 * 1000;
+    if (statusOnly)
+      return Response.json(
+        {
+          backup: expired ? null : summary(snapshot),
+          reason: expired ? 'expired' : 'ready',
+        },
+        { headers: { 'cache-control': 'private, no-store' } },
+      );
+    if (snapshot.id !== params.get('id') || expired)
       return Response.json(
         {
           error: 'This backup has expired or was replaced. Prepare a new one.',

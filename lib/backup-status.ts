@@ -1,0 +1,66 @@
+export type PreparedBackup = {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  parts: number;
+  mediaFiles: number;
+  mediaBytes: number;
+  records: number;
+};
+export function parsePreparedBackup(value: unknown): PreparedBackup {
+  const data = value as PreparedBackup | null;
+  const integer = (number: unknown) =>
+    typeof number === 'number' && Number.isSafeInteger(number) && number >= 0;
+  if (
+    !data ||
+    typeof data.id !== 'string' ||
+    !data.id ||
+    data.id.length > 100 ||
+    typeof data.createdAt !== 'string' ||
+    !Number.isFinite(Date.parse(data.createdAt)) ||
+    typeof data.expiresAt !== 'string' ||
+    Date.parse(data.expiresAt) !== Date.parse(data.createdAt) + 86400000 ||
+    !integer(data.parts) ||
+    data.parts < 1 ||
+    data.parts > 10001 ||
+    !integer(data.mediaFiles) ||
+    data.mediaFiles > 10000 ||
+    !integer(data.mediaBytes) ||
+    !integer(data.records)
+  )
+    throw new Error(
+      'The prepared backup details were incomplete. Refresh backup status before downloading.',
+    );
+  return data;
+}
+export async function readBackupStatus(
+  signal?: AbortSignal,
+  fetcher: typeof fetch = fetch,
+) {
+  const response = await fetcher('/api/backups?status=1', {
+    cache: 'no-store',
+    signal,
+  });
+  const value = (await response.json()) as {
+    error?: unknown;
+    backup?: unknown;
+    reason?: unknown;
+  } | null;
+  if (!response.ok)
+    throw new Error(
+      typeof value?.error === 'string'
+        ? value.error
+        : 'Backup status could not be loaded.',
+    );
+  if (
+    value?.backup === null &&
+    (value.reason === 'none' || value.reason === 'expired')
+  )
+    return { backup: null, reason: value.reason as 'none' | 'expired' };
+  if (value?.reason !== 'ready')
+    throw new Error('Backup status could not be verified. Retry to continue.');
+  return {
+    backup: parsePreparedBackup(value.backup),
+    reason: 'ready' as const,
+  };
+}

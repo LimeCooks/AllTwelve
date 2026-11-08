@@ -1502,6 +1502,17 @@ test('complete backup restores all team tables and file bytes offline without to
   assert.equal(prepared.status, 200, await prepared.clone().text());
   const job = await prepared.json();
   assert.equal(job.mediaFiles, 2);
+  const backupStatus = () =>
+    backups.GET(new Request('https://pilot.test/api/backups?status=1'));
+  const persistedStatus = await backupStatus();
+  assert.equal(
+    persistedStatus.headers.get('cache-control'),
+    'private, no-store',
+  );
+  assert.deepEqual(await persistedStatus.json(), {
+    backup: job,
+    reason: 'ready',
+  });
   const response = await backups.GET(
     new Request(`https://pilot.test/api/backups?id=${job.id}&part=1`),
   );
@@ -1684,6 +1695,7 @@ test('complete backup restores all team tables and file bytes offline without to
     409,
   );
   const nextJob = await next.json();
+  assert.equal((await (await backupStatus()).json()).backup.id, nextJob.id);
   const storedJob = await (
     await globalThis.privateTestBucket.get(backupJobKey(scoped.teamId))
   ).json();
@@ -1693,6 +1705,27 @@ test('complete backup restores all team tables and file bytes offline without to
     JSON.stringify(storedJob),
     { httpMetadata: { contentType: 'application/json' } },
   );
+  assert.equal(
+    (
+      await backups.GET(
+        new Request(`https://pilot.test/api/backups?id=${nextJob.id}&part=1`),
+      )
+    ).status,
+    409,
+  );
+  assert.deepEqual(await (await backupStatus()).json(), {
+    backup: null,
+    reason: 'expired',
+  });
+  storedJob.createdAt = 'invalid-date';
+  await globalThis.privateTestBucket.put(
+    backupJobKey(scoped.teamId),
+    JSON.stringify(storedJob),
+  );
+  assert.deepEqual(await (await backupStatus()).json(), {
+    backup: null,
+    reason: 'expired',
+  });
   assert.equal(
     (
       await backups.GET(
@@ -1722,8 +1755,13 @@ test('complete backup restores all team tables and file bytes offline without to
     ).status,
     404,
   );
+  assert.deepEqual(await (await backupStatus()).json(), {
+    backup: null,
+    reason: 'none',
+  });
   globalThis.privateTestIdentity = null;
   assert.equal((await backups.POST()).status, 401);
+  assert.equal((await backupStatus()).status, 401);
   assert.equal(
     (await backups.GET(new Request('https://pilot.test/api/backups?part=1')))
       .status,
