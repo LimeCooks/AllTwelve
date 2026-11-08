@@ -44,3 +44,5 @@
 .pd-recovery-error > a {
   flex: 0 0 auto;
 }
+.pd-alignment-guides { stroke: #f4dc96; stroke-width: 1; stroke-dasharray: 4 3; opacity: .85; }
+.pd-alignment-guides circle { fill: #f4dc96; stroke: none; }

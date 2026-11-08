@@ -8,6 +8,7 @@ import {
   yardY,
   type Drawing,
   type Player,
+  type Point,
   type Scene,
 } from '@/lib/play-designer';
 
@@ -23,6 +24,7 @@ export function PlayField({
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  guides,
 }: {
   drawing: Drawing;
   name: string;
@@ -35,6 +37,7 @@ export function PlayField({
   onPointerDown?: (event: ReactPointerEvent<SVGSVGElement>) => void;
   onPointerMove?: (event: ReactPointerEvent<SVGSVGElement>) => void;
   onPointerUp?: (event: ReactPointerEvent<SVGSVGElement>) => void;
+  guides?: Point | null;
 }) {
   const scene: Scene = normalizeDrawing(drawing);
   const opponentIds = new Set(scene.opponentPlayers.map((player) => player.id));
@@ -407,6 +410,27 @@ export function PlayField({
           {l.text}
         </text>
       ))}
+      {guides && !printMode ? (
+        <g
+          className="pd-alignment-guides"
+          aria-hidden="true"
+          pointerEvents="none"
+        >
+          <line
+            x1={viewport.x}
+            x2={viewport.x + viewport.width}
+            y1={guides.y}
+            y2={guides.y}
+          />
+          <line
+            x1={guides.x}
+            x2={guides.x}
+            y1={viewport.y}
+            y2={viewport.y + viewport.height}
+          />
+          <circle cx={guides.x} cy={guides.y} r="3" />
+        </g>
+      ) : null}
     </svg>
   );
 }

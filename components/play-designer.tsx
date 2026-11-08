@@ -43,6 +43,11 @@ import {
 import { PlayField } from '@/components/play-field';
 import { fieldViewport } from '@/lib/field-camera';
 import {
+  beginRouteSegment,
+  continuationRoute,
+  moveRouteVertex,
+} from '@/lib/route-edit';
+import {
   formationPlayers,
   normalizeDrawing,
   removeSceneItem,
@@ -154,6 +159,8 @@ export function PlayDesigner({
   const [tool, setTool] = useState<Tool>('Select');
   const [routeId, setRouteId] = useState('');
   const [anchorId, setAnchorId] = useState('');
+  const [forceNewRoute, setForceNewRoute] = useState(false);
+  const [guides, setGuides] = useState<Point | null>(null);
   const [colour, setColour] = useState('#52c5b5');
   const [line, setLine] = useState<Route['lineStyle']>('solid');
   const [ending, setEnding] = useState<NonNullable<Route['ending']>>('arrow');
@@ -219,6 +226,8 @@ export function PlayDesigner({
   };
   const sceneEdit = (scene: Scene) => edit({ scene: normalizeDrawing(scene) });
   const finish = () => {
+    setForceNewRoute(false);
+    setGuides(null);
     setRouteId('');
     setAnchorId('');
     setTool('Select');
@@ -353,7 +362,14 @@ export function PlayDesigner({
     };
   };
   const pointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (busy || event.button !== 0 || !event.isPrimary) return;
+    if (
+      busy ||
+      drag.current ||
+      cameraDrag.current ||
+      event.button !== 0 ||
+      !event.isPrimary
+    )
+      return;
     if (tool === 'Pan') {
       const matrix = event.currentTarget.getScreenCTM();
       if (!matrix) return;
@@ -400,6 +416,11 @@ export function PlayDesigner({
         ...draft.scene.labels,
       ].find((item) => item.id === hitId);
       if (chosen?.colour) setColour(chosen.colour);
+      if (hitKind === 'player' || hitKind === 'opponent') {
+        setAnchorId(hitId);
+        setRouteId(continuationRoute(draft.scene, hitId)?.id ?? '');
+        setForceNewRoute(false);
+      }
       drag.current = {
         pointerId: event.pointerId,
         type: hitKind,
@@ -415,7 +436,8 @@ export function PlayDesigner({
     }
     if (tool === 'Route' || directRoute) {
       if (hitKind === 'player' || hitKind === 'opponent') {
-        setRouteId('');
+        setRouteId(continuationRoute(draft.scene, hitId)?.id ?? '');
+        setForceNewRoute(false);
         setAnchorId(hitId);
         setSelected(`${hitKind}:${hitId}`);
         return;
@@ -432,31 +454,32 @@ export function PlayDesigner({
         setError('Select a player, then choose Draw route.');
         return;
       }
-      const next = structuredClone(draft.scene);
-      let current = next.routes.find((item) => item.id === routeId);
-      if (!current && anchor) {
-        current = {
-          id: crypto.randomUUID(),
-          playerId: anchor.id,
-          startX: anchor.x,
-          startY: anchor.y,
-          endX: p.x,
-          endY: p.y,
-          points: [{ x: anchor.x, y: anchor.y }],
-          colour,
-          lineStyle: line,
-          ending,
-        };
-        next.routes.push(current);
-        setRouteId(current.id);
-      }
-      if (current) {
-        current.points!.push(p);
-        current.endX = p.x;
-        current.endY = p.y;
-        sceneEdit(next);
-        setSelected(`route:${current.id}`);
-      }
+      const segment = beginRouteSegment(
+        draft.scene,
+        anchor?.id ?? anchorId,
+        routeId,
+        p,
+        { colour, lineStyle: line, ending },
+        crypto.randomUUID(),
+        forceNewRoute,
+      );
+      if (!segment) return;
+      setForceNewRoute(false);
+      setRouteId(segment.routeId);
+      sceneEdit(segment.scene);
+      setSelected(`route:${segment.routeId}`);
+      drag.current = {
+        pointerId: event.pointerId,
+        type: 'route-draw',
+        id: segment.routeId,
+        index: segment.index,
+        point: p,
+        scene: segment.scene,
+        moved: true,
+      };
+      setGuides(p);
+      event.currentTarget.setPointerCapture(event.pointerId);
+      event.preventDefault();
       return;
     }
     const next = structuredClone(draft.scene),
@@ -508,9 +531,18 @@ export function PlayDesigner({
     if (!p) return;
     const dx = p.x - action.point.x,
       dy = p.y - action.point.y;
+    if (action.type === 'route-draw') {
+      setDraft((value) => ({
+        ...value,
+        scene: moveRouteVertex(action.scene, action.id, action.index!, p),
+      }));
+      setGuides(p);
+      return;
+    }
     if (!dx && !dy) return;
     if (!action.moved) remember();
     action.moved = true;
+    setGuides(p);
     const next = structuredClone(action.scene);
     if (action.type === 'player' || action.type === 'opponent') {
       const list =
@@ -519,6 +551,7 @@ export function PlayDesigner({
       if (!target) return;
       target.x = Math.min(675, Math.max(45, target.x + dx));
       target.y += dy;
+      setGuides({ x: target.x, y: target.y });
       for (const r of next.routes.filter(
         (item) => item.playerId === action.id,
       )) {
@@ -585,9 +618,20 @@ export function PlayDesigner({
     setDraft((value) => ({ ...value, scene: next }));
   };
   const pointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (
+      cameraDrag.current?.pointerId !== event.pointerId &&
+      drag.current?.pointerId !== event.pointerId
+    )
+      return;
+    if (
+      event.type === 'pointerup' &&
+      drag.current?.pointerId === event.pointerId
+    )
+      pointerMove(event);
     if (cameraDrag.current?.pointerId === event.pointerId)
       cameraDrag.current = null;
     if (drag.current?.pointerId === event.pointerId) drag.current = null;
+    setGuides(null);
     if (event.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId);
   };
@@ -830,6 +874,7 @@ export function PlayDesigner({
             onPointerDown={pointerDown}
             onPointerMove={pointerMove}
             onPointerUp={pointerUp}
+            guides={guides}
           />
           <div className="pd-main-tools">
             <Button
@@ -859,8 +904,13 @@ export function PlayDesigner({
                       if (item === 'Route') {
                         if (player) {
                           setAnchorId(player.id);
-                          setRouteId('');
+                          setRouteId(
+                            continuationRoute(draft.scene, player.id, routeId)
+                              ?.id ?? '',
+                          );
+                          setForceNewRoute(false);
                         } else if (route) {
+                          setForceNewRoute(false);
                           setRouteId(route.id);
                           setAnchorId(route.playerId ?? '');
                         } else {
@@ -912,8 +962,8 @@ export function PlayDesigner({
               <Redo2 />
             </Button>
             <span className="pd-tool-status">
-              {tool}
-              {tool === 'Route' ? ' · click to extend' : ''}
+              {tool === 'Route' && forceNewRoute ? 'New route' : tool}
+              {tool === 'Route' ? ' · drag endpoint, release to place' : ''}
             </span>
             {tool === 'Route' ? (
               <Button onClick={finish} size="sm" variant="outline">
@@ -1115,7 +1165,11 @@ export function PlayDesigner({
                   <Button
                     onClick={() => {
                       setAnchorId(player.id);
-                      setRouteId('');
+                      setRouteId(
+                        continuationRoute(draft.scene, player.id, routeId)
+                          ?.id ?? '',
+                      );
+                      setForceNewRoute(false);
                       setTool('Route');
                     }}
                     size="sm"
@@ -1125,6 +1179,7 @@ export function PlayDesigner({
                 ) : route ? (
                   <Button
                     onClick={() => {
+                      setForceNewRoute(false);
                       setRouteId(route.id);
                       setAnchorId(route.playerId ?? '');
                       setTool('Route');
@@ -1132,6 +1187,21 @@ export function PlayDesigner({
                     size="sm"
                   >
                     Extend
+                  </Button>
+                ) : null}
+                {player || route?.playerId ? (
+                  <Button
+                    aria-pressed={forceNewRoute}
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setAnchorId(player?.id ?? route!.playerId!);
+                      setRouteId('');
+                      setForceNewRoute(true);
+                      setTool('Route');
+                    }}
+                  >
+                    New route
                   </Button>
                 ) : null}
                 {route ? (
@@ -1400,8 +1470,8 @@ export function PlayDesigner({
             </section>
           ) : (
             <p className="pd-bottom-hint">
-              Select a player to draw a route. Tools adds players, coverage
-              shapes, and labels. Drag snaps to one yard.
+              Select a player, then drag to place the next route endpoint. New
+              route starts a separate branch. Movement snaps to one yard.
             </p>
           )}
         </div>

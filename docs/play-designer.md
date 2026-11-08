@@ -40,3 +40,13 @@ Authentication and account-to-athlete linking remain prerequisites for real play
 ## Verification
 
 `pnpm test` covers defensive/scout/team formation separation, custom package names, wrong-side rejection, modern route/shape/opponent persistence, uniform ball-spot shifting, duplicate play fidelity, malformed input rejection, and the earlier Install hardening checks. The browser verification additionally exercises actual selection, colours, short route creation, coverage dimensions/rotation, property-panel dragging, defensive formation selection, named opponent selection, save/reopen, player dragging, and undo/redo.
+
+## Route endpoint gestures and continuation — November 8
+
+A route segment can now be pressed and dragged before release fixes its endpoint. The preview updates only that segment's final point; attached coverage shapes follow it. Existing endpoint/vertex drags also apply the final release coordinate. One drawing gesture remains one undo entry. Pointer cancellation/lost capture ends the gesture at its last visible valid position, and another pointer cannot clear the active pointer's guide state.
+
+Selecting a player resumes its most recently drawn attached route, rather than clearing the route identity and silently creating another line. Continuing preserves the existing route's colour/style. Selecting an existing route and Extend continues that particular route. New route is the explicit action for a separate branch from the player, with a pressed state and a new-route mode indication. Each later drag/click extends the current route. All placements retain one-yard snapping.
+
+Horizontal and vertical crosshair guides span the visible field during a drag. They align with the snapped endpoint or moved player, do not intercept hits, clear on release/cancel, and are omitted from saved drawings and printouts. These are alignment aids, not extra persisted field markings or automatic player-to-player snapping.
+
+Validation: 68 tests pass, including extension/reselection, explicit branching, geometry immutability and linked coverage movement. Local browser QA dragged an extension onto an existing route, undid it in one step, redid it, reselected its player and extended the same route again, then used New route for an intentional second branch. Saving preserved the exact four points of the original route, two points of the branch and updated coverage position. The new-route action/pressed state was checked at 390px. The original local library was restored exactly after removing the disposable play/book and their creation ledgers. Mid-drag guide visibility and actual iPhone touch behavior still need the owner's physical-device confirmation; mouse/viewport checks do not establish that evidence.
