@@ -73,8 +73,29 @@ export async function planRecovery(
       file.originalName.length > 1000 ||
       !file.httpMetadata ||
       typeof file.httpMetadata !== 'object' ||
+      Array.isArray(file.httpMetadata) ||
       !file.customMetadata ||
-      typeof file.customMetadata !== 'object'
+      typeof file.customMetadata !== 'object' ||
+      Array.isArray(file.customMetadata) ||
+      Object.values(file.customMetadata).some(
+        (value) => typeof value !== 'string',
+      ) ||
+      new TextEncoder().encode(JSON.stringify(file.customMetadata)).byteLength >
+        16384 ||
+      Object.entries(file.httpMetadata).some(
+        ([name, value]) =>
+          ![
+            'contentType',
+            'contentLanguage',
+            'contentDisposition',
+            'contentEncoding',
+            'cacheControl',
+            'cacheExpiry',
+          ].includes(name) ||
+          typeof value !== 'string' ||
+          /[\r\n]/.test(value) ||
+          (name === 'cacheExpiry' && !Number.isFinite(Date.parse(value))),
+      )
     )
       throw new RecoveryError(
         'A recovery file has invalid or duplicate metadata.',

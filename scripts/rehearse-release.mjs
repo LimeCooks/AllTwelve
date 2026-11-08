@@ -520,7 +520,17 @@ async function verifySaved(label) {
     headers: ownerHeaders('a'),
   });
   assert.equal(backupResponse.status, 200);
-  const zip = unzipSync(new Uint8Array(await backupResponse.arrayBuffer()));
+  const backupBytes = new Uint8Array(await backupResponse.arrayBuffer());
+  const backupArchive = path.join(
+    runDirectory,
+    `${label.replace(/[^a-z0-9]+/gi, '-')}-team-backup.zip`,
+  );
+  await writeFile(backupArchive, backupBytes);
+  report.artifacts.push({
+    backupArchive,
+    source: 'disposable isolated rehearsal team',
+  });
+  const zip = unzipSync(backupBytes);
   assert.deepEqual(Buffer.from(zip['media/team-logo']), media);
   if (backup.retainedHistory) {
     const history = await api('/api/backups?history=1');
