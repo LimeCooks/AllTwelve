@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { restoreBackup } from '../scripts/restore-backup.mjs';
+import { prepareCloudRecovery } from '../scripts/prepare-cloud-recovery.mjs';
 import { unzipSync } from 'fflate';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
@@ -277,6 +278,11 @@ globalThis.privateTestBucket = {
   },
 };
 const backupUrl = await moduleUrl('../lib/team-backup.ts');
+const { planRecovery } = await import(
+  await moduleUrl('../lib/recovery-plan.ts', [
+    ["'@/lib/team-backup'", JSON.stringify(backupUrl)],
+  ])
+);
 const zipUrl = await moduleUrl('../lib/backup-zip.ts', [
   ["'fflate'", JSON.stringify(import.meta.resolve('fflate'))],
 ]);
@@ -1659,6 +1665,102 @@ test('complete backup restores all team tables and file bytes offline without to
       .originalName,
     'Practice.mp4',
   );
+  const cloudPrepared = await prepareCloudRecovery({ directory: multiOutput });
+  const cloudManifest = JSON.parse(
+    await readFile(cloudPrepared.manifest, 'utf8'),
+  );
+  assert.deepEqual(cloudManifest.tables, snapshot.tables);
+  assert.equal('workspace_owners' in cloudManifest.tables, false);
+  assert.equal(cloudManifest.media.length, 2);
+  for (const file of cloudManifest.media) {
+    assert.equal(
+      file.sha256,
+      createHash('sha256')
+        .update(await readFile(path.join(multiOutput, 'media', file.key)))
+        .digest('hex'),
+    );
+  }
+  const cloudSql = new DatabaseSync(':memory:');
+  try {
+    for (const name of (await readdir(new URL('../drizzle/', import.meta.url)))
+      .filter((name) => name.endsWith('.sql'))
+      .sort())
+      cloudSql.exec(
+        await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'),
+      );
+    cloudSql.exec('PRAGMA foreign_keys=ON');
+    const cloudDb = {
+      prepare(query) {
+        const statement = cloudSql.prepare(query);
+        let values = [];
+        return {
+          bind(...next) {
+            values = next;
+            return this;
+          },
+          async all() {
+            return { results: statement.all(...values) };
+          },
+          async run() {
+            return statement.all(...values);
+          },
+        };
+      },
+    };
+    const transfer = await planRecovery(
+      cloudDb,
+      cloudManifest,
+      'fresh-cloud-owner',
+    );
+    cloudSql.exec('BEGIN');
+    try {
+      for (const statement of transfer.statements) await statement.run();
+      cloudSql.exec('COMMIT');
+    } catch (error) {
+      cloudSql.exec('ROLLBACK');
+      throw error;
+    }
+    for (const [table] of backupTables)
+      assert.deepEqual(
+        cloudSql
+          .prepare('SELECT * FROM ' + table)
+          .all()
+          .map((row) => ({ ...row })),
+        snapshot.tables[table],
+      );
+    assert.deepEqual(
+      cloudSql
+        .prepare('SELECT user_id, team_id FROM workspace_owners')
+        .all()
+        .map((row) => ({ ...row })),
+      [{ user_id: 'fresh-cloud-owner', team_id: snapshot.teamId }],
+    );
+    assert.deepEqual(cloudSql.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally {
+    cloudSql.close();
+  }
+  await assert.rejects(
+    prepareCloudRecovery({ directory: multiOutput }),
+    /already exists/,
+  );
+  const changedFile = path.join(
+    multiOutput,
+    'media',
+    cloudManifest.media[0].key,
+  );
+  const originalFile = await readFile(changedFile);
+  const changedBytes = Buffer.from(originalFile);
+  changedBytes[0] ^= 1;
+  await writeFile(changedFile, changedBytes);
+  await assert.rejects(
+    prepareCloudRecovery({
+      directory: multiOutput,
+      output: path.join(multiOutput, 'must-not-create.json'),
+    }),
+    /no longer matches/,
+  );
+  await assert.rejects(access(path.join(multiOutput, 'must-not-create.json')));
+  await writeFile(changedFile, originalFile);
   const corrupted = bytes.slice(),
     location = Buffer.from(corrupted).indexOf(
       Buffer.from('real film bytes for recovery'),

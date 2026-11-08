@@ -30,6 +30,8 @@ Supply every part path for multipart backups; order does not matter. The tool ne
 
 Recovery verifies ZIP CRCs, sizes, available MD5 ETags, complete/matching parts, safe paths, schema/columns, team ownership and foreign keys. A failed attempt leaves `RESTORE_INCOMPLETE.txt`; retry into a different new directory. Never replace the live database with an offline recovery without a separate reviewed procedure.
 
+Current offline recoveries also retain SHA-256 file digests for the separate-destination recovery preparation tool. See [cloud-recovery.md](cloud-recovery.md) for its local-only preparation and validation status. A hosted recovery service has not yet been exercised or exposed.
+
 ## Verification and limits
 
 The actual handler/SQLite suite exports every domain table and uploaded bytes, restores into a new database, compares rows and metadata, and rejects corrupt/incomplete/duplicate archives, expired or replaced jobs, foreign owners and overwrite attempts. Preserved-copy cases cover 11-file batching, interruption/resume, missing sources, changed/deleted originals, and a competing preparation inserted immediately before progress commits.

@@ -119,7 +119,8 @@ export async function restoreBackup({ archives, output, ownerId }) {
   }
   let snapshot, canonical, database;
   const seenParts = new Set(),
-    seenMedia = new Set();
+    seenMedia = new Set(),
+    mediaSha256 = {};
   await mkdir(destination, { recursive: true });
   await writeFile(
     path.join(destination, 'RESTORE_INCOMPLETE.txt'),
@@ -186,6 +187,7 @@ export async function restoreBackup({ archives, output, ownerId }) {
           throw new Error('Unsafe recovery path.');
         await mkdir(path.dirname(filename), { recursive: true });
         await writeFile(filename, bytes, { flag: 'wx' });
+        mediaSha256[key] = createHash('sha256').update(bytes).digest('hex');
         seenMedia.add(key);
       }
       for (const key of expectedFiles.keys())
@@ -294,10 +296,14 @@ export async function restoreBackup({ archives, output, ownerId }) {
         {
           complete: true,
           backupId: snapshot.id,
+          backupCreatedAt: snapshot.createdAt,
           teamId: snapshot.teamId,
           mediaFiles: seenMedia.size,
           ownerId: ownerId.trim(),
           media: snapshot.media,
+          mediaSha256,
+          parts: snapshot.parts,
+          mediaBytes: snapshot.mediaBytes,
         },
         null,
         2,
