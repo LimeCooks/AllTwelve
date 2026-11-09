@@ -46,6 +46,8 @@ npm run local:update
 
 This type-checks and builds current source, captures a new fixed release snapshot, then restarts **Non-Prod only**. Prod keeps its existing build and storage while changes are tested. A failed Non-Prod restart attempts to restore its previous build.
 
+To restart just one existing build without updating it, use `npm run local:restart -- nonprod` (or `prod`). Status checks verify that the application worker answers, rather than relying only on the dashboard process. Promotion refuses a candidate that is unavailable or has not finished starting; start both sites and review Non-Prod first.
+
 After reviewing the actual Non-Prod build, deliberately promote it:
 
 ```text

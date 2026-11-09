@@ -18,6 +18,7 @@
     "local:start": "node scripts/local-pilot.mjs start",
     "local:stop": "node scripts/local-pilot.mjs stop",
     "local:status": "node scripts/local-pilot.mjs status",
+    "local:restart": "node scripts/local-pilot.mjs restart",
     "local:update": "node scripts/local-pilot.mjs update nonprod",
     "local:promote": "node scripts/local-pilot.mjs promote"
   },

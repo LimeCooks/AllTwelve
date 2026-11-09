@@ -11,7 +11,49 @@ import {
   localIdentity,
   prepareEnvironment,
   accountProxy,
+  liveLocalSettings,
+  assertPromotionReady,
 } from '../scripts/local-pilot.mjs';
+
+test('promotion refuses an unstarted candidate and status does not call an exited worker healthy', () => {
+  const source = { environment: 'nonprod', releaseId: 'new' };
+  const running = new Map([
+    [
+      'prod',
+      {
+        child: { exitCode: null },
+        proxy: { listening: true },
+        settings: { environment: 'prod', releaseId: 'stable' },
+      },
+    ],
+    [
+      'nonprod',
+      { child: { exitCode: 1 }, proxy: { listening: true }, settings: source },
+    ],
+  ]);
+  assert.deepEqual(liveLocalSettings(running), [
+    { environment: 'prod', releaseId: 'stable' },
+  ]);
+  assert.throws(
+    () =>
+      assertPromotionReady(source, {
+        environments: liveLocalSettings(running),
+      }),
+    /unavailable/,
+  );
+  assert.throws(() => assertPromotionReady(source, null), /Start/);
+  assert.throws(
+    () =>
+      assertPromotionReady(source, {
+        environments: [{ environment: 'nonprod', releaseId: 'old' }],
+      }),
+    /not running/,
+  );
+  running.get('nonprod').child.exitCode = null;
+  assert.doesNotThrow(() =>
+    assertPromotionReady(source, { environments: liveLocalSettings(running) }),
+  );
+});
 
 test('local account signatures cannot be forged or reused across environments', () => {
   const key = randomBytes(32).toString('hex');

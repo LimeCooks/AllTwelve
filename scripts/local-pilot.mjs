@@ -439,6 +439,24 @@ export async function launchLocalEnvironment(environment, root, key) {
   };
   return entry;
 }
+export function liveLocalSettings(running) {
+  return [...running.values()]
+    .filter((entry) => entry.child.exitCode === null && entry.proxy.listening)
+    .map((entry) => entry.settings);
+}
+export function assertPromotionReady(source, runtime) {
+  if (!runtime)
+    throw new Error(
+      'Start the local sites and review Non-Prod before promoting.',
+    );
+  const candidate = runtime.environments.find(
+    (entry) => entry.environment === 'nonprod',
+  );
+  if (!candidate || candidate.releaseId !== source.releaseId)
+    throw new Error(
+      'Non-Prod is unavailable or its new build is not running yet. Finish its update and review it before promoting.',
+    );
+}
 async function serve() {
   const key = await secret(localRoot),
     running = new Map();
@@ -476,7 +494,7 @@ async function serve() {
         JSON.stringify({
           product: 'ChalkTalk Local',
           pid: process.pid,
-          environments: [...running.values()].map((entry) => entry.settings),
+          environments: liveLocalSettings(running),
         }),
       );
       return;
@@ -539,7 +557,7 @@ async function serve() {
         )
           .map(
             ([id, env]) =>
-              `<article><h2>${env.label}</h2><p>${id === 'prod' ? 'Your stable place to test the product. Changes are promoted here deliberately.' : 'Try changes here before promoting a build to Local Prod.'}</p><a href="http://127.0.0.1:${env.port}/">Open ${env.label}</a> <a href="http://127.0.0.1:${env.port}/__local">Switch test account</a><small>${running.has(id) ? `Running build ${running.get(id).settings.releaseId.slice(0, 12)}` : 'Starting or unavailable; check the local logs.'}</small></article>`,
+              `<article><h2>${env.label}</h2><p>${id === 'prod' ? 'Your stable place to test the product. Changes are promoted here deliberately.' : 'Try changes here before promoting a build to Local Prod.'}</p><a href="http://127.0.0.1:${env.port}/">Open ${env.label}</a> <a href="http://127.0.0.1:${env.port}/__local">Switch test account</a><small>${liveLocalSettings(running).some((entry) => entry.environment === id) ? `Running build ${running.get(id).settings.releaseId.slice(0, 12)}` : 'Starting or unavailable; check the local logs.'}</small></article>`,
           )
           .join(
             '',
@@ -569,7 +587,25 @@ async function status() {
       signal: AbortSignal.timeout(1000),
     });
     const value = await response.json();
-    return value.product === 'ChalkTalk Local' ? value : null;
+    if (value.product !== 'ChalkTalk Local') return null;
+    const alive = await Promise.all(
+      value.environments.map(async (entry) => {
+        try {
+          const response = await fetch(
+            `http://127.0.0.1:${entry.workerPort}/api/session`,
+            { signal: AbortSignal.timeout(1500) },
+          );
+          await response.text();
+          return response.status === 401;
+        } catch {
+          return false;
+        }
+      }),
+    );
+    return {
+      ...value,
+      environments: value.environments.filter((_, index) => alive[index]),
+    };
   } catch {
     return null;
   }
@@ -635,9 +671,20 @@ async function main() {
       },
     );
     child.unref();
+    let launchError;
+    child.once('error', (error) => {
+      launchError = error;
+    });
     await log.close();
     const deadline = Date.now() + 120000;
     while (Date.now() < deadline) {
+      if (launchError || child.exitCode !== null)
+        throw (
+          launchError ??
+          new Error(
+            'Local services stopped during startup. Check .local-pilot/launcher.log.',
+          )
+        );
       const ready = await status();
       if (ready?.environments?.length === 2) {
         console.log('Ready: http://127.0.0.1:3100');
@@ -654,7 +701,10 @@ async function main() {
       await control('stop');
       const deadline = Date.now() + 15000;
       while (await status()) {
-        if (Date.now() > deadline) throw new Error('Local shutdown is still running. Check status before starting again.');
+        if (Date.now() > deadline)
+          throw new Error(
+            'Local shutdown is still running. Check status before starting again.',
+          );
         await wait(100);
       }
       console.log('Local ChalkTalk stopped.');
@@ -665,6 +715,13 @@ async function main() {
     console.log(
       JSON.stringify((await status()) ?? { running: false }, null, 2),
     );
+    return;
+  }
+  if (action === 'restart') {
+    if (!Object.hasOwn(environments, environment))
+      throw new Error('Choose restart prod or restart nonprod.');
+    if (!(await status())) throw new Error('Start the local dashboard first.');
+    await control('reload', environment);
     return;
   }
   if (action === 'update') {
@@ -687,6 +744,7 @@ async function main() {
   }
   if (action === 'promote') {
     const source = await json(path.join(localRoot, 'nonprod/environment.json'));
+    assertPromotionReady(source, await status());
     await prepareEnvironment('prod', source.releaseId);
     if (await status()) await control('reload', 'prod');
     console.log(
