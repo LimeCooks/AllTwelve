@@ -58,3 +58,13 @@ Published verification: source `4dbbe65b463f877766c4aa3318a38b1cc97c2c36` was pa
 The owner confirmed that a named gameplan objective and generated practice match across physical devices. This release adds a print workflow for those saved practices, with independent Printouts selection, fresh exact-revision checks, bounded previews and client-only PDF generation. It changes no database schema or saved-record protocol. Candidate checks must use the named-gameplan archive as the compatible prior baseline, not an earlier single-plan build. Source/backup persistence and team isolation are still required alongside browser/PDF output checks; native file saving and physical printing remain separate owner gates.
 
 Published practice printout verification: source `edca115e76697176631065eb550c5d7544959f30`, archive `outputs/private-pilot-practice-printouts.tar.gz`, and compatible rollback `outputs/private-pilot-named-gameplans.tar.gz` passed `outputs/release-rehearsal-BYJQVk/report.json`. Deployment `appgdep_6af13569d8ac8191a3053c0d62335152` succeeded on the existing private pilot; saved version `appgprj_6aee2b7e04ac81919078454cbaae1b12~appgver_0812db6c640881918891dbad26288c8c`. Read-only hosted checks opened the existing owner's team and the new practice-script selector without fixture writes. The owner then confirmed the practice PDF opens and saves on a physical phone/tablet. Physical printer output remains unverified; PDF preparation, rendering and device opening/saving have separate recorded evidence.
+
+## Player learning release — 9 November 2026
+
+- App commit: ee58875508a25b99fb0f734d2036c128cb3d3097.
+- Private deployment: appgdep_6af148a870f881919dbeb8fbc210903e (succeeded).
+- Saved version: appgprj_6aee2b7e04ac81919078454cbaae1b12~appgver_5a8e616eade08191a6ef4692f6ae34db.
+- Archive: outputs/private-pilot-player-learning.tar.gz.
+- Compatible rollback: outputs/private-pilot-staff-access.tar.gz. Owner workflows remain available during rollback; the earlier build lacks player learning UI/API. Do not claim a rollback leaves newly added player functionality available.
+- Evidence: 113 tests, type checking, local production-browser recipient/coach flow, and full candidate/rollback/forward report outputs/release-rehearsal-NiZPdI/report.json. Player acknowledgements survive transitions and appear in coach progress. Access-role isolation and no draft delivery are verified separately.
+- Live owner verification: existing team and access controls load. Audience unchanged, no real invitations or external visitors created. Real staff approval and physical second-account checks remain pending. Quizzes remain WIP.

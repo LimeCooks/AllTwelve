@@ -664,6 +664,7 @@ async function verifyStaffAccess(label, create = false) {
 
 async function verifyPlayerAccess(label, create = false) {
   if (create) {
+    await api('/api/install','a',{kind:'publish',packageId:fixture.install},'PATCH');
     const id=crypto.randomUUID();
     await api('/api/team-access','a',{id,email:'local-release-player@example.test',role:'player',athleteId:fixture.athlete},'POST',201);
     const pending=(await api('/api/team-invitations','player')).invitations.find(row=>row.id===id);
