@@ -1,0 +1,76 @@
+# Local Prod and Non-Prod
+
+Use these two local instances while Cloudflare, a domain and normal email sign-in are arranged. The old hosted pilot is no longer the working environment. It has not been deleted or reset.
+
+| Site | Address | Purpose |
+| --- | --- | --- |
+| Dashboard | http://127.0.0.1:3100/ | Open either site or switch its local test account |
+| Local Prod | http://127.0.0.1:3101/ | Stable build for the owner's testing |
+| Local Non-Prod | http://127.0.0.1:3102/ | Test changes before deliberate promotion |
+
+Both start on **Create your team**, with no football records copied from the prototype or hosted pilot. Choose **Use Owner** on the account screen, then create the team you want in each instance. Data entered in one will not appear in the other.
+
+On a fresh checkout with dependencies installed, prepare the initial build once with `npm run build`, then `npm run local:setup`. Setup preserves any already-prepared environment rather than replacing its data or build.
+
+## Starting and stopping
+
+Double-click **Start Local ChalkTalk.cmd** in the project folder. It starts the two background services and opens the dashboard. **Stop Local ChalkTalk.cmd** stops them without removing saved records or files. Restarting the computer stops the services; use Start again afterward. Keep this project folder and `.local-pilot` together.
+
+Equivalent commands:
+
+```text
+npm run local:start
+npm run local:stop
+npm run local:status
+```
+
+They are intentionally accessible only on this computer. A phone, tablet or office laptop cannot reach `127.0.0.1` on this machine. Local-network or later Cloudflare access needs separate setup; these services are not exposed to the internet.
+
+## Local account testing
+
+The account chooser at `/__local` simulates authenticated identities for local testing. It does not create internet accounts, send email or require ChatGPT.
+
+- Owner: `owner@chalktalk.local`
+- Staff coach: `staff@chalktalk.local`
+- Player: `player@chalktalk.local`
+
+Each environment has separate identities and signed browser cookies. Choosing an account does not grant it a team role. Create the team as Owner first. In Settings → Staff & permissions, invite the staff email, or invite the player email with an explicit roster profile. Switch to that local account, review the invitation and join. Player learning appears after the owner publishes an install assigned to that roster profile. Sign out or use the dashboard's Switch test account link to return to Owner.
+
+These selectors are local test tooling only; they are not a replacement for managed authentication on an internet-facing deployment.
+
+## Changes and promotion
+
+```text
+npm run local:update
+```
+
+This type-checks and builds current source, captures a new fixed release snapshot, then restarts **Non-Prod only**. Prod keeps its existing build and storage while changes are tested. A failed Non-Prod restart attempts to restore its previous build.
+
+After reviewing the actual Non-Prod build, deliberately promote it:
+
+```text
+npm run local:promote
+```
+
+Promotion changes Prod's application build, **not its team records or uploaded files**. It applies that release's local schema migrations. Use the in-app manual backup before significant updates. It never clones Non-Prod's database into Prod.
+
+## Data separation
+
+Local configuration, snapshots, cookies, logs and persistence live under ignored `.local-pilot/`:
+
+- `prod/storage/`: Prod's D1 database and R2 uploads.
+- `nonprod/storage/`: Non-Prod's independent D1 database and R2 uploads.
+- `releases/<content hash>/`: captured application and schema snapshots. Normal source rebuilds cannot change the build a running instance uses.
+- `local-control.key`: local account/control signing material; do not publish this directory.
+
+The default prototype `.wrangler` directory, hosted bindings and recovery lab are not used. Local commands always pass `--local` and explicit persistence paths. `.local-pilot` is excluded from Git. Do not remove it to update the app; that would remove local data.
+
+## Verification
+
+The dual-instance integration checker uses fresh disposable directories under `outputs/local-pilot-check-*`, never either user-facing store:
+
+```text
+node scripts/check-local-pilot.mjs
+```
+
+It verifies independent blank onboarding, roster and file isolation, rejected foreign-team hints, real local staff invitation/acceptance, bound-player published material and coach-visible acknowledgements. It then restarts both disposable instances and verifies the saved records and bytes remain independent. The Windows host may require loopback permission for these tests. Current setup evidence: `outputs/local-pilot-check-y2FJU5/report.json` and 117 passing tests.

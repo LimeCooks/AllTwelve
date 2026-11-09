@@ -13,7 +13,13 @@
     "db:generate": "drizzle-kit generate",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
-    "format": "oxfmt"
+    "format": "oxfmt",
+    "local:setup": "node scripts/local-pilot.mjs setup",
+    "local:start": "node scripts/local-pilot.mjs start",
+    "local:stop": "node scripts/local-pilot.mjs stop",
+    "local:status": "node scripts/local-pilot.mjs status",
+    "local:update": "node scripts/local-pilot.mjs update nonprod",
+    "local:promote": "node scripts/local-pilot.mjs promote"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",

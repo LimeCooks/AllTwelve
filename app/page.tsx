@@ -9497,12 +9497,12 @@ function SettingsView({
               <CloudOff />
               <div>
                 <strong>
-                  {prototype ? 'Local prototype' : 'Private cloud workspace'}
+                  {prototype ? 'Local prototype' : 'Saved team workspace'}
                 </strong>
                 <p>
                   {prototype
                     ? 'This development workspace is stored on this computer, separate from your private pilot.'
-                    : 'Your team’s records and uploaded files are stored securely online and available when you sign in on another device.'}
+                    : 'Your team’s records and uploaded files stay in this workspace. Signing out does not delete them.'}
                 </p>
               </div>
               <Button onClick={() => onNavigate('Home')} variant="outline">
