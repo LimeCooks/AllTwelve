@@ -9,6 +9,7 @@ import { getCoachingDatabase as getDatabase, type TeamDatabase } from '@/db/clie
 import { env } from 'cloudflare:workers';
 import { isPrototype } from '@/lib/request-identity';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
+import { isImageSlot } from '@/lib/media-keys';
 import { safeMediaKey } from '@/lib/team-backup';
 
 class FilmInputError extends Error {}
@@ -202,7 +203,7 @@ export async function POST(request: Request) {
     if (action === 'register') {
       const storageKey = text(body.storageKey);
       const title = text(body.title, 'Uploaded game film');
-      if (!safeMediaKey(storageKey))
+      if (!safeMediaKey(storageKey) || isImageSlot(storageKey))
         throw new FilmInputError('A valid stored video is required.');
       const key = isPrototype()
         ? storageKey

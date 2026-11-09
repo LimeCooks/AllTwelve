@@ -692,6 +692,34 @@ async function verifyPlayerAccess(label, create = false) {
   report.stages.push({label:`${label}: player assigned material, privacy and coach-visible acknowledgement verified`,verifiedAt:new Date().toISOString()});
 }
 
+async function verifyMediaWrites(label) {
+  const upload = async (key, bytes) => fetch(`${origin}/api/media?key=${key}`, {
+    method: 'POST', headers: { ...ownerHeaders('a'), origin, 'content-type': 'video/mp4', 'x-chalktalk-upload-size': String(bytes.length) }, body: bytes,
+  });
+  const bytes = Buffer.from('immutable saved video bytes');
+  const key = 'film-protected-write-' + crypto.randomUUID();
+  assert.equal((await upload(key, bytes)).status, 200);
+  let registered = await api('/api/film', 'a', {action:'register',storageKey:key,title:'Protected video',durationSeconds:10}, 'POST',201);
+  assert.equal((await upload(key, Buffer.from('replacement'))).status,409);
+  const removed = await fetch(`${origin}/api/media?key=${key}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin}});
+  assert.equal(removed.status,409);
+  const read = await fetch(`${origin}/api/media?key=${key}`,{headers:{...ownerHeaders('a'),range:'bytes=1-5'}});
+  assert.equal(read.status,206);
+  assert.deepEqual(Buffer.from(await read.arrayBuffer()),bytes.subarray(1,6));
+  const erase = await fetch(`${origin}/api/film?assetId=${registered.asset.id}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin,'x-chalktalk-film-version':registered.asset.version}});
+  assert.equal(erase.status,200);
+  const raceKey='film-concurrent-write-'+crypto.randomUUID();
+  const candidates=[Buffer.alloc(4096,17),Buffer.alloc(4096,29)];
+  const replies=await Promise.all(candidates.map(value=>upload(raceKey,value)));
+  assert.deepEqual(replies.map(response=>response.status).sort(),[200,409]);
+  const winner=replies.findIndex(response=>response.status===200);
+  const actual=await fetch(`${origin}/api/media?key=${raceKey}`,{headers:ownerHeaders('a')});
+  assert.deepEqual(Buffer.from(await actual.arrayBuffer()),candidates[winner]);
+  registered=await api('/api/film','a',{action:'register',storageKey:raceKey,title:'Race winner',durationSeconds:10},'POST',201);
+  assert.equal((await fetch(`${origin}/api/film?assetId=${registered.asset.id}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin,'x-chalktalk-film-version':registered.asset.version}})).status,200);
+  report.stages.push({label:`${label}: immutable video bytes, concurrent upload winner and versioned film removal verified`,verifiedAt:new Date().toISOString()});
+}
+
 try {
   await start(snapshots[0], 'candidate');
   await api('/api/session', null, undefined, 'GET', 401);
@@ -1384,6 +1412,7 @@ try {
     400,
   );
   await verifySaved('candidate');
+  await verifyMediaWrites('candidate');
   await verifyStaffAccess('candidate', true);
   await verifyPlayerAccess('candidate', true);
   await stop();
@@ -1395,6 +1424,7 @@ try {
   await stop();
   await start(snapshots[0], 'forward again');
   await verifySaved('forward again');
+  await verifyMediaWrites('forward again');
   await verifyStaffAccess('forward again');
   await verifyPlayerAccess('forward again');
   const access = await api('/api/team-access');

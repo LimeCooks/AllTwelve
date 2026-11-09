@@ -101,6 +101,7 @@ const practiceGenerationUrl = await moduleUrl('../lib/practice-generation.ts', [
   ["'@/lib/gameplan-state'", JSON.stringify(gameplanStateUrl)],
 ]);
 const replacements = [
+  ["'@/lib/media-keys'", JSON.stringify(await moduleUrl('../lib/media-keys.ts'))],
   ["'@/lib/team-permissions'", JSON.stringify(permissionsUrl)],
   ["'@/lib/team-invitations'", JSON.stringify(invitationsUrl)],
   ["'@/lib/practice-generation'", JSON.stringify(practiceGenerationUrl)],
@@ -1308,8 +1309,8 @@ test('raw file uploads stream above 1 MB, enforce declared sizes, and preserve p
   };
   const a = await getDatabase(),
     bytes = new Uint8Array(1_100_000).fill(19);
-  const upload = (body, declared = body.byteLength, type = 'video/mp4') =>
-    new Request('https://pilot.test/api/media?key=raw-upload-test', {
+  const upload = (body, declared = body.byteLength, type = 'video/mp4', key = 'raw-upload-test') =>
+    new Request('https://pilot.test/api/media?key=' + key, {
       method: 'POST',
       headers: {
         'content-type': type,
@@ -1328,8 +1329,9 @@ test('raw file uploads stream above 1 MB, enforce declared sizes, and preserve p
       .originalName,
     'Practice vidéo.mp4',
   );
-  assert.equal((await media.POST(upload(new Uint8Array(10), 5))).status, 400);
-  assert.equal((await media.POST(upload(new Uint8Array(10), 20))).status, 400);
+  assert.equal((await media.POST(upload(new Uint8Array(10), 5, 'video/mp4', 'raw-invalid-small'))).status, 400);
+  assert.equal((await media.POST(upload(new Uint8Array(10), 20, 'video/mp4', 'raw-invalid-large'))).status, 400);
+  assert.equal((await media.POST(upload(new Uint8Array(10)))).status, 409);
   assert.equal(
     objects.get(`teams/${a.teamId}/raw-upload-test`).bytes.byteLength,
     bytes.byteLength,
@@ -4488,5 +4490,46 @@ test('linked player receives only own published installs and acknowledgements st
   } finally {
     globalThis.privateTestIdentity=oldIdentity;
     globalThis.privateTestWorkspaceId=oldTeam;
+  }
+});
+
+test('raw media cannot replace or delete saved film and simultaneous uploads preserve the first complete bytes', async () => {
+  const previous=globalThis.privateTestIdentity;
+  globalThis.privateTestIdentity={id:'owner-a',name:'Coach A',email:'a@example.test'};
+  const db=await getDatabase();
+  const key='film-immutable-'+crypto.randomUUID(), raceKey='film-race-'+crypto.randomUUID();
+  const url=(key)=>'https://pilot.test/api/media?key='+key;
+  const upload=(key,bytes,type='video/mp4')=>new Request(url(key),{method:'POST',headers:{'content-type':type,'x-chalktalk-upload-size':String(bytes.byteLength)},body:bytes});
+  const first=new Uint8Array([1,2,3,4,5]);
+  const bucket=globalThis.privateTestBucket, originalPut=bucket.put;
+  try {
+    assert.equal((await media.POST(upload(key,first))).status,200);
+    const registered=await films.POST(request({action:'register',storageKey:key,title:'Immutable film',durationSeconds:40}));
+    assert.equal(registered.status,201);
+    let saved=await registered.json();
+    const clip=await films.POST(request({action:'upsertClip',assetId:saved.asset.id,title:'Saved snap',startSeconds:1,endSeconds:3}));
+    assert.equal(clip.status,201);
+    saved=await clip.json();
+    assert.equal((await media.POST(upload(key,new Uint8Array([9,9,9])))).status,409);
+    assert.equal((await media.DELETE(new Request(url(key),{method:'DELETE'}))).status,409);
+    assert.deepEqual(new Uint8Array(await (await media.GET(new Request(url(key)))).arrayBuffer()),first);
+    assert.equal((await (await films.GET(new Request('https://pilot.test/api/film?assetId='+saved.asset.id))).json()).clips.length,1);
+    assert.equal((await films.DELETE(new Request('https://pilot.test/api/film?assetId='+saved.asset.id,{method:'DELETE',headers:{'x-chalktalk-film-version':saved.asset.version}}))).status,200);
+    assert.equal((await media.GET(new Request(url(key)))).status,404);
+    let injected=false;
+    bucket.put=async function(target,body,options) {
+      if(target===`teams/${db.teamId}/${raceKey}`&&!injected){injected=true;await originalPut.call(this,target,first,{httpMetadata:{contentType:'video/mp4'}})}
+      return originalPut.call(this,target,body,options);
+    };
+    assert.equal((await media.POST(upload(raceKey,new Uint8Array([8,8])))).status,409);
+    assert.equal(injected,true);
+    assert.deepEqual(new Uint8Array(await (await media.GET(new Request(url(raceKey)))).arrayBuffer()),first);
+    assert.equal((await media.DELETE(new Request(url(raceKey),{method:'DELETE'}))).status,409,'unregistered video also cannot race registration through raw deletion');
+    assert.equal((await media.POST(upload('team-logo',first))).status,415);
+    assert.equal((await films.POST(request({action:'register',storageKey:'team-logo',title:'Not a film slot'}))).status,400);
+  } finally {
+    bucket.put=originalPut;
+    await bucket.delete(`teams/${db.teamId}/${raceKey}`);
+    globalThis.privateTestIdentity=previous;
   }
 });

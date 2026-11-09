@@ -2,17 +2,41 @@ import { env } from 'cloudflare:workers';
 import { getWorkspaceAccess } from '@/db/client';
 import { isPrototype } from '@/lib/request-identity';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
+import { isImageSlot } from '@/lib/media-keys';
+
+async function assertUnregistered(key: string, request: Request) {
+  const hint =
+    new URL(request.url).searchParams.get('workspace')?.trim() || undefined;
+  const { database } = await getWorkspaceAccess('coaching.write', hint);
+  const film = await database
+    .prepare(
+      'SELECT id FROM film_assets WHERE team_id=? AND storage_key=? LIMIT 1',
+    )
+    .bind(database.teamId, key)
+    .first();
+  if (film)
+    throw new WorkspaceAccessError(
+      'This file belongs to saved film. Use Film Room to manage or delete it.',
+      409,
+    );
+}
 
 async function storageKey(key: string, request: Request) {
   const hint =
     new URL(request.url).searchParams.get('workspace')?.trim() || undefined;
-  const { database, grant, identity } = await getWorkspaceAccess('coaching.read', hint);
+  const { database, grant, identity } = await getWorkspaceAccess(
+    'coaching.read',
+    hint,
+  );
   if (
     grant.role !== 'owner' &&
     (['coach-profile', 'player-profile'].includes(key) ||
       (key.startsWith('member-') && key !== `member-${identity.id}-photo`))
   )
-    throw new WorkspaceAccessError('This account image is private to its owner.', 403);
+    throw new WorkspaceAccessError(
+      'This account image is private to its owner.',
+      403,
+    );
   if (
     !['GET', 'HEAD'].includes(request.method) &&
     grant.role !== 'owner' &&
@@ -179,25 +203,47 @@ async function uploadMedia(request: Request) {
       { error: 'Files must be smaller than 250 MB.' },
       { status: 413 },
     );
+  const replaceable = isImageSlot(key);
+  if (replaceable && !allowedImageTypes.has(contentType))
+    throw new WorkspaceAccessError(
+      'Choose an image for this profile or team image slot.',
+      415,
+    );
+  await assertUnregistered(key, request);
+  if (!replaceable && (await mediaBucket().head(storedKey)))
+    throw new WorkspaceAccessError(
+      'An uploaded file already uses this key. Upload the new film as a separate file.',
+      409,
+    );
   // Raw file requests avoid the framework's 1 MB progressive form-action
   // parser. FixedLengthStream validates size while keeping the body streamed.
   const fixed = new FixedLengthStream(size);
   const piping = stream.pipeTo(fixed.writable);
+  // Observe streaming errors immediately, including a failed conditional put.
+  void piping.catch(() => {});
   try {
-    await Promise.all([
-      piping,
-      mediaBucket().put(storedKey, fixed.readable, {
-        httpMetadata: {
-          contentType,
-          contentDisposition: `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
-        },
-        customMetadata: {
-          originalName: name,
-          uploadedAt: new Date().toISOString(),
-        },
-      }),
-    ]);
-  } catch {
+    const stored = await mediaBucket().put(storedKey, fixed.readable, {
+      ...(!replaceable ? { onlyIf: { etagDoesNotMatch: '*' } } : {}),
+      httpMetadata: {
+        contentType,
+        contentDisposition: `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
+      },
+      customMetadata: {
+        originalName: name,
+        uploadedAt: new Date().toISOString(),
+      },
+    });
+    if (!stored) {
+      await fixed.readable.cancel().catch(() => {});
+      throw new WorkspaceAccessError(
+        'This file was uploaded on another request. Upload new film as a separate file.',
+        409,
+      );
+    }
+    await piping;
+  } catch (error) {
+    void fixed.readable.cancel().catch(() => {});
+    if (error instanceof WorkspaceAccessError) throw error;
     throw new WorkspaceAccessError(
       'The upload did not finish. Please retry.',
       400,
@@ -218,7 +264,14 @@ async function deleteMedia(request: Request) {
       { error: 'A valid media key is required.' },
       { status: 400 },
     );
-  await mediaBucket().delete(await storageKey(key, request));
+  const storedKey = await storageKey(key, request);
+  await assertUnregistered(key, request);
+  if (!isImageSlot(key))
+    throw new WorkspaceAccessError(
+      'Delete uploaded video through Film Room so its clips and reviews stay consistent.',
+      409,
+    );
+  await mediaBucket().delete(storedKey);
   return Response.json({ deleted: true });
 }
 
