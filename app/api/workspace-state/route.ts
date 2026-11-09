@@ -69,6 +69,9 @@ export async function PUT(request: NextRequest) {
     if (
       payload.key === 'private-conversations-v3' ||
       payload.key === 'depth-layouts-v3' ||
+      payload.key === 'gameplan-active-v3' ||
+      payload.key === 'gameplan-week-5-v2' ||
+      payload.key?.startsWith('gameplan-record-v1:') ||
       payload.key?.startsWith('pb-create-')
     )
       return NextResponse.json(

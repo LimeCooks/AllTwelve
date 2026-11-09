@@ -282,6 +282,7 @@ const media = Buffer.from(
 );
 let fixture;
 let designerFixture;
+let planningFixture;
 async function verifySaved(label) {
   const ownAthlete = (await api('/api/athletes')).athletes.find(
     (athlete) => athlete.id === fixture.athlete,
@@ -451,6 +452,24 @@ async function verifySaved(label) {
     ],
   ]);
   assert.equal(savedPractice.durationMinutes, 13);
+  const sourcePlans = (await api('/api/gameplans')).plans;
+  const source = sourcePlans.find(
+    (plan) => plan.id === planningFixture.source.id,
+  );
+  assert.deepEqual(source, planningFixture.source);
+  assert.equal(
+    sourcePlans.find((plan) => plan.id === planningFixture.second.id).title,
+    'Monthly fundamentals',
+  );
+  assert.deepEqual((await api('/api/gameplans', 'b')).plans, []);
+  await api(`/api/gameplans?id=${source.id}`, 'b', undefined, 'GET', 404);
+  const generated = (await api('/api/practice-plans')).plans.find(
+    (plan) => plan.id === planningFixture.practice.id,
+  );
+  assert.deepEqual(generated, planningFixture.practice);
+  assert.equal(generated.blocks[0][2], 'Manual adjustment');
+  assert.equal(generated.gameplanSource.title, 'Opponent preparation');
+  assert.notEqual(generated.gameplanSource.version, source.version);
   assert.equal(
     (await api('/api/calendar-events')).events[0].title,
     'Corrected rehearsal practice',
@@ -591,6 +610,20 @@ async function verifySaved(label) {
       (formation) => formation.id === designerFixture.scoutFormation,
     ),
   );
+  assert.deepEqual(
+    JSON.parse(
+      manifest.tables.workspace_state.find(
+        (row) => row.state_key === `gameplan-record-v1:${source.id}`,
+      ).value_json,
+    ).state,
+    source.state,
+  );
+  const backedPractice = JSON.parse(
+    manifest.tables.practice_plans.find((row) => row.id === generated.id)
+      .plan_json,
+  );
+  assert.deepEqual(backedPractice.gameplanSource, generated.gameplanSource);
+  assert.deepEqual(backedPractice.blocks, generated.blocks);
   assert.equal(
     (await fetch(`${origin}${backupPath}`, { headers: ownerHeaders('b') }))
       .status,
@@ -635,6 +668,7 @@ try {
     assert.equal((await api('/api/film', owner)).assets.length, 0);
     assert.equal((await api('/api/calendar-events', owner)).events.length, 0);
     assert.equal((await api('/api/practice-plans', owner)).plans.length, 0);
+    assert.deepEqual((await api('/api/gameplans', owner)).plans, []);
   }
   report.stages.push({
     label:
@@ -985,6 +1019,125 @@ try {
   };
   await api('/api/practice-plans', 'a', practiceRevision, 'PUT');
   await api('/api/practice-plans', 'a', practiceRevision, 'PUT', 409);
+  const sourceInput = {
+    id: crypto.randomUUID(),
+    title: 'Opponent preparation',
+    opponent: 'NKEC',
+    date: '',
+    archived: false,
+    state: {
+      filmSelection: 'all',
+      unit: 'Defence',
+      included: [],
+      objectives: [
+        {
+          title: 'Leverage',
+          detail: 'Keep outside arm free',
+          target: 'Every rep',
+        },
+      ],
+      callBuckets: [{ name: 'Base calls', plays: [play.createdId] }],
+    },
+  };
+  let source = (await api('/api/gameplans', 'a', sourceInput, 'POST', 201))
+    .plan;
+  const second = (
+    await api(
+      '/api/gameplans',
+      'a',
+      {
+        ...sourceInput,
+        id: crypto.randomUUID(),
+        title: 'Monthly fundamentals',
+        opponent: '',
+        state: { ...sourceInput.state, objectives: [], callBuckets: [] },
+      },
+      'POST',
+      201,
+    )
+  ).plan;
+  const generation = {
+    id: crypto.randomUUID(),
+    title: 'Source-linked practice',
+    practiceDate: '2026-11-08',
+    generated: true,
+    blocks: [],
+    generateFrom: { id: source.id, version: source.version },
+  };
+  const generatedResponse = await api(
+    '/api/practice-plans',
+    'a',
+    generation,
+    'POST',
+    201,
+  );
+  let generated = generatedResponse.plans.find(
+    (plan) => plan.id === generation.id,
+  );
+  assert.equal(generated.blocks.length, 2);
+  assert.equal(generated.blocks[1][3], 'Rehearsal defence');
+  generated = (
+    await api(
+      '/api/practice-plans',
+      'a',
+      {
+        ...generated,
+        generated: false,
+        blocks: [
+          [
+            'TBD',
+            '12 min',
+            'Manual adjustment',
+            'Preserve this work',
+            'defence',
+          ],
+        ],
+      },
+      'PUT',
+    )
+  ).plans.find((plan) => plan.id === generation.id);
+  const retry = await api('/api/practice-plans', 'a', generation, 'POST');
+  assert.deepEqual(
+    retry.plans.find((plan) => plan.id === generation.id),
+    generated,
+  );
+  source = (
+    await api(
+      '/api/gameplans',
+      'a',
+      { ...source, title: 'Revised opponent preparation', archived: true },
+      'PUT',
+    )
+  ).plan;
+  await api(
+    '/api/practice-plans',
+    'a',
+    { ...generation, version: generated.version },
+    'PUT',
+    409,
+  );
+  await api(
+    '/api/practice-plans',
+    'a',
+    {
+      ...generation,
+      id: crypto.randomUUID(),
+      generateFrom: { id: source.id, version: source.version },
+    },
+    'POST',
+    409,
+  );
+  source = (
+    await api('/api/gameplans', 'a', { ...source, archived: false }, 'PUT')
+  ).plan;
+  await api(
+    '/api/workspace-state',
+    'a',
+    { key: `gameplan-record-v1:${source.id}`, value: {} },
+    'PUT',
+    403,
+  );
+  planningFixture = { source, second, practice: generated };
   const savedEvent = await api(
     '/api/calendar-events',
     'a',

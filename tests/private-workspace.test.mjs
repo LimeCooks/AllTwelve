@@ -77,7 +77,22 @@ const dbUrl = await moduleUrl('../db/client.ts', [
   ["'@/lib/request-identity'", JSON.stringify(requestUrl)],
   ["'@/lib/workspace-identity'", JSON.stringify(identityUrl)],
 ]);
+const gameplanStateUrl = await moduleUrl('../lib/gameplan-state.ts');
+const namedGameplansUrl = await moduleUrl('../lib/named-gameplans.ts', [
+  ["'@/lib/gameplan-state'", JSON.stringify(gameplanStateUrl)],
+]);
+const gameplanRecordsUrl = await moduleUrl('../lib/gameplan-records.ts', [
+  ["'@/lib/workspace-identity'", JSON.stringify(identityUrl)],
+  ["'@/lib/gameplan-state'", JSON.stringify(gameplanStateUrl)],
+  ["'@/lib/named-gameplans'", JSON.stringify(namedGameplansUrl)],
+]);
+const practiceGenerationUrl = await moduleUrl('../lib/practice-generation.ts', [
+  ["'@/lib/gameplan-state'", JSON.stringify(gameplanStateUrl)],
+]);
 const replacements = [
+  ["'@/lib/practice-generation'", JSON.stringify(practiceGenerationUrl)],
+  ["'@/lib/gameplan-records'", JSON.stringify(gameplanRecordsUrl)],
+  ["'@/lib/named-gameplans'", JSON.stringify(namedGameplansUrl)],
   [
     "'@/lib/athlete-removal'",
     JSON.stringify(
@@ -321,6 +336,9 @@ const media = await import(
     ],
     ...replacements,
   ])
+);
+const gameplansApi = await import(
+  await moduleUrl('../app/api/gameplans/route.ts', replacements)
 );
 const request = (body) =>
   new Request('https://pilot.test/api/onboarding', {
@@ -716,7 +734,7 @@ test('practice saves return the exact plan, reject invalid updates, and isolate 
     title: 'Same name',
     practiceDate: '2026-11-06',
     blocks: [['4:00', '10 min', 'Contain', 'Leverage', 'defence']],
-    generated: true,
+    generated: false,
   };
   const first = await practicePlans.POST(request(body));
   assert.equal(first.status, 201);
@@ -3725,4 +3743,523 @@ test('a late roster removal cannot leave a dangling depth assignment', async () 
     (await (await depthCharts.GET()).json()).layouts,
     before.layouts,
   );
+});
+
+test('named gameplans remain independent, versioned, retry-safe and owned across create, archive and restore', async () => {
+  const owner = {
+    id: 'named-plans-owner',
+    name: 'Planner',
+    email: 'planner@example.test',
+  };
+  globalThis.privateTestIdentity = owner;
+  assert.equal(
+    (
+      await onboarding.POST(
+        request({ name: 'Named plan fixture', season: '2026' }),
+      )
+    ).status,
+    201,
+  );
+  assert.deepEqual(await (await gameplansApi.GET()).json(), { plans: [] });
+  const blank = {
+    filmSelection: 'all',
+    unit: 'Defence',
+    included: [],
+    objectives: [],
+    callBuckets: [],
+  };
+  const first = {
+    id: crypto.randomUUID(),
+    title: 'NKEC preparation',
+    opponent: 'NKEC',
+    date: '2026-11-12',
+    archived: false,
+    state: blank,
+  };
+  const second = {
+    ...first,
+    id: crypto.randomUUID(),
+    title: 'Monthly fundamentals',
+    opponent: '',
+    date: '',
+  };
+  const save = async (body, update = false) =>
+    gameplansApi[update ? 'PUT' : 'POST'](request(body));
+  let made = await save(first);
+  assert.equal(made.status, 201);
+  let a = (await made.json()).plan;
+  const b = (await (await save(second)).json()).plan;
+  const retried = await save(first);
+  assert.equal(retried.status, 201);
+  assert.equal((await retried.json()).plan.version, a.version);
+  assert.equal(
+    (await save({ ...first, title: 'Must not overwrite' })).status,
+    409,
+  );
+  assert.equal(
+    (await save({ ...first, title: 'No revision' }, true)).status,
+    400,
+  );
+  const revised = await save(
+    {
+      ...first,
+      version: a.version,
+      state: {
+        ...blank,
+        objectives: [
+          { title: 'Contain', detail: 'Keep leverage', target: 'Every rep' },
+        ],
+      },
+    },
+    true,
+  );
+  assert.equal(revised.status, 200);
+  const stale = a;
+  a = (await revised.json()).plan;
+  assert.equal(
+    (
+      await save(
+        { ...first, version: stale.version, title: 'Stale overwrite' },
+        true,
+      )
+    ).status,
+    409,
+  );
+  assert.equal(
+    (
+      await (
+        await gameplansApi.GET(
+          new Request('https://pilot.test/api/gameplans?id=' + b.id),
+        )
+      ).json()
+    ).plan.version,
+    b.version,
+  );
+  const archived = await save({ ...a, archived: true }, true);
+  assert.equal(archived.status, 200);
+  a = (await archived.json()).plan;
+  assert.equal(
+    (await save({ ...a, title: 'Edit archived' }, true)).status,
+    409,
+  );
+  const restored = await save({ ...a, archived: false }, true);
+  assert.equal(restored.status, 200);
+  a = (await restored.json()).plan;
+  assert.equal(a.state.objectives[0].title, 'Contain');
+  assert.equal(
+    (
+      await save(
+        {
+          ...a,
+          state: {
+            ...a.state,
+            callBuckets: [
+              { name: 'Situation', plays: ['foreign-or-missing-play'] },
+            ],
+          },
+        },
+        true,
+      )
+    ).status,
+    400,
+  );
+  globalThis.privateTestIdentity = {
+    id: 'owner-b',
+    name: 'Coach B',
+    email: 'b@example.test',
+  };
+  assert.equal(
+    (
+      await gameplansApi.GET(
+        new Request('https://pilot.test/api/gameplans?id=' + a.id),
+      )
+    ).status,
+    404,
+  );
+  assert.equal(
+    (await save({ ...a, title: 'Foreign update' }, true)).status,
+    404,
+  );
+  globalThis.privateTestIdentity = null;
+  assert.equal((await gameplansApi.GET()).status, 401);
+  globalThis.privateTestIdentity = owner;
+  const own = (await (await gameplansApi.GET()).json()).plans;
+  assert.equal(own.length, 2);
+  assert.equal(own.find((plan) => plan.id === a.id).title, first.title);
+});
+
+test('previous gameplans materialize once without changing legacy data, and late writes cannot bypass revision guards', async () => {
+  const owner = {
+    id: 'previous-plans-owner',
+    name: 'Planner',
+    email: 'previous-planner@example.test',
+  };
+  globalThis.privateTestIdentity = owner;
+  assert.equal(
+    (
+      await onboarding.POST(
+        request({ name: 'Previous plan fixture', season: '2026' }),
+      )
+    ).status,
+    201,
+  );
+  const db = await getDatabase();
+  const initial = {
+    unit: 'Defence',
+    included: [],
+    objectives: [
+      {
+        title: 'Original teaching',
+        detail: 'Keep the prior content',
+        target: '',
+      },
+    ],
+    callBuckets: [],
+  };
+  let raw = JSON.stringify(initial);
+  sqlite
+    .prepare(
+      'INSERT INTO workspace_state(id,team_id,state_key,value_json,updated_at) VALUES(?,?,?,?,?)',
+    )
+    .run(
+      'previous-fixture',
+      db.teamId,
+      'gameplan-active-v3',
+      raw,
+      new Date().toISOString(),
+    );
+  sqlite
+    .prepare(
+      'INSERT INTO workspace_state(id,team_id,state_key,value_json,updated_at) VALUES(?,?,?,?,?)',
+    )
+    .run(
+      'obsolete-previous-fixture',
+      db.teamId,
+      'gameplan-week-5-v2',
+      '{unreadable-obsolete-fallback',
+      new Date().toISOString(),
+    );
+  let previous = (await (await gameplansApi.GET()).json()).plans[0];
+  assert.equal(previous.id, 'previous');
+  assert.equal(previous.previous, true);
+  const originalPrepare = database.prepare;
+  let injected = false;
+  database.prepare = function (sql) {
+    const statement = originalPrepare.call(this, sql);
+    if (
+      sql.startsWith('INSERT INTO workspace_state') &&
+      sql.includes('SELECT value_json')
+    ) {
+      const first = statement.first;
+      statement.first = async function () {
+        injected = true;
+        raw = JSON.stringify({
+          ...initial,
+          objectives: [
+            {
+              title: 'Late original change',
+              detail: 'Keep this newer content',
+              target: '',
+            },
+          ],
+        });
+        sqlite
+          .prepare('UPDATE workspace_state SET value_json=? WHERE id=?')
+          .run(raw, 'previous-fixture');
+        return first.call(this);
+      };
+    }
+    return statement;
+  };
+  try {
+    assert.equal(
+      (
+        await gameplansApi.PUT(
+          request({ ...previous, title: 'Preserved prior plan' }),
+        )
+      ).status,
+      409,
+    );
+  } finally {
+    database.prepare = originalPrepare;
+  }
+  assert.equal(injected, true);
+  assert.equal(
+    sqlite
+      .prepare(
+        'SELECT COUNT(*) n FROM workspace_state WHERE team_id=? AND state_key LIKE ?',
+      )
+      .get(db.teamId, 'gameplan-record-v1:%').n,
+    0,
+  );
+  previous = (await (await gameplansApi.GET()).json()).plans[0];
+  let saved = (
+    await (
+      await gameplansApi.PUT(
+        request({ ...previous, title: 'Preserved prior plan' }),
+      )
+    ).json()
+  ).plan;
+  assert.equal(saved.state.objectives[0].title, 'Late original change');
+  assert.equal(
+    sqlite
+      .prepare('SELECT value_json FROM workspace_state WHERE id=?')
+      .get('obsolete-previous-fixture').value_json,
+    '{unreadable-obsolete-fallback',
+  );
+  assert.equal(
+    sqlite
+      .prepare('SELECT value_json FROM workspace_state WHERE id=?')
+      .get('previous-fixture').value_json,
+    raw,
+  );
+  injected = false;
+  database.prepare = function (sql) {
+    const statement = originalPrepare.call(this, sql);
+    if (sql.startsWith('UPDATE workspace_state SET value_json=')) {
+      const first = statement.first;
+      statement.first = async function () {
+        injected = true;
+        const current = JSON.parse(
+          sqlite
+            .prepare(
+              'SELECT value_json FROM workspace_state WHERE team_id=? AND state_key=?',
+            )
+            .get(db.teamId, 'gameplan-record-v1:previous').value_json,
+        );
+        current.title = 'Late named update';
+        sqlite
+          .prepare(
+            'UPDATE workspace_state SET value_json=? WHERE team_id=? AND state_key=?',
+          )
+          .run(
+            JSON.stringify(current),
+            db.teamId,
+            'gameplan-record-v1:previous',
+          );
+        return first.call(this);
+      };
+    }
+    return statement;
+  };
+  try {
+    assert.equal(
+      (
+        await gameplansApi.PUT(
+          request({ ...saved, title: 'Must not replace late update' }),
+        )
+      ).status,
+      409,
+    );
+  } finally {
+    database.prepare = originalPrepare;
+  }
+  assert.equal(injected, true);
+  saved = (await (await gameplansApi.GET()).json()).plans[0];
+  assert.equal(saved.title, 'Late named update');
+  sqlite
+    .prepare('UPDATE workspace_state SET value_json=? WHERE id=?')
+    .run('{unreadable-legacy', 'previous-fixture');
+  assert.equal(
+    (await gameplansApi.GET()).status,
+    200,
+    'a materialized named plan must not reopen obsolete legacy storage',
+  );
+  assert.equal((await (await gameplansApi.GET()).json()).plans.length, 1);
+});
+
+test('practice generation pins a named source revision and retries never overwrite manual work', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'practice-source-owner',
+    name: 'Planner',
+    email: 'source@example.test',
+  };
+  assert.equal(
+    (await onboarding.POST(request({ name: 'Source fixture', season: '2026' })))
+      .status,
+    201,
+  );
+  const input = {
+    id: crypto.randomUUID(),
+    title: 'Monthly defence',
+    opponent: '',
+    date: '',
+    archived: false,
+    state: {
+      filmSelection: 'all',
+      unit: 'Defence',
+      included: [],
+      objectives: [
+        { title: 'Contain', detail: 'Outside leverage', target: 'Every rep' },
+      ],
+      callBuckets: [],
+    },
+  };
+  let source = (await (await gameplansApi.POST(request(input))).json()).plan;
+  const creation = {
+    id: crypto.randomUUID(),
+    title: 'Defence practice',
+    practiceDate: '2026-11-08',
+    blocks: [],
+    generated: true,
+    generateFrom: { id: source.id, version: source.version },
+  };
+  const response = await practicePlans.POST(request(creation));
+  assert.equal(response.status, 201);
+  let saved = (await response.json()).plans.find(
+    (plan) => plan.id === creation.id,
+  );
+  assert.deepEqual(saved.blocks, [
+    ['TBD', '10 min', 'Contain', 'Outside leverage', 'defence'],
+  ]);
+  assert.deepEqual(saved.gameplanSource, {
+    id: source.id,
+    title: source.title,
+    version: source.version,
+  });
+  const manual = {
+    id: saved.id,
+    version: saved.version,
+    title: saved.title,
+    practiceDate: '2026-11-08',
+    generated: false,
+    blocks: [['TBD', '20 min', 'Coach adjustment', '', 'defence']],
+  };
+  assert.equal((await practicePlans.PUT(request(manual))).status, 200);
+  const replay = await practicePlans.POST(request(creation));
+  assert.equal(replay.status, 200);
+  saved = (await replay.json()).plans.find((plan) => plan.id === creation.id);
+  assert.equal(saved.blocks[0][2], 'Coach adjustment');
+  assert.equal(saved.generated, false);
+  assert.equal(saved.gameplanSource.id, source.id);
+  source = (
+    await (
+      await gameplansApi.PUT(
+        request({ ...source, title: 'Revised monthly defence' }),
+      )
+    ).json()
+  ).plan;
+  assert.equal(
+    (await practicePlans.PUT(request({ ...creation, version: saved.version })))
+      .status,
+    409,
+  );
+  source = (
+    await (
+      await gameplansApi.PUT(request({ ...source, archived: true }))
+    ).json()
+  ).plan;
+  assert.equal(
+    (
+      await practicePlans.POST(
+        request({
+          ...creation,
+          id: crypto.randomUUID(),
+          generateFrom: { id: source.id, version: source.version },
+        }),
+      )
+    ).status,
+    409,
+  );
+  const reopened = (await (await practicePlans.GET()).json()).plans.find(
+    (plan) => plan.id === saved.id,
+  );
+  assert.deepEqual(reopened.blocks, saved.blocks);
+  assert.equal(reopened.gameplanSource.title, 'Monthly defence');
+});
+
+test('a late source edit cannot create or replace a practice from an outdated gameplan', async () => {
+  globalThis.privateTestIdentity = {
+    id: 'late-practice-source-owner',
+    name: 'Planner',
+    email: 'late-source@example.test',
+  };
+  await onboarding.POST(
+    request({ name: 'Late source fixture', season: '2026' }),
+  );
+  const input = {
+    id: crypto.randomUUID(),
+    title: 'Before late edit',
+    opponent: '',
+    date: '',
+    archived: false,
+    state: {
+      filmSelection: 'all',
+      unit: 'Special teams',
+      included: [],
+      objectives: [
+        { title: 'Kick cover', detail: 'Maintain lanes', target: 'Every rep' },
+      ],
+      callBuckets: [],
+    },
+  };
+  let source = (await (await gameplansApi.POST(request(input))).json()).plan;
+  const manualResponse = await practicePlans.POST(
+    request({
+      id: crypto.randomUUID(),
+      title: 'Keep manual work',
+      practiceDate: '2026-11-08',
+      generated: false,
+      blocks: [['TBD', '8 min', 'Manual segment', '', 'teams']],
+    }),
+  );
+  const made = await manualResponse.json();
+  const manual = made.plans.find((plan) => plan.id === made.savedPlanId);
+  const originalPrepare = database.prepare;
+  const db = await (await import(dbUrl)).getDatabase();
+  for (const method of ['POST', 'PUT']) {
+    let injected = false;
+    database.prepare = function (sql) {
+      const statement = originalPrepare.call(this, sql);
+      if (
+        sql.startsWith(
+          method === 'POST'
+            ? 'INSERT INTO practice_plans'
+            : 'UPDATE practice_plans SET',
+        )
+      ) {
+        const first = statement.first;
+        statement.first = async function () {
+          injected = true;
+          const row = sqlite
+            .prepare(
+              'SELECT value_json FROM workspace_state WHERE team_id=? AND state_key=?',
+            )
+            .get(db.teamId, 'gameplan-record-v1:' + source.id);
+          const newer = JSON.parse(row.value_json);
+          newer.title = 'Late source ' + method;
+          sqlite
+            .prepare(
+              'UPDATE workspace_state SET value_json=? WHERE team_id=? AND state_key=?',
+            )
+            .run(
+              JSON.stringify(newer),
+              db.teamId,
+              'gameplan-record-v1:' + source.id,
+            );
+          return first.call(this);
+        };
+      }
+      return statement;
+    };
+    try {
+      const response = await practicePlans[method](
+        request({
+          ...manual,
+          id: method === 'POST' ? crypto.randomUUID() : manual.id,
+          generateFrom: { id: source.id, version: source.version },
+        }),
+      );
+      assert.equal(response.status, 409);
+    } finally {
+      database.prepare = originalPrepare;
+    }
+    assert.equal(injected, true);
+    const practices = (await (await practicePlans.GET()).json()).plans;
+    assert.equal(practices.length, 1);
+    assert.deepEqual(practices[0], manual);
+    source = (await (await gameplansApi.GET()).json()).plans.find(
+      (plan) => plan.id === source.id,
+    );
+  }
 });

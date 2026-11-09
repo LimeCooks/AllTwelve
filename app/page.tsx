@@ -6,6 +6,14 @@ import {
   type FilmClipRecord,
   type FilmPayload,
 } from '@/lib/film-data';
+import type { PracticeGameplanSource } from '@/lib/practice-generation';
+import { GameplanWorkspace } from '@/components/gameplan-workspace';
+import {
+  readGameplans,
+  readGameplan,
+  writeGameplan,
+  type NamedGameplan,
+} from '@/lib/named-gameplans';
 import { CalendarAvailability } from '@/components/calendar-availability';
 import { PrintoutsWorkspace } from '@/components/printouts-workspace';
 import { MessagesWorkspace } from '@/components/messages-workspace';
@@ -34,12 +42,7 @@ import {
   calendarEditInstant,
   calendarTimeInput,
 } from '@/lib/calendar-time';
-import {
-  GAMEPLAN_KEY,
-  loadGameplan,
-  linkGameplanPlays,
-  resolveGameplanPlay,
-} from '@/lib/gameplan-state';
+import { linkGameplanPlays, resolveGameplanPlay } from '@/lib/gameplan-state';
 import {
   WorkspaceGate,
   useWorkspaceSession,
@@ -411,6 +414,8 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
   >(null);
   const [activeView, setActiveViewUnsafe] = useState('Home');
   const [installTarget, setInstallTarget] = useState('');
+  const [practiceGameplanTarget, setPracticeGameplanTarget] = useState('');
+  const [gameplanTarget, setGameplanTarget] = useState('');
   const [pendingView, setPendingView] = useState('');
   const editingPlayRef = useRef(false);
   const onPlayEditingChange = useCallback((editing: boolean) => {
@@ -421,6 +426,8 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
     else {
       setSearchTarget(null);
       if (view !== 'Install') setInstallTarget('');
+      if (view !== 'Practice Plans') setPracticeGameplanTarget('');
+      if (view !== 'Gameplanning') setGameplanTarget('');
       setActiveViewUnsafe(view);
     }
   }, []);
@@ -1560,6 +1567,18 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
           ) : (
             <ModuleView
               initialInstallId={installTarget}
+              initialPracticeGameplanId={practiceGameplanTarget}
+              initialGameplanId={gameplanTarget}
+              onOpenGameplan={(id) => {
+                onPlayEditingChange(false);
+                setGameplanTarget(id);
+                setActiveView('Gameplanning');
+              }}
+              onBuildPractice={(id) => {
+                onPlayEditingChange(false);
+                setPracticeGameplanTarget(id);
+                setActiveView('Practice Plans');
+              }}
               onOpenInstall={(id) => {
                 setInstallTarget(id);
                 setActiveView('Install');
@@ -1911,6 +1930,10 @@ function PlayerDashboard({
 }
 
 type ModuleProps = {
+  initialGameplanId: string;
+  onOpenGameplan: (id: string) => void;
+  initialPracticeGameplanId: string;
+  onBuildPractice: (id: string) => void;
   initialInstallId: string;
   onOpenInstall: (id: string) => void;
   onOpenDataset: (
@@ -1932,6 +1955,10 @@ type ModuleProps = {
 };
 
 function ModuleView({
+  initialGameplanId,
+  onOpenGameplan,
+  initialPracticeGameplanId,
+  onBuildPractice,
   initialInstallId,
   onOpenInstall,
   onOpenDataset,
@@ -2034,6 +2061,9 @@ function ModuleView({
   if (view === 'Gameplanning')
     return (
       <GameplanningView
+        initialPlanId={initialGameplanId}
+        onBuildPractice={onBuildPractice}
+        onEditingChange={onPlayEditingChange}
         onNavigate={onNavigate}
         onNotify={onNotify}
         initialSelection={searchTarget?.kind === 'film' ? searchTarget.id : ''}
@@ -2052,6 +2082,8 @@ function ModuleView({
   if (view === 'Practice Plans')
     return (
       <PracticePlansView
+        onOpenGameplan={onOpenGameplan}
+        initialGameplanId={initialPracticeGameplanId}
         onEditingChange={onPlayEditingChange}
         onNavigate={onNavigate}
         onNotify={onNotify}
@@ -6116,20 +6148,53 @@ const initialGameplanObjectives: {
 }[] = [];
 const initialGameplanBuckets: { name: string; plays: string[] }[] = [];
 
-function GameplanningView({
-  onNavigate,
-  onNotify,
-  initialSelection = '',
-  onOpenDataset,
-}: {
+type GameplanningProps = {
+  initialPlanId?: string;
   onNavigate: (view: string) => void;
   onNotify: Notify;
+  onEditingChange: (editing: boolean) => void;
+  onBuildPractice: (id: string) => void;
   initialSelection?: string;
   onOpenDataset: (
     selection: string,
     destination: 'Film Room' | 'Reports' | 'Gameplanning',
   ) => void;
+};
+function GameplanningView(props: GameplanningProps) {
+  return (
+    <GameplanWorkspace
+      initialPlanId={props.initialPlanId}
+      onEditingChange={props.onEditingChange}
+    >
+      {(editor) => <GameplanningEditor {...props} {...editor} />}
+    </GameplanWorkspace>
+  );
+}
+function GameplanningEditor({
+  onNavigate,
+  onNotify,
+  initialSelection = '',
+  onOpenDataset,
+  onEditingChange,
+  onBusyChange,
+  onBuildPractice,
+  plan,
+  onSaved,
+}: GameplanningProps & {
+  plan: NamedGameplan;
+  onSaved: (plan: NamedGameplan) => void;
+  onBusyChange: (busy: boolean) => void;
 }) {
+  const currentPlan = useRef(plan);
+  currentPlan.current = plan;
+  const [planSaveError, setPlanSaveError] = useState('');
+  const [planDraftDownload, setPlanDraftDownload] = useState('');
+  useEffect(
+    () => () => {
+      if (planDraftDownload) URL.revokeObjectURL(planDraftDownload);
+    },
+    [planDraftDownload],
+  );
   const [unit, setUnit] = useState('Offence');
   const [included, setIncluded] = useState<string[]>([]);
   const [briefOpen, setBriefOpen] = useState(false);
@@ -6158,6 +6223,27 @@ function GameplanningView({
   const [planRetry, setPlanRetry] = useState(0);
   const [savingPlan, setSavingPlan] = useState(false);
   const planSaveLock = useRef(false);
+  useEffect(() => {
+    onEditingChange(
+      savingPlan ||
+        sendingInstall ||
+        objectiveDialogOpen ||
+        sectionDialogOpen ||
+        Boolean(planDraftDownload),
+    );
+    return () => onEditingChange(false);
+  }, [
+    savingPlan,
+    sendingInstall,
+    objectiveDialogOpen,
+    sectionDialogOpen,
+    planDraftDownload,
+    onEditingChange,
+  ]);
+  useEffect(() => {
+    onBusyChange(savingPlan || sendingInstall);
+    return () => onBusyChange(false);
+  }, [savingPlan, sendingInstall, onBusyChange]);
   const insights = gameplanFilm
     .filter(
       (clip) =>
@@ -6179,7 +6265,7 @@ function GameplanningView({
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([loadGameplan(), loadPlaybookData()])
+    Promise.all([Promise.resolve(plan.state), loadPlaybookData()])
       .then(([state, playbook]) => {
         if (cancelled) return;
         const saved = linkGameplanPlays(state, playbook.plays);
@@ -6197,7 +6283,7 @@ function GameplanningView({
     return () => {
       cancelled = true;
     };
-  }, [planRetry, initialSelection]);
+  }, [planRetry, initialSelection, plan.id]);
 
   useEffect(() => {
     if (filmSelection === null) return;
@@ -6244,13 +6330,33 @@ function GameplanningView({
       callBuckets: changes.callBuckets ?? callBuckets,
     };
     try {
-      await saveWorkspaceState(GAMEPLAN_KEY, next);
+      const saved = await writeGameplan(
+        { ...currentPlan.current, state: next },
+        currentPlan.current.version,
+      );
+      currentPlan.current = saved;
+      onSaved(saved);
+      setPlanSaveError('');
+      setPlanDraftDownload('');
       setUnit(next.unit);
       setIncluded(next.included);
       setObjectives(next.objectives);
       setCallBuckets(next.callBuckets);
       return true;
     } catch (error) {
+      setPlanSaveError(
+        error instanceof Error
+          ? error.message
+          : 'The gameplan save could not be confirmed.',
+      );
+      setPlanDraftDownload(
+        URL.createObjectURL(
+          new Blob(
+            [JSON.stringify({ ...currentPlan.current, state: next }, null, 2)],
+            { type: 'application/json' },
+          ),
+        ),
+      );
       onNotify(
         error instanceof Error
           ? error.message
@@ -6416,15 +6522,25 @@ function GameplanningView({
       </Dialog>
       <ModuleHeader
         eyebrow="Coordinator workspace"
-        title="Gameplan"
+        title={plan.title}
         description="Bridge scouting evidence to your call sheet, install, and practice script."
       >
         <Button
           className="module-secondary"
-          onClick={() => onOpenDataset(filmSelection ?? 'all', 'Reports')}
+          disabled={
+            savingPlan ||
+            plan.archived ||
+            (!objectives.length &&
+              !callBuckets.some((bucket) => bucket.plays.length))
+          }
+          onClick={() => {
+            void saveGameplan({}).then((saved) => {
+              if (saved) onBuildPractice(plan.id);
+            });
+          }}
           variant="outline"
         >
-          <SlidersHorizontal /> Open reports
+          <ClipboardList /> Build practice plan
         </Button>
         <Button
           className="module-primary"
@@ -6459,57 +6575,41 @@ function GameplanningView({
           <ClipboardList /> Add to install
         </Button>
       </ModuleHeader>
-      <div className="workflow-stepper">
-        <button
-          className={gameplanFilm.length ? 'complete' : ''}
+      {planSaveError ? (
+        <div role="alert" className="gameplan-save-error">
+          <p>{planSaveError}</p>
+          <a
+            href={planDraftDownload}
+            download={`gameplan-${plan.id}-draft.json`}
+          >
+            Download unsaved draft
+          </a>
+          <p>
+            Use Plan options → Reload saved gameplans to replace the editor only
+            after a successful read.
+          </p>
+        </div>
+      ) : null}
+      <details className="gameplan-connections">
+        <summary>Film and reports</summary>
+        <p>
+          {evidenceLoad === 'ready'
+            ? `${evidenceLabel} · ${gameplanFilm.length} clips`
+            : 'Film evidence is loading or unavailable.'}
+        </p>
+        <Button
+          variant="outline"
           onClick={() => onOpenDataset(filmSelection ?? 'all', 'Film Room')}
-          type="button"
         >
-          <span>{gameplanFilm.length ? <Check /> : '1'}</span>
-          <div>
-            <strong>Film evidence</strong>
-            <small>
-              {evidenceLoad === 'ready'
-                ? `${evidenceLabel} · ${gameplanFilm.length} clips`
-                : 'Film evidence unavailable or loading'}
-            </small>
-          </div>
-        </button>
-        <i />
-        <button
-          className={insights.length ? 'complete' : ''}
+          Open film
+        </Button>
+        <Button
+          variant="outline"
           onClick={() => onOpenDataset(filmSelection ?? 'all', 'Reports')}
-          type="button"
         >
-          <span>{insights.length ? <Check /> : '2'}</span>
-          <div>
-            <strong>Reports ready</strong>
-            <small>{insights.length} usable observations</small>
-          </div>
-        </button>
-        <i />
-        <button
-          className="active"
-          onClick={() =>
-            onNotify('You are editing the active gameplan.', 'info')
-          }
-          type="button"
-        >
-          <span>3</span>
-          <div>
-            <strong>Build gameplan</strong>
-            <small>In progress</small>
-          </div>
-        </button>
-        <i />
-        <button onClick={() => onNavigate('Install')} type="button">
-          <span>4</span>
-          <div>
-            <strong>Install</strong>
-            <small>Publish to team</small>
-          </div>
-        </button>
-      </div>
+          Open reports
+        </Button>
+      </details>
       <div className="planning-toolbar gameplan-toolbar">
         <div className="segmented-control">
           {['Offence', 'Defence', 'Special teams'].map((item) => (
@@ -6533,73 +6633,76 @@ function GameplanningView({
           <Eye /> Preview staff brief
         </Button>
       </div>
-      <div className="gameplan-layout">
-        <aside className="insight-inbox">
-          <div className="analytics-head">
-            <div>
-              <p className="eyebrow">From reports</p>
-              <h3>Insight inbox</h3>
-            </div>
-            <Badge>{insights.length}</Badge>
-          </div>
-          <p className="panel-helper">
-            Add film observations to your active plan.
-          </p>
-          {insights.map((item) => (
-            <button
-              className={included.includes(item.id) ? 'included' : ''}
-              key={item.id}
-              onClick={() => {
-                const next = included.includes(item.id)
-                  ? included.filter((id) => id !== item.id)
-                  : [...included, item.id];
-                void saveGameplan({ included: next });
-              }}
-              type="button"
-            >
-              <span className="insight-check">
-                {included.includes(item.id) ? <Check /> : <Plus />}
-              </span>
+      <div className="gameplan-layout gameplan-layout-focused">
+        <details className="gameplan-insights">
+          <summary>Film observations ({insights.length})</summary>
+          <aside className="insight-inbox">
+            <div className="analytics-head">
               <div>
-                <strong>{item.title}</strong>
-                <p>{item.detail}</p>
-                <small>
-                  <Film /> {item.clips} linked clip
-                </small>
+                <p className="eyebrow">From reports</p>
+                <h3>Insight inbox</h3>
               </div>
-            </button>
-          ))}
-          {!insights.length ? (
-            <div className="channel-empty">
-              {evidenceLoad === 'loading'
-                ? 'Loading film observations…'
-                : evidenceLoad === 'error'
-                  ? 'Unable to load this film dataset. Your saved plan is still available.'
-                  : 'No film observations yet. Add notes or tags while charting clips.'}
-              {evidenceLoad === 'error' ? (
-                <>
-                  <Button
-                    onClick={() => {
-                      setEvidenceLoad('loading');
-                      setEvidenceRetry((value) => value + 1);
-                    }}
-                  >
-                    Retry evidence
-                  </Button>
-                  <Button
-                    onClick={() => {
-                      setEvidenceLoad('loading');
-                      setFilmSelection('all');
-                      setEvidenceRetry((value) => value + 1);
-                    }}
-                  >
-                    Use all saved films
-                  </Button>
-                </>
-              ) : null}
+              <Badge>{insights.length}</Badge>
             </div>
-          ) : null}
-        </aside>
+            <p className="panel-helper">
+              Add film observations to your active plan.
+            </p>
+            {insights.map((item) => (
+              <button
+                className={included.includes(item.id) ? 'included' : ''}
+                key={item.id}
+                onClick={() => {
+                  const next = included.includes(item.id)
+                    ? included.filter((id) => id !== item.id)
+                    : [...included, item.id];
+                  void saveGameplan({ included: next });
+                }}
+                type="button"
+              >
+                <span className="insight-check">
+                  {included.includes(item.id) ? <Check /> : <Plus />}
+                </span>
+                <div>
+                  <strong>{item.title}</strong>
+                  <p>{item.detail}</p>
+                  <small>
+                    <Film /> {item.clips} linked clip
+                  </small>
+                </div>
+              </button>
+            ))}
+            {!insights.length ? (
+              <div className="channel-empty">
+                {evidenceLoad === 'loading'
+                  ? 'Loading film observations…'
+                  : evidenceLoad === 'error'
+                    ? 'Unable to load this film dataset. Your saved plan is still available.'
+                    : 'No film observations yet. Add notes or tags while charting clips.'}
+                {evidenceLoad === 'error' ? (
+                  <>
+                    <Button
+                      onClick={() => {
+                        setEvidenceLoad('loading');
+                        setEvidenceRetry((value) => value + 1);
+                      }}
+                    >
+                      Retry evidence
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setEvidenceLoad('loading');
+                        setFilmSelection('all');
+                        setEvidenceRetry((value) => value + 1);
+                      }}
+                    >
+                      Use all saved films
+                    </Button>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+          </aside>
+        </details>
         <div className="gameplan-board">
           <section className="gameplan-objectives">
             <div className="analytics-head">
@@ -6772,62 +6875,46 @@ function GameplanningView({
             </div>
           </section>
         </div>
-        <aside className="gameplan-rail">
-          <section className="analytics-card">
-            <div className="analytics-head">
-              <div>
-                <p className="eyebrow">Plan health</p>
-                <h3>Ready to install</h3>
+        <details className="gameplan-summary">
+          <summary>Plan summary</summary>
+          <aside className="gameplan-rail">
+            <section className="analytics-card">
+              <div className="analytics-head">
+                <div>
+                  <h3>Plan contents</h3>
+                </div>
               </div>
-              <strong className="health-score">
-                {Math.min(
-                  100,
-                  (included.length ? 25 : 0) +
-                    (objectives.length ? 25 : 0) +
-                    (callBuckets.some((bucket) => bucket.plays.length)
-                      ? 50
-                      : 0),
-                )}
-                %
-              </strong>
-            </div>
-            <div className="plan-checks">
-              <span className={included.length ? '' : 'pending'}>
-                {included.length ? <CheckCircle2 /> : <AlertCircle />}{' '}
-                {included.length} film observations linked
-              </span>
-              <span
-                className={
-                  callBuckets.some((bucket) => bucket.plays.length)
-                    ? ''
-                    : 'pending'
-                }
-              >
-                {callBuckets.some((bucket) => bucket.plays.length) ? (
-                  <CheckCircle2 />
-                ) : (
-                  <AlertCircle />
-                )}{' '}
-                {callBuckets.reduce(
-                  (sum, bucket) => sum + bucket.plays.length,
-                  0,
-                )}{' '}
-                saved plays selected
-              </span>
-              <span className={objectives.length ? '' : 'pending'}>
-                {objectives.length ? <CheckCircle2 /> : <AlertCircle />}{' '}
-                {objectives.length} objectives defined
-              </span>
-            </div>
-            <Button
-              className="w-full"
-              onClick={() => onNavigate('Practice Plans')}
-              variant="outline"
-            >
-              Build practice plan
-            </Button>
-          </section>
-        </aside>
+              <div className="plan-checks">
+                <span className={included.length ? '' : 'pending'}>
+                  {included.length ? <CheckCircle2 /> : <AlertCircle />}{' '}
+                  {included.length} film observations linked
+                </span>
+                <span
+                  className={
+                    callBuckets.some((bucket) => bucket.plays.length)
+                      ? ''
+                      : 'pending'
+                  }
+                >
+                  {callBuckets.some((bucket) => bucket.plays.length) ? (
+                    <CheckCircle2 />
+                  ) : (
+                    <AlertCircle />
+                  )}{' '}
+                  {callBuckets.reduce(
+                    (sum, bucket) => sum + bucket.plays.length,
+                    0,
+                  )}{' '}
+                  saved plays selected
+                </span>
+                <span className={objectives.length ? '' : 'pending'}>
+                  {objectives.length ? <CheckCircle2 /> : <AlertCircle />}{' '}
+                  {objectives.length} objectives defined
+                </span>
+              </div>
+            </section>
+          </aside>
+        </details>
       </div>
       <Dialog onOpenChange={setBriefOpen} open={briefOpen}>
         <DialogContent className="athlete-dialog sm:max-w-[620px]">
@@ -7831,18 +7918,60 @@ type PracticePlanRecord = {
   durationMinutes: number;
   blocks: string[][];
   generated: boolean;
+  gameplanSource?: PracticeGameplanSource | null;
 };
 const initialPracticeBlocks: string[][] = [];
 
 function PracticePlansView({
+  onOpenGameplan,
+  initialGameplanId = '',
   onNavigate,
   onNotify,
   onEditingChange,
 }: {
+  onOpenGameplan: (id: string) => void;
+  initialGameplanId?: string;
   onNavigate: (view: string) => void;
   onNotify: Notify;
   onEditingChange: (editing: boolean) => void;
 }) {
+  const [sourcePlans, setSourcePlans] = useState<NamedGameplan[]>([]);
+  const [sourceId, setSourceId] = useState(initialGameplanId);
+  const [sourceLoad, setSourceLoad] = useState<'loading' | 'ready' | 'error'>(
+    'loading',
+  );
+  const [sourceError, setSourceError] = useState('');
+  const [sourceRetry, setSourceRetry] = useState(0);
+  const [practiceSaveError, setPracticeSaveError] = useState('');
+  const initialSourceApplied = useRef(false);
+  const practiceCreationId = useRef('');
+  if (!practiceCreationId.current)
+    practiceCreationId.current = crypto.randomUUID();
+  const sourcePlan = sourcePlans.find((plan) => plan.id === sourceId) ?? null;
+  useEffect(() => {
+    const controller = new AbortController();
+    setSourceLoad('loading');
+    setSourceError('');
+    readGameplans(controller.signal).then(
+      (plans) => {
+        if (!controller.signal.aborted) {
+          setSourcePlans(plans);
+          setSourceLoad('ready');
+        }
+      },
+      (error: unknown) => {
+        if (!controller.signal.aborted) {
+          setSourceLoad('error');
+          setSourceError(
+            error instanceof Error
+              ? error.message
+              : 'Saved source gameplans are unavailable.',
+          );
+        }
+      },
+    );
+    return () => controller.abort();
+  }, [sourceRetry]);
   const [generated, setGenerated] = useState(false);
   const [practiceBlocks, setPracticeBlocks] = useState<string[][]>(
     initialPracticeBlocks,
@@ -7896,8 +8025,16 @@ function PracticePlansView({
     if (practiceLock.current || practiceLoad !== 'ready') return;
     practiceLock.current = true;
     setPracticeBusy(true);
+    setPracticeSaveError('');
     try {
       await action();
+    } catch (error) {
+      setPracticeSaveError(
+        error instanceof Error
+          ? error.message
+          : 'The practice could not be saved. Your current work is still here.',
+      );
+      throw error;
     } finally {
       practiceLock.current = false;
       setPracticeBusy(false);
@@ -7937,11 +8074,22 @@ function PracticePlansView({
         if (cancelled) return;
         const plans = data.plans;
         setPracticePlans(plans);
-        const plan =
-          plans.find((item) => item.id === selectedPlanId) ?? plans[0];
+        const openNewFromSource = Boolean(
+          initialGameplanId && !initialSourceApplied.current,
+        );
+        const plan = openNewFromSource
+          ? undefined
+          : (plans.find((item) => item.id === selectedPlanId) ?? plans[0]);
+        if (openNewFromSource) {
+          practiceCreationId.current = crypto.randomUUID();
+          setSourceId(initialGameplanId);
+        } else setSourceId(plan?.gameplanSource?.id ?? '');
+        initialSourceApplied.current = true;
         setSelectedPlanId(plan?.id ?? '');
         setGenerated(plan?.generated ?? false);
         setPracticeBlocks(plan?.blocks ?? []);
+        setPracticeSaveError('');
+        setPracticeConflict(false);
         setPracticeLoad('ready');
       })
       .catch(() => {
@@ -7950,40 +8098,52 @@ function PracticePlansView({
     return () => {
       cancelled = true;
     };
-  }, [practiceRetry]);
+  }, [practiceRetry, initialGameplanId]);
 
   const savePractice = async (
     blocks = practiceBlocks,
     isGenerated = generated,
     metadata?: { title: string; practiceDate: string },
+    generationSource?: NamedGameplan,
   ) => {
     const response = await fetch('/api/practice-plans', {
       method: selectedPlan ? 'PUT' : 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(
-        selectedPlan
+      body: JSON.stringify({
+        id: selectedPlan?.id ?? practiceCreationId.current,
+        ...(selectedPlan ? { version: selectedPlan.version } : {}),
+        title:
+          metadata?.title ??
+          selectedPlan?.title ??
+          (generationSource
+            ? `${generationSource.title} practice`.slice(0, 120)
+            : 'Practice plan'),
+        practiceDate:
+          metadata?.practiceDate ??
+          selectedPlan?.practiceDate ??
+          localDateKey(new Date()),
+        blocks: generationSource ? [] : blocks,
+        generated: generationSource ? true : isGenerated,
+        ...(generationSource
           ? {
-              id: selectedPlan.id,
-              version: selectedPlan.version,
-              title: metadata?.title ?? selectedPlan.title,
-              practiceDate: metadata?.practiceDate ?? selectedPlan.practiceDate,
-              blocks,
-              generated: isGenerated,
+              generateFrom: {
+                id: generationSource.id,
+                version: generationSource.version,
+              },
             }
-          : {
-              title: 'Practice plan',
-              practiceDate: localDateKey(new Date()),
-              blocks,
-              generated: isGenerated,
-            },
-      ),
+          : {}),
+      }),
     });
     const data = (await response.json()) as {
       plans?: PracticePlanRecord[];
       savedPlanId?: string;
+      replayed?: boolean;
       error?: string;
     };
     if (!response.ok) {
+      setPracticeSaveError(
+        data.error ?? 'The practice save could not be confirmed.',
+      );
       if (response.status === 409) setPracticeConflict(true);
       throw new Error(data.error ?? 'Unable to save the practice plan.');
     }
@@ -7993,6 +8153,13 @@ function PracticePlansView({
       throw new Error(
         'The saved practice plan could not be confirmed. Reload before retrying.',
       );
+    setPracticeSaveError('');
+    if (data.replayed)
+      onNotify(
+        'This practice already existed. Its latest saved version was opened.',
+        'info',
+      );
+    if (saved.gameplanSource) setSourceId(saved.gameplanSource.id);
     setPracticePlans(plans!);
     setSelectedPlanId(saved.id);
     setPracticeBlocks(saved.blocks);
@@ -8018,6 +8185,7 @@ function PracticePlansView({
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
+        id: practiceCreationId.current,
         title,
         practiceDate,
         blocks: [],
@@ -8039,59 +8207,20 @@ function PracticePlansView({
     setPracticePlans(data.plans!);
     setSelectedPlanId(plan.id);
     setPracticeBlocks(plan.blocks);
-    setGenerated(false);
+    setGenerated(plan.generated);
+    setSourceId(plan.gameplanSource?.id ?? '');
     setNewPlanOpen(false);
     setPracticeFormDirty(false);
     onNotify(`${title} created.`);
   };
 
   const generatePractice = async () => {
-    const [gameplan, playbook] = await Promise.all([
-      loadGameplan(),
-      loadPlaybookData(),
-    ]);
-    for (const reference of gameplan.callBuckets.flatMap(
-      (bucket) => bucket.plays,
-    )) {
-      if (!resolveGameplanPlay(reference, playbook.plays))
-        throw new Error(
-          'A gameplan play is unavailable or ambiguous. Repair the call sheet before generating practice.',
-        );
-    }
-    const generatedBlocks = [
-      ...gameplan.objectives.map((objective) => [
-        'TBD',
-        '10 min',
-        objective.title,
-        objective.detail,
-        'team',
-      ]),
-      ...gameplan.callBuckets
-        .filter((bucket) => bucket.plays.length)
-        .map((bucket) => [
-          'TBD',
-          '15 min',
-          bucket.name,
-          bucket.plays
-            .map(
-              (reference) =>
-                resolveGameplanPlay(reference, playbook.plays)!.name,
-            )
-            .join('; '),
-          gameplan.unit === 'Special teams'
-            ? 'teams'
-            : gameplan.unit.toLowerCase(),
-        ]),
-    ];
-    if (!generatedBlocks.length) {
-      onNotify(
-        'Add gameplan objectives or saved plays before generating practice.',
-        'info',
+    if (sourceLoad !== 'ready' || !sourcePlan || sourcePlan.archived)
+      throw new Error(
+        'Choose an active saved gameplan before generating practice.',
       );
-      return;
-    }
-    await savePractice(generatedBlocks, true);
-    onNotify('Practice plan generated from saved gameplan items.');
+    await savePractice([], true, undefined, sourcePlan);
+    onNotify(`Practice generated from ${sourcePlan.title}.`);
   };
   const addPracticeSegment = async (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -8141,14 +8270,15 @@ function PracticePlansView({
     setSelectedPlanId(next?.id ?? '');
     setPracticeBlocks(next?.blocks ?? []);
     setGenerated(next?.generated ?? false);
+    setSourceId(next?.gameplanSource?.id ?? '');
     onNotify(`${selectedPlan.title} deleted.`);
     setConfirmPracticeDelete(false);
   };
   const conflictNotice = practiceConflict ? (
     <div role="alert" className="practice-conflict">
       <p>
-        This plan changed on another device. Your saved plan has not been
-        overwritten. Keep this draft or reload the latest version.
+        {practiceSaveError ||
+          'This plan changed on another device. Keep this draft or reload the latest version.'}
       </p>
       <Button
         onClick={() => {
@@ -8217,13 +8347,21 @@ function PracticePlansView({
       >
         <Button
           className="module-secondary"
-          onClick={() => onNavigate('Gameplanning')}
+          onClick={() => {
+            const id = selectedPlan?.gameplanSource?.id ?? sourceId;
+            if (id) onOpenGameplan(id);
+            else onNavigate('Gameplanning');
+          }}
           variant="outline"
         >
-          <Zap /> View gameplan
+          <Zap />{' '}
+          {selectedPlan?.gameplanSource
+            ? 'View source gameplan'
+            : 'View gameplans'}
         </Button>
         <Button
           onClick={() => {
+            practiceCreationId.current = crypto.randomUUID();
             setEditingPlan(false);
             setPracticeFormDirty(false);
             setNewPlanOpen(true);
@@ -8234,6 +8372,9 @@ function PracticePlansView({
         </Button>
         <Button
           className="module-primary"
+          disabled={
+            sourceLoad !== 'ready' || !sourcePlan || sourcePlan.archived
+          }
           onClick={() => {
             if (practiceBlocks.length) {
               setReplacePracticeOpen(true);
@@ -8252,16 +8393,85 @@ function PracticePlansView({
           <Sparkles /> {generated ? 'Refresh from plan' : 'Generate from plan'}
         </Button>
       </ModuleHeader>
+      {practiceSaveError && !practiceConflict ? (
+        <p role="alert">{practiceSaveError}</p>
+      ) : null}
+      <details className="practice-gameplan-source">
+        <summary>
+          Gameplan source{sourcePlan ? ` · ${sourcePlan.title}` : ''}
+        </summary>
+        <label>
+          Generate from
+          <NativeSelect
+            aria-label="Practice source gameplan"
+            value={sourceId}
+            disabled={practiceBusy || sourceLoad !== 'ready'}
+            onChange={(event) => setSourceId(event.target.value)}
+          >
+            <NativeSelectOption value="">
+              Choose a saved gameplan…
+            </NativeSelectOption>
+            {sourcePlans
+              .filter((plan) => !plan.archived || plan.id === sourceId)
+              .map((plan) => (
+                <NativeSelectOption key={plan.id} value={plan.id}>
+                  {plan.title}
+                  {plan.opponent ? ` · ${plan.opponent}` : ''}
+                  {plan.archived ? ' · Archived' : ''}
+                </NativeSelectOption>
+              ))}
+          </NativeSelect>
+        </label>
+        {sourceLoad === 'loading' ? (
+          <p role="status">Loading saved gameplans…</p>
+        ) : sourceLoad === 'error' ? (
+          <p role="alert">
+            {sourceError} Manual practice editing is still available.
+          </p>
+        ) : null}
+        <Button
+          variant="outline"
+          disabled={practiceBusy || sourceLoad === 'loading'}
+          onClick={() => setSourceRetry((value) => value + 1)}
+        >
+          Refresh gameplan sources
+        </Button>
+        {selectedPlan?.gameplanSource ? (
+          <p>
+            Originally generated from {selectedPlan.gameplanSource.title}. The
+            source name and revision are retained from generation.
+            {sourcePlan?.id === selectedPlan.gameplanSource.id &&
+            sourcePlan.version !== selectedPlan.gameplanSource.version
+              ? ' The source has changed since generation; this practice keeps its saved segments until you explicitly replace them.'
+              : ''}
+          </p>
+        ) : generated ? (
+          <p>
+            This older generated script has no recorded gameplan source. Choose
+            one before refreshing it.
+          </p>
+        ) : (
+          <p>
+            Choose the exact gameplan to generate from. Manual segments are
+            replaced only after confirmation.
+          </p>
+        )}
+      </details>
       <div className="planning-toolbar">
         <NativeSelect
           aria-label="Choose practice plan"
           onChange={(event) => {
+            if (!event.target.value)
+              practiceCreationId.current = crypto.randomUUID();
             const plan = practicePlans.find(
               (item) => item.id === event.target.value,
             );
             setSelectedPlanId(event.target.value);
             setPracticeBlocks(plan?.blocks ?? []);
             setGenerated(plan?.generated ?? false);
+            setSourceId(plan?.gameplanSource?.id ?? '');
+            setPracticeSaveError('');
+            setPracticeConflict(false);
           }}
           value={selectedPlanId}
         >
@@ -8507,7 +8717,11 @@ function PracticePlansView({
                 </span>
                 <span className={generated ? '' : 'pending'}>
                   {generated ? <CheckCircle2 /> : <AlertCircle />}{' '}
-                  {generated ? 'Generated from saved gameplan' : 'Manual plan'}
+                  {generated
+                    ? selectedPlan?.gameplanSource
+                      ? `Generated from ${selectedPlan.gameplanSource.title}`
+                      : 'Generated earlier · source not recorded'
+                    : 'Manual plan'}
                 </span>
                 <span className={durationMinutes ? '' : 'pending'}>
                   {durationMinutes ? <CheckCircle2 /> : <AlertCircle />}{' '}
@@ -8529,8 +8743,16 @@ function PracticePlansView({
             >
               <Sparkles />
               <div>
-                <strong>Generated from real plan data</strong>
-                <p>Only saved objectives and call-sheet sections were used.</p>
+                <strong>
+                  {selectedPlan?.gameplanSource
+                    ? `Generated from ${selectedPlan.gameplanSource.title}`
+                    : 'Earlier generated practice'}
+                </strong>
+                <p>
+                  {selectedPlan?.gameplanSource
+                    ? 'Saved objectives and call-sheet sections from that specific gameplan revision were used.'
+                    : 'No source link was recorded for this older script.'}
+                </p>
               </div>
             </section>
           </details>
@@ -8548,7 +8770,8 @@ function PracticePlansView({
             <DialogDescription>
               This will replace all {practiceBlocks.length} segments in{' '}
               {selectedPlan?.title ?? 'this plan'}, including manually added
-              segments, with the current saved gameplan.
+              segments, with the saved content of{' '}
+              {sourcePlan?.title ?? 'the selected gameplan'}.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
