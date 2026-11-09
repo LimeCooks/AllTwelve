@@ -662,6 +662,35 @@ async function verifyStaffAccess(label, create = false) {
   report.stages.push({ label: `${label}: staff membership, owner privacy and forged-team rejection verified`, verifiedAt: new Date().toISOString() });
 }
 
+async function verifyPlayerAccess(label, create = false) {
+  if (create) {
+    const id=crypto.randomUUID();
+    await api('/api/team-access','a',{id,email:'local-release-player@example.test',role:'player',athleteId:fixture.athlete},'POST',201);
+    const pending=(await api('/api/team-invitations','player')).invitations.find(row=>row.id===id);
+    await api('/api/team-invitations','player',{id,version:pending.version});
+  }
+  const joined=await api('/api/session','player');
+  assert.equal(joined.team.id,fixture.team);
+  assert.equal(joined.team.athleteId,fixture.athlete);
+  assert.equal(joined.team.role,'player');
+  const learning=await api('/api/player-learning','player');
+  assert.equal(learning.athlete.id,fixture.athlete);
+  let item=learning.items.find(row=>row.play?.id===fixture.play);
+  assert.ok(item?.play?.players?.length,'published assigned diagram must be delivered');
+  assert.ok(!('staffNote' in learning.athlete));
+  for (const path of ['/api/athletes','/api/playbooks','/api/backups','/api/team-access','/api/film','/api/messages'])
+    await api(path,'player',undefined,'GET',403);
+  if (create) {
+    for (const kind of ['reviewed','assignment','note']) {
+      item=(await api('/api/player-learning','player',{id:item.id,version:item.version,kind},'PATCH')).items.find(row=>row.id===item.id);
+    }
+  }
+  assert.ok(item.reviewed && item.assignment && item.note);
+  const coach=await api('/api/install?packageId='+fixture.install);
+  assert.equal(coach.reviews.find(row=>row.athleteId===fixture.athlete&&row.itemId===item.itemId).acknowledged,true);
+  report.stages.push({label:`${label}: player assigned material, privacy and coach-visible acknowledgement verified`,verifiedAt:new Date().toISOString()});
+}
+
 try {
   await start(snapshots[0], 'candidate');
   await api('/api/session', null, undefined, 'GET', 401);
@@ -1355,6 +1384,7 @@ try {
   );
   await verifySaved('candidate');
   await verifyStaffAccess('candidate', true);
+  await verifyPlayerAccess('candidate', true);
   await stop();
   await start(
     snapshots[1] ?? snapshots[0],
@@ -1365,6 +1395,7 @@ try {
   await start(snapshots[0], 'forward again');
   await verifySaved('forward again');
   await verifyStaffAccess('forward again');
+  await verifyPlayerAccess('forward again');
   const access = await api('/api/team-access');
   const member = access.memberships.find((row) => row.user_id === 'local-release-owner-staff');
   await api('/api/team-access', 'a', { kind: 'membership', id: member.id, version: member.version }, 'PATCH');

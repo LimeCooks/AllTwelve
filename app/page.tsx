@@ -22,6 +22,7 @@ import { PrintoutsWorkspace } from '@/components/printouts-workspace';
 import { MessagesWorkspace } from '@/components/messages-workspace';
 import { BackupControls } from '@/components/backup-controls';
 import { TeamAccessControls } from '@/components/team-access-controls';
+import { PlayerWorkspace } from '@/components/player-workspace';
 import { SidelineWorkspace } from '@/components/sideline-workspace';
 import { parseDepthLayouts } from '@/lib/depth-layout';
 import {
@@ -410,7 +411,9 @@ function MediaUploadControl({
 export default function Home() {
   return (
     <WorkspaceGate>
-      {(session) => (
+      {(session) => session.mode === 'pilot' && session.team?.role === 'player' ? (
+        <PlayerWorkspace key={session.team.id} session={session} />
+      ) : (
         <WorkspaceHome
           key={`${session.team?.id}:${session.team?.role ?? 'prototype'}`}
           session={session}

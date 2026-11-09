@@ -744,6 +744,22 @@
 .team-access-controls form { display: grid; gap: 12px; }
 .team-access-controls details > div { padding: 14px 0; border-bottom: 1px solid #314151; }
 .team-access-controls summary { cursor: pointer; padding: 8px 0; }
+.player-learning-workspace { min-height: 100dvh; padding: clamp(16px, 3vw, 40px); background: #0c1721; color: #e5e9ef; }
+.player-learning-workspace > * { max-width: 1100px; margin-inline: auto; }
+.player-learning-header, .player-learning-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-block: 12px; }
+.player-learning-header h1 { font-size: clamp(26px, 5vw, 38px); font-weight: 750; }
+.player-learning-workspace p { line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.player-learning-workspace details { padding: 16px; border: 1px solid #334454; border-radius: 8px; margin-block: 16px; }
+.player-learning-workspace summary { cursor: pointer; font-weight: 650; }
+.player-learning-list button { display: grid; width: 100%; text-align: left; gap: 5px; padding: 14px; margin-top: 10px; border-radius: 8px; background: #1a2b39; }
+.player-learning-list button[aria-pressed=true] { outline: 2px solid #83b6d4; }
+.player-learning-material .pd-field { display: block; width: 100%; max-height: 65dvh; margin-block: 16px; }
+.player-learning-material h2 { font-size: 24px; font-weight: 700; }
+.player-learning-workspace [role=alert] { color: #ffc2ba; }
+.player-learning-workspace [role=status] { color: #a6d6bc; }
+.player-learning-workspace .player-learning-done { color: #a6d6bc; padding-block: 10px; font-weight: 650; }
+.player-learning-workspace button { border: 1px solid #455d70; color: #edf4f8; background: #29495d; }
+.player-learning-empty { padding: 32px 0; }
 .settings-form input, .settings-form [data-slot="native-select-wrapper"] { width: 100%; background: white; }
 .colour-row { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
 .colour-chip { display: grid; width: 32px; height: 32px; place-items: center; border: 3px solid white; border-radius: 50%; box-shadow: 0 0 0 1px #d8d2c8; color: white; }

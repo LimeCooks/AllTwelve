@@ -150,6 +150,10 @@ const onboarding = await import(
 );
 const teamAccess = await import(await moduleUrl('../app/api/team-access/route.ts', replacements));
 const teamInvitations = await import(await moduleUrl('../app/api/team-invitations/route.ts', replacements));
+const playerLearningUrl = await moduleUrl('../lib/player-learning.ts', replacements);
+const playerLearningApi = await import(await moduleUrl('../app/api/player-learning/route.ts', [
+  ["'@/lib/player-learning'", JSON.stringify(playerLearningUrl)], ...replacements,
+]));
 const playbooks = await import(
   await moduleUrl('../app/api/playbooks/route.ts', replacements)
 );
@@ -4394,5 +4398,95 @@ test('a late source edit cannot create or replace a practice from an outdated ga
     source = (await (await gameplansApi.GET()).json()).plans.find(
       (plan) => plan.id === source.id,
     );
+  }
+});
+
+test('linked player receives only own published installs and acknowledgements stay bound and versioned', async () => {
+  const oldIdentity = globalThis.privateTestIdentity, oldTeam = globalThis.privateTestWorkspaceId;
+  const owner = { id: 'learning-owner', email: 'learning-owner@example.test', name: 'Learning owner' };
+  const player = { id: 'learning-player', email: 'learning-player@example.test', name: 'Learning player' };
+  const json = async (response, expected=200) => { assert.equal(response.status, expected, JSON.stringify(await response.clone().json())); return response.json(); };
+  try {
+    globalThis.privateTestWorkspaceId = '';
+    globalThis.privateTestIdentity = null;
+    assert.equal((await playerLearningApi.GET()).status, 401);
+    globalThis.privateTestIdentity = owner;
+    await json(await onboarding.POST(request({ name:'Player delivery test', season:'2026' })),201);
+    const team=(await json(await session.GET())).team;
+    const db=await getDatabase();
+    const roster=[];
+    for (const [name,unit] of [['Bound','Defence'],['Other','Defence'],['Offence','Offence']]) {
+      roster.push((await json(await athletesApi.POST(request({ firstName:name,lastName:'Player',position:'DB',unit,graduationYear:12,weightLb:180,email:name.toLowerCase()+'-delivery@example.test',staffNote:'DO NOT EXPOSE THIS STAFF NOTE' })),201)).athlete);
+    }
+    const book=await json(await playbooks.POST(request({kind:'book',name:'Delivery defence',side:'Defence'})),201);
+    const saved=await json(await playbooks.POST(request({kind:'play',playbookId:book.createdId,name:'Published teaching'})),201);
+    const play=saved.plays.find(p=>p.id===saved.createdId);
+    const draft=await json(await playbooks.POST(request({kind:'play',playbookId:book.createdId,name:'SECRET DRAFT PLAY'})),201);
+    const pack=(await json(await installs.POST(request({kind:'package',name:'Any cadence teaching',unit:'Defence',dueAt:''})),201)).package;
+    await json(await installs.POST(request({packageId:pack.id,playId:play.id})));
+    await json(await installs.PATCH(request({kind:'publish',packageId:pack.id})));
+    const draftPack=(await json(await installs.POST(request({kind:'package',name:'SECRET DRAFT INSTALL',unit:'Defence'})),201)).package;
+    const draftItems=await json(await installs.POST(request({packageId:draftPack.id,playId:draft.createdId})));
+    sqlite.prepare('INSERT INTO athlete_reviews(id,install_item_id,athlete_id) VALUES(?,?,?)').run('draft-review-must-stay-hidden',draftItems.items[0].id,roster[0].id);
+    assert.equal((await playerLearningApi.GET()).status,403,'owner cannot impersonate a player');
+    const invitation=await json(await teamAccess.POST(request({id:crypto.randomUUID(),email:player.email,role:'player',athleteId:roster[0].id})),201);
+    globalThis.privateTestIdentity=player;
+    const pending=(await json(await teamInvitations.GET())).invitations.find(i=>i.id===invitation.invitation.id);
+    await json(await teamInvitations.POST(request({id:pending.id,version:pending.version})));
+    globalThis.privateTestWorkspaceId=team.id;
+    const learning=await json(await playerLearningApi.GET());
+    assert.equal(learning.athlete.id,roster[0].id);
+    assert.equal(learning.items.length,1);
+    assert.equal(learning.items[0].play.id,play.id);
+    assert.equal(learning.items[0].play.players.length,play.players.length);
+    assert.equal(learning.items[0].package.dueAt,'');
+    assert.ok(!JSON.stringify(learning).includes('SECRET'));
+    assert.ok(!JSON.stringify(learning).includes('DO NOT EXPOSE'));
+    assert.ok(!JSON.stringify(learning).includes(roster[1].id));
+    assert.equal((await athletesApi.GET()).status,403);
+    assert.equal((await playbooks.GET()).status,403);
+    const item=learning.items[0];
+    assert.equal((await playerLearningApi.PATCH(request({id:item.id,version:item.version,kind:'reviewed',athleteId:roster[1].id}))).status,400);
+    const otherReview=sqlite.prepare('SELECT id FROM athlete_reviews WHERE athlete_id=? AND install_item_id=?').get(roster[1].id,item.itemId);
+    assert.equal((await playerLearningApi.PATCH(request({id:otherReview.id,version:item.version,kind:'reviewed'}))).status,404);
+    const reviewed=await json(await playerLearningApi.PATCH(request({id:item.id,version:item.version,kind:'reviewed'})));
+    assert.equal(reviewed.items[0].reviewed,true);
+    const timestamp=sqlite.prepare('SELECT reviewed_at FROM athlete_reviews WHERE id=?').get(item.id).reviewed_at;
+    await json(await playerLearningApi.PATCH(request({id:item.id,version:item.version,kind:'reviewed'})));
+    assert.equal(sqlite.prepare('SELECT reviewed_at FROM athlete_reviews WHERE id=?').get(item.id).reviewed_at,timestamp);
+    assert.equal((await playerLearningApi.PATCH(request({id:item.id,version:item.version,kind:'assignment'}))).status,409);
+    let current=reviewed.items[0];
+    const originalPrepare=database.prepare;
+    let revokeDuringWrite=false;
+    database.prepare=function(query) {
+      if (query.startsWith('UPDATE athlete_reviews SET assignment_acknowledged_at=')) {
+        revokeDuringWrite=true;
+        sqlite.prepare("UPDATE team_memberships SET status='revoked' WHERE team_id=? AND user_id=?").run(team.id,player.id);
+      }
+      return originalPrepare.call(this,query);
+    };
+    try {
+      assert.equal((await playerLearningApi.PATCH(request({id:item.id,version:current.version,kind:'assignment'}))).status,409);
+      assert.equal(sqlite.prepare('SELECT assignment_acknowledged_at FROM athlete_reviews WHERE id=?').get(item.id).assignment_acknowledged_at,null);
+    } finally {
+      database.prepare=originalPrepare;
+      sqlite.prepare("UPDATE team_memberships SET status='active' WHERE team_id=? AND user_id=?").run(team.id,player.id);
+    }
+    assert.equal(revokeDuringWrite,true);
+    for (const kind of ['assignment','note']) {
+      current=(await json(await playerLearningApi.PATCH(request({id:item.id,version:current.version,kind})))).items[0];
+    }
+    globalThis.privateTestIdentity=owner;
+    const coach=await json(await installs.GET(new Request('https://pilot.test/api/install?packageId='+pack.id)));
+    assert.equal(coach.reviews.find(r=>r.athleteId===roster[0].id).acknowledged,true);
+    assert.equal(coach.reviews.find(r=>r.athleteId===roster[1].id).acknowledged,false);
+    const membership=(await json(await teamAccess.GET())).memberships.find(m=>m.user_id===player.id);
+    await json(await teamAccess.PATCH(request({kind:'membership',id:membership.id,version:membership.version})));
+    globalThis.privateTestIdentity=player;
+    assert.equal((await playerLearningApi.GET()).status,403);
+    assert.equal((await playerLearningApi.PATCH(request({id:item.id,version:current.version,kind:'reviewed'}))).status,403);
+  } finally {
+    globalThis.privateTestIdentity=oldIdentity;
+    globalThis.privateTestWorkspaceId=oldTeam;
   }
 });
