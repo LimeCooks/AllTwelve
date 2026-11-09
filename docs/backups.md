@@ -55,3 +55,8 @@ The actual-handler tests cover old snapshots after replacement/expiry, paging, l
 
 
 Owner preference, November 8: keep backups manual. No recurring schedule or background tool connection was enabled.
+
+
+## Owner download confirmation
+
+The owner confirmed that preparing a manual backup in the real private pilot and downloading it saved the ZIP to their device. This is physical owner evidence for the download flow, distinct from the disposable lab's cloud recovery exercise. The owner's downloaded file was not uploaded to or restored into the lab. Backups remain manual; no schedule or background connection was enabled.
