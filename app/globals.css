@@ -2203,3 +2203,31 @@ html { background: #f4f7fb; }
 .gameplan-layout-focused .objective-grid strong { font-size: 14px; }
 .gameplan-layout-focused .objective-grid p, .gameplan-layout-focused .objective-grid small { font-size: 13px; line-height: 1.5; }
 .gameplan-layout-focused .call-sheet-builder { min-height: 230px; }
+
+.practice-print-dialog[data-slot="dialog-content"] { width: min(760px, calc(100vw - 32px)); max-width: min(760px, calc(100vw - 32px)); }
+.practice-print-options { border: 1px solid #34465b; border-radius: 10px; padding: 12px; }
+.practice-print-options summary { cursor: pointer; font-weight: 600; }
+.practice-print-options > div { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding-top: 12px; }
+.practice-print-options label { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.practice-paper-preview { background: #fff; color: #172c40; border: 1px solid #d2d9df; border-radius: 4px; padding: 24px; overflow-wrap: anywhere; }
+.practice-paper-preview h2 { font-size: 23px; line-height: 1.25; margin: 8px 0; }
+.practice-paper-preview > p, .practice-paper-preview small { color: #526373; font-size: 12px; line-height: 1.5; margin: 6px 0; }
+.practice-paper-preview > section { padding: 16px 0; border-top: 1px solid #d2d9df; }
+.practice-paper-preview h3 { font-size: 16px; margin: 0 0 6px; }
+.practice-paper-preview section p { font-size: 13px; line-height: 1.5; }
+.practice-paper-preview .practice-print-focus { white-space: pre-wrap; margin-top: 8px; }
+.practice-paper-preview .practice-print-warning { color: #7b3c15; font-weight: 600; }
+.practice-pdf-ready { display: flex; gap: 12px; flex-wrap: wrap; border: 1px solid #477766; padding: 12px; border-radius: 10px; }
+.practice-pdf-ready a { text-decoration: underline; }
+.practice-print-error { border: 1px solid #b68574; border-radius: 10px; padding: 12px; }
+.practice-print-error p { margin-bottom: 10px; }
+@media (max-width: 600px) {
+  .practice-paper-preview { padding: 16px; }
+  .practice-print-options > div { flex-direction: column; align-items: flex-start; }
+}
+.printouts-material { display: grid; gap: 6px; max-width: 360px; margin-bottom: 18px; font-size: 14px; }
+.practice-print-library-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin: 18px 0; }
+.practice-print-library-controls > label { display: grid; gap: 6px; flex: 1; min-width: min(100%, 240px); }
+.practice-print-dialog[data-slot="dialog-content"] { display: flex; flex-direction: column; }
+.practice-paper-preview { max-height: min(45dvh, 460px); min-height: 100px; overflow-y: auto; flex: 1 1 auto; }
+.practice-print-dialog > :not(.practice-paper-preview) { flex-shrink: 0; }

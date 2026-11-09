@@ -6,7 +6,8 @@ import {
   type FilmClipRecord,
   type FilmPayload,
 } from '@/lib/film-data';
-import type { PracticeGameplanSource } from '@/lib/practice-generation';
+import type { PracticePlanRecord } from '@/lib/practice-print';
+import { PracticePrintout } from '@/components/practice-printout';
 import { GameplanWorkspace } from '@/components/gameplan-workspace';
 import {
   readGameplans,
@@ -1995,6 +1996,7 @@ function ModuleView({
   if (view === 'Printouts')
     return (
       <PrintoutsWorkspace
+        teamName={teamSettings.teamName}
         onNavigate={onNavigate}
         onEditingChange={onPlayEditingChange}
       />
@@ -2082,6 +2084,7 @@ function ModuleView({
   if (view === 'Practice Plans')
     return (
       <PracticePlansView
+        teamName={teamSettings.teamName}
         onOpenGameplan={onOpenGameplan}
         initialGameplanId={initialPracticeGameplanId}
         onEditingChange={onPlayEditingChange}
@@ -7909,26 +7912,17 @@ function CalendarView({
   );
 }
 
-type PracticePlanRecord = {
-  version: string;
-  id: string;
-  gameId: string | null;
-  title: string;
-  practiceDate: string;
-  durationMinutes: number;
-  blocks: string[][];
-  generated: boolean;
-  gameplanSource?: PracticeGameplanSource | null;
-};
 const initialPracticeBlocks: string[][] = [];
 
 function PracticePlansView({
+  teamName,
   onOpenGameplan,
   initialGameplanId = '',
   onNavigate,
   onNotify,
   onEditingChange,
 }: {
+  teamName: string;
   onOpenGameplan: (id: string) => void;
   initialGameplanId?: string;
   onNavigate: (view: string) => void;
@@ -7994,12 +7988,13 @@ function PracticePlansView({
   >('loading');
   const [practiceRetry, setPracticeRetry] = useState(0);
   const [practiceBusy, setPracticeBusy] = useState(false);
+  const [practicePrintBusy, setPracticePrintBusy] = useState(false);
   const [replacePracticeOpen, setReplacePracticeOpen] = useState(false);
   const practiceLock = useRef(false);
   useEffect(() => {
-    onEditingChange(practiceFormDirty || practiceBusy);
+    onEditingChange(practiceFormDirty || practiceBusy || practicePrintBusy);
     const guard = (event: BeforeUnloadEvent) => {
-      if (practiceFormDirty || practiceBusy) {
+      if (practiceFormDirty || practiceBusy || practicePrintBusy) {
         event.preventDefault();
         event.returnValue = '';
       }
@@ -8009,7 +8004,7 @@ function PracticePlansView({
       onEditingChange(false);
       window.removeEventListener('beforeunload', guard);
     };
-  }, [practiceFormDirty, practiceBusy, onEditingChange]);
+  }, [practiceFormDirty, practiceBusy, practicePrintBusy, onEditingChange]);
   const closePracticeForm = () => {
     if (practiceBusy) return;
     if (practiceFormDirty) {
@@ -8022,7 +8017,8 @@ function PracticePlansView({
     setEditingSegment(null);
   };
   const mutatePractice = async (action: () => Promise<void>) => {
-    if (practiceLock.current || practiceLoad !== 'ready') return;
+    if (practiceLock.current || practicePrintBusy || practiceLoad !== 'ready')
+      return;
     practiceLock.current = true;
     setPracticeBusy(true);
     setPracticeSaveError('');
@@ -8338,7 +8334,7 @@ function PracticePlansView({
   return (
     <section
       className={`module-surface practice-surface ${playerView ? 'player-preview' : ''}`}
-      inert={practiceBusy}
+      inert={practiceBusy || practicePrintBusy}
     >
       <ModuleHeader
         eyebrow="Team preparation"
@@ -8495,6 +8491,13 @@ function PracticePlansView({
         </Button>
         <details className="practice-options">
           <summary>Plan options</summary>
+          <PracticePrintout
+            plan={selectedPlan}
+            teamName={teamName}
+            disabled={practiceBusy || practiceFormDirty}
+            onBusyChange={setPracticePrintBusy}
+            onReload={() => setConfirmPracticeReload(true)}
+          />
           <Button
             disabled={!selectedPlan}
             onClick={() => setConfirmPracticeDelete(true)}

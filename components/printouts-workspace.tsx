@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { PracticePrintLibrary } from '@/components/practice-print-library';
 import { Download, Plus, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,6 +23,56 @@ import type { Library } from '@/lib/play-designer';
 import type { TeachingPdfOptions } from '@/lib/teaching-pdf';
 
 export function PrintoutsWorkspace({
+  teamName,
+  onNavigate,
+  onEditingChange,
+}: {
+  teamName: string;
+  onNavigate: (view: string) => void;
+  onEditingChange: (editing: boolean) => void;
+}) {
+  const [material, setMaterial] = useState('plays'),
+    [busy, setBusy] = useState(false);
+  const changing = useCallback(
+    (value: boolean) => {
+      setBusy(value);
+      onEditingChange(value);
+    },
+    [onEditingChange],
+  );
+  return (
+    <div>
+      <label className="printouts-material">
+        Print material
+        <NativeSelect
+          aria-label="Print material"
+          value={material}
+          disabled={busy}
+          onChange={(event) => setMaterial(event.target.value)}
+        >
+          <NativeSelectOption value="plays">Saved plays</NativeSelectOption>
+          <NativeSelectOption value="practice">
+            Practice scripts
+          </NativeSelectOption>
+        </NativeSelect>
+      </label>
+      {material === 'practice' ? (
+        <PracticePrintLibrary
+          teamName={teamName}
+          onNavigate={onNavigate}
+          onBusyChange={changing}
+        />
+      ) : (
+        <SavedPlayPrintouts
+          onNavigate={onNavigate}
+          onEditingChange={changing}
+        />
+      )}
+    </div>
+  );
+}
+
+function SavedPlayPrintouts({
   onNavigate,
   onEditingChange,
 }: {
