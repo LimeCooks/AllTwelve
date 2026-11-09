@@ -12,6 +12,7 @@ export type TeamPermission =
   | 'settings.write'
   | 'backup.manage'
   | 'owner.private'
+  | 'communication.use'
   | 'player.assigned.read'
   | 'player.own-review.write';
 export type WorkspaceGrant = {
@@ -34,12 +35,26 @@ const permissions = new Map<TeamRole, ReadonlySet<TeamPermission>>([
       'settings.write',
       'backup.manage',
       'owner.private',
+      'communication.use',
     ]),
   ],
-  ['staff', new Set(['team.read', 'coaching.read', 'coaching.write'])],
+  [
+    'staff',
+    new Set([
+      'team.read',
+      'coaching.read',
+      'coaching.write',
+      'communication.use',
+    ]),
+  ],
   [
     'player',
-    new Set(['team.read', 'player.assigned.read', 'player.own-review.write']),
+    new Set([
+      'team.read',
+      'player.assigned.read',
+      'player.own-review.write',
+      'communication.use',
+    ]),
   ],
 ]);
 export function hasTeamPermission(role: TeamRole, permission: TeamPermission) {

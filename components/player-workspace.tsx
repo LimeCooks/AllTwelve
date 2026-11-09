@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { PlayField } from '@/components/play-field';
+import { TeamMessagesWorkspace } from '@/components/team-messages-workspace';
 import { workspaceFetch as fetch } from '@/lib/workspace-fetch';
 import type { PlayerLearning, PlayerLearningItem } from '@/lib/player-learning';
 import type { WorkspaceSession } from '@/components/workspace-gate';
@@ -35,6 +36,8 @@ function readPayload(raw: unknown, athleteId: string): PlayerLearning {
 }
 
 export function PlayerWorkspace({ session }: { session: WorkspaceSession }) {
+  const [screen, setScreen] = useState<'learning' | 'messages'>('learning');
+  const [messageEditing, setMessageEditing] = useState(false);
   const [data, setData] = useState<PlayerLearning | null>(null);
   const [selectedId, setSelectedId] = useState('');
   const [busy, setBusy] = useState(false);
@@ -135,6 +138,25 @@ export function PlayerWorkspace({ session }: { session: WorkspaceSession }) {
   const complete =
     data?.items.filter((row) => row.reviewed && row.assignment && row.note)
       .length ?? 0;
+  if (screen === 'messages')
+    return (
+      <main className="player-learning-workspace">
+        <header className="player-learning-header">
+          <div>
+            <span className="eyebrow">{session.team?.name}</span>
+            <p>{session.user.name} · Player account</p>
+          </div>
+          <Button
+            variant="outline"
+            disabled={messageEditing}
+            onClick={() => setScreen('learning')}
+          >
+            Your installs
+          </Button>
+        </header>
+        <TeamMessagesWorkspace onEditingChange={setMessageEditing} />
+      </main>
+    );
   return (
     <main className="player-learning-workspace">
       <header className="player-learning-header">
@@ -148,6 +170,13 @@ export function PlayerWorkspace({ session }: { session: WorkspaceSession }) {
         </a>
       </header>
       <div className="player-learning-toolbar">
+        <Button
+          variant="outline"
+          disabled={busy}
+          onClick={() => setScreen('messages')}
+        >
+          Messages
+        </Button>
         <span>
           {data
             ? `${complete} of ${data.items.length} assignments complete`

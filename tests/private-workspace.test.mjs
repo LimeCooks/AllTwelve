@@ -152,6 +152,10 @@ const onboarding = await import(
 const teamAccess = await import(await moduleUrl('../app/api/team-access/route.ts', replacements));
 const teamInvitations = await import(await moduleUrl('../app/api/team-invitations/route.ts', replacements));
 const playerLearningUrl = await moduleUrl('../lib/player-learning.ts', replacements);
+const teamMessagesUrl = await moduleUrl('../lib/team-messages.ts', replacements);
+const teamMessagesApi = await import(await moduleUrl('../app/api/team-messages/route.ts',[
+  ["'@/lib/team-messages'",JSON.stringify(teamMessagesUrl)],...replacements,
+]));
 const playerLearningApi = await import(await moduleUrl('../app/api/player-learning/route.ts', [
   ["'@/lib/player-learning'", JSON.stringify(playerLearningUrl)], ...replacements,
 ]));
@@ -4542,4 +4546,92 @@ test('raw media cannot replace or delete saved film and simultaneous uploads pre
     await bucket.delete(`teams/${db.teamId}/${raceKey}`);
     globalThis.privateTestIdentity=previous;
   }
+});
+
+test('team conversations deliver across roles while private threads, authorship, retries and revocation stay scoped', async () => {
+  const oldIdentity=globalThis.privateTestIdentity,oldTeam=globalThis.privateTestWorkspaceId;
+  const owner={id:'message-team-owner',email:'message-owner@example.test',name:'Message owner'};
+  const staff={id:'message-team-staff',email:'message-staff@example.test',name:'Message staff'};
+  const player={id:'message-team-player',email:'message-player@example.test',name:'Message player'};
+  const outsider={id:'message-other-owner',email:'message-other@example.test',name:'Other owner'};
+  const read=async(response,status=200)=>{assert.equal(response.status,status,JSON.stringify(await response.clone().json()));return response.json();};
+  const get=(id='',before='')=>teamMessagesApi.GET(new Request('https://pilot.test/api/team-messages?'+new URLSearchParams({conversationId:id,before})));
+  const post=body=>teamMessagesApi.POST(request(body));
+  try {
+    globalThis.privateTestWorkspaceId='';globalThis.privateTestIdentity=null;assert.equal((await get()).status,401);
+    globalThis.privateTestIdentity=owner;await read(await onboarding.POST(request({name:'Messages team',season:'2026'})),201);
+    const team=(await read(await session.GET())).team;
+    const athlete=(await read(await athletesApi.POST(request({firstName:'Linked',lastName:'Player',position:'FS',unit:'Defence',graduationYear:12,weightLb:180,email:'linked-message-player@example.test',staffNote:'PRIVATE ROSTER NOTE'})),201)).athlete;
+    for(const [person,role] of [[staff,'staff'],[player,'player']]) {
+      globalThis.privateTestIdentity=owner;
+      const created=await read(await teamAccess.POST(request({id:crypto.randomUUID(),email:person.email,role,...(role==='player'?{athleteId:athlete.id}:{})})),201);
+      globalThis.privateTestIdentity=person;
+      const invite=(await read(await teamInvitations.GET())).invitations.find(row=>row.id===created.invitation.id);
+      await read(await teamInvitations.POST(request({id:invite.id,version:invite.version})));
+    }
+    globalThis.privateTestIdentity=owner;
+    await read(await messagesApi.POST(request({action:'create',id:'owner-only-message-notes',name:'SECRET PERSONAL NOTES'})));
+    for(const malformed of [null,42,'invalid',[]]) assert.equal((await post(malformed)).status,400);
+    const channelRequest={action:'create',id:crypto.randomUUID(),kind:'channel',name:'Team announcements'};
+    const channel=(await read(await post(channelRequest))).selected;
+    assert.equal((await read(await post(channelRequest))).selected.id,channel.id);
+    const msg={action:'send',id:crypto.randomUUID(),conversationId:channel.id,text:'Practice at 4:00'};
+    const sent=await read(await post(msg));assert.equal(sent.sentId,msg.id);assert.equal(sent.messages[0].authorId,owner.id);
+    assert.equal((await read(await post(msg))).messages.length,1);
+    assert.equal((await post({...msg,text:'Changed retry'})).status,409);
+    assert.equal((await post({...msg,id:crypto.randomUUID(),authorName:'Forged coach'})).status,400);
+    globalThis.privateTestIdentity=player;
+    const playerView=await read(await get(channel.id));assert.equal(playerView.messages[0].text,msg.text);
+    assert.ok(!JSON.stringify(playerView).includes('SECRET PERSONAL NOTES'));
+    assert.ok(!JSON.stringify(playerView).includes('PRIVATE ROSTER NOTE'));
+    assert.deepEqual(Object.keys(playerView.people[0]).sort(),['id','name','role']);
+    assert.equal((await post({action:'create',id:crypto.randomUUID(),kind:'channel',name:'Not allowed'})).status,403);
+    await read(await post({action:'send',id:crypto.randomUUID(),conversationId:channel.id,text:'Player reply'}));
+    globalThis.privateTestIdentity=staff;
+    const dm=(await read(await post({action:'create',id:crypto.randomUUID(),kind:'direct',recipientId:player.id}))).selected;
+    await read(await post({action:'send',id:crypto.randomUUID(),conversationId:dm.id,text:'Private coaching reply'}));
+    globalThis.privateTestIdentity=owner;
+    assert.equal((await get(dm.id)).status,404,'a non-participant owner cannot open a direct thread through Messages');
+    assert.ok(!(await read(await get())).conversations.some(row=>row.id===dm.id));
+    globalThis.privateTestIdentity=player;
+    const same=(await read(await post({action:'create',id:crypto.randomUUID(),kind:'direct',recipientId:staff.id}))).selected;
+    assert.equal(same.id,dm.id,'both sides resolve to the same direct thread');
+    assert.equal((await read(await get(dm.id))).messages.length,1);
+    globalThis.privateTestIdentity=outsider;await read(await onboarding.POST(request({name:'Other messages team',season:'2026'})),201);
+    assert.equal((await get(channel.id)).status,404);
+    assert.equal((await post({action:'send',id:crypto.randomUUID(),conversationId:channel.id,text:'Intrusion'})).status,404);
+    globalThis.privateTestIdentity=owner;
+    assert.equal((await post({action:'create',id:crypto.randomUUID(),kind:'direct',recipientId:outsider.id})).status,400);
+    const db=await getDatabase();
+    const prefix='team-message-v1:'+channel.id+':';
+    const raceId=crypto.randomUUID(),racePrepare=database.prepare;let raceInserted=false;
+    database.prepare=function(sql){
+      if(!raceInserted&&sql.startsWith('INSERT INTO workspace_state')&&sql.includes("m.role='staff'")){
+        raceInserted=true;const now=new Date().toISOString();
+        sqlite.prepare('INSERT INTO workspace_state(id,team_id,state_key,value_json,updated_at) VALUES(?,?,?,?,?)').run(crypto.randomUUID(),db.teamId,'team-conversation-v1:'+raceId,JSON.stringify({id:raceId,kind:'channel',name:'Different concurrent request',participants:[],directKey:null,createdBy:staff.id,createdAt:now}),now);
+      }
+      return racePrepare.call(this,sql);
+    };
+    try{assert.equal((await post({action:'create',id:raceId,kind:'channel',name:'Requested name'})).status,409);}finally{database.prepare=racePrepare;}
+    assert.equal(raceInserted,true,'a concurrent conversation-ID collision must not report a different saved conversation as success');
+    for(let n=0;n<55;n++){
+      const id=crypto.randomUUID(),createdAt=new Date(Date.UTC(2027,0,1,0,0,n)).toISOString();
+      sqlite.prepare('INSERT INTO workspace_state(id,team_id,state_key,value_json,updated_at) VALUES(?,?,?,?,?)').run(crypto.randomUUID(),db.teamId,prefix+id,JSON.stringify({id,conversationId:channel.id,authorId:owner.id,authorName:owner.name,text:'History '+n,createdAt}),createdAt);
+    }
+    const page=await read(await get(channel.id));assert.equal(page.messages.length,50);assert.ok(page.before);
+    const earlier=await read(await get(channel.id,page.before));assert.ok(earlier.messages.length>=5);assert.equal(earlier.before,null);
+    assert.ok(!earlier.messages.some(message=>page.messages.some(other=>other.id===message.id)));
+    assert.equal((await get(dm.id,page.before)).status,404);
+    globalThis.privateTestIdentity=staff;
+    const originalPrepare=database.prepare;let injected=false;
+    database.prepare=function(sql){if(sql.startsWith('INSERT INTO workspace_state')&&sql.includes('value_json=?')){injected=true;sqlite.prepare("UPDATE team_memberships SET status='revoked' WHERE team_id=? AND user_id=?").run(team.id,staff.id);}return originalPrepare.call(this,sql);};
+    const lateId=crypto.randomUUID();
+    try{assert.equal((await post({action:'send',id:lateId,conversationId:dm.id,text:'Late send must fail'})).status,409);}finally{database.prepare=originalPrepare;}
+    assert.equal(injected,true);
+    assert.equal(sqlite.prepare('SELECT 1 FROM workspace_state WHERE team_id=? AND state_key=?').get(team.id,'team-message-v1:'+dm.id+':'+lateId),undefined);
+    assert.equal((await get(channel.id)).status,409,'revoked account with no selected team must not reopen a team');
+    globalThis.privateTestIdentity=player;
+    assert.equal((await read(await get(dm.id))).messages[0].text,'Private coaching reply');
+    assert.equal((await post({action:'send',id:crypto.randomUUID(),conversationId:dm.id,text:'Recipient inactive'})).status,409);
+  } finally {globalThis.privateTestIdentity=oldIdentity;globalThis.privateTestWorkspaceId=oldTeam;}
 });

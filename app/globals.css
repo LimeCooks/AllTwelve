@@ -760,6 +760,25 @@
 .player-learning-workspace .player-learning-done { color: #a6d6bc; padding-block: 10px; font-weight: 650; }
 .player-learning-workspace button { border: 1px solid #455d70; color: #edf4f8; background: #29495d; }
 .player-learning-empty { padding: 32px 0; }
+.team-message-tabs,.team-message-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-block: 16px; }
+.team-message-layout { display: grid; gap: 18px; }
+.team-message-list { border: 1px solid #405565; border-radius: 8px; padding: 14px; }
+.team-message-list summary { cursor: pointer; font-weight: 650; }
+.team-message-list[open] summary { margin-bottom: 12px; }
+.team-message-layout aside { display: grid; gap: 8px; }
+.team-message-layout aside button { display: grid; gap: 5px; text-align: left; padding: 14px; border: 1px solid #405565; border-radius: 8px; background: #142531; }
+.team-message-layout aside button[aria-current=page] { border-color: #83b6d4; }
+.team-message-thread { min-width: 0; border: 1px solid #405565; border-radius: 10px; padding: clamp(14px,2vw,24px); }
+.team-message-thread h2 { font-size: 22px; font-weight: 700; }
+.team-message-thread [role=log] { max-height: 50dvh; overflow: auto; margin-block: 16px; }
+.team-message-thread article { padding: 14px 0; border-bottom: 1px solid #314151; }
+.team-message-thread article header,.team-message-thread form footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; }
+.team-message-thread p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.team-message-thread time,.team-message-thread small { font-size: 13px; color: #a9bdcd; }
+.team-message-thread textarea { min-height: 100px; margin-block: 8px; }
+.team-message-create,.team-message-create label { display: grid; gap: 10px; }
+.team-messages-workspace [role=alert] { color: #ffc2ba; }
+.team-messages-workspace [role=status] { color: #a6d6bc; }
 .settings-form input, .settings-form [data-slot="native-select-wrapper"] { width: 100%; background: white; }
 .colour-row { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
 .colour-chip { display: grid; width: 32px; height: 32px; place-items: center; border: 3px solid white; border-radius: 50%; box-shadow: 0 0 0 1px #d8d2c8; color: white; }

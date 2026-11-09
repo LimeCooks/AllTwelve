@@ -261,6 +261,68 @@ try {
   report.checks.push(
     'Local staff invite/join and privacy; linked player published diagram and coach-visible acknowledgements',
   );
+  const channel = (
+    await api('prod', owners.prod, '/api/team-messages', {
+      action: 'create',
+      id: randomUUID(),
+      kind: 'channel',
+      name: 'Practice updates',
+    })
+  ).selected;
+  const messageId = randomUUID();
+  const send = {
+    action: 'send',
+    id: messageId,
+    conversationId: channel.id,
+    text: 'Bring your playbook.',
+  };
+  await api('prod', staff, '/api/team-messages', send);
+  await api('prod', staff, '/api/team-messages', send);
+  const received = await api(
+    'prod',
+    player,
+    '/api/team-messages?conversationId=' + channel.id,
+  );
+  assert.equal(received.messages.length, 1);
+  assert.equal(received.messages[0].text, send.text);
+  assert.equal(
+    received.messages[0].authorId,
+    (await api('prod', staff, '/api/session')).user.id,
+  );
+  const direct = (
+    await api('prod', staff, '/api/team-messages', {
+      action: 'create',
+      id: randomUUID(),
+      kind: 'direct',
+      recipientId: (await api('prod', player, '/api/session')).user.id,
+    })
+  ).selected;
+  await api('prod', player, '/api/team-messages', {
+    action: 'send',
+    id: randomUUID(),
+    conversationId: direct.id,
+    text: 'I reviewed my assignment.',
+  });
+  assert.equal(
+    (await api('prod', staff, '/api/team-messages?conversationId=' + direct.id))
+      .messages.length,
+    1,
+  );
+  await api(
+    'prod',
+    owners.prod,
+    '/api/team-messages?conversationId=' + direct.id,
+    undefined,
+    404,
+  );
+  assert.equal(
+    (await api('nonprod', owners.nonprod, '/api/team-messages')).conversations
+      .length,
+    0,
+  );
+  report.checks.push(
+    'Team channels deliver across roles, retries do not duplicate, direct conversations exclude other accounts and the other environment',
+  );
   for (const entry of running.values()) await entry.stop();
   running.clear();
   for (const env of ['prod', 'nonprod'])
@@ -273,6 +335,21 @@ try {
     assert.deepEqual(await readFile(env, owners[env]), bytes[env]);
   }
   learning = await api('prod', player, '/api/player-learning');
+  assert.equal(
+    (
+      await api(
+        'prod',
+        player,
+        '/api/team-messages?conversationId=' + channel.id,
+      )
+    ).messages[0].id,
+    messageId,
+  );
+  assert.equal(
+    (await api('prod', staff, '/api/team-messages?conversationId=' + direct.id))
+      .messages[0].text,
+    'I reviewed my assignment.',
+  );
   assert.ok(
     learning.items[0].reviewed &&
       learning.items[0].assignment &&

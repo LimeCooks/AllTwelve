@@ -19,7 +19,7 @@ import {
 } from '@/lib/named-gameplans';
 import { CalendarAvailability } from '@/components/calendar-availability';
 import { PrintoutsWorkspace } from '@/components/printouts-workspace';
-import { MessagesWorkspace } from '@/components/messages-workspace';
+import { TeamMessagesWorkspace } from '@/components/team-messages-workspace';
 import { BackupControls } from '@/components/backup-controls';
 import { TeamAccessControls } from '@/components/team-access-controls';
 import { PlayerWorkspace } from '@/components/player-workspace';
@@ -187,7 +187,7 @@ const workspaceNavigation = [
 
 const focusableTools = new Set(['Film Room', 'Sideline', 'Playbook']);
 const playerAllowedViews = new Set(['Home', 'Messages', 'Install']);
-const ownerOnlyViews = new Set(['Settings', 'Messages', 'Sideline']);
+const ownerOnlyViews = new Set(['Settings', 'Sideline']);
 
 type NoticeTone = 'success' | 'info' | 'warning' | 'error';
 type Notify = (message: string, tone?: NoticeTone) => void;
@@ -2137,7 +2137,7 @@ function ModuleView({
       />
     );
   if (view === 'Messages')
-    return <MessagesWorkspace onEditingChange={onPlayEditingChange} />;
+    return <TeamMessagesWorkspace onEditingChange={onPlayEditingChange} />;
   if (view === 'Install')
     return (
       <InstallWorkspace<StudioPlay>

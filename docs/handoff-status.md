@@ -1,5 +1,11 @@
 # Private pilot handoff status — 8 November 2026
 
+## Working environment update — 9 November 2026
+
+The owner has chosen local Prod and Non-Prod while arranging future independent hosting and sign-in. The old internet pilot is no longer the working destination and has not been reset or removed. See [local-pilot.md](local-pilot.md) for running, data separation, local account testing and promotion. The historical hosted evidence below does not establish current local physical-device access: these local addresses work only on this PC.
+
+Connected team channels and direct conversations are implemented in local Non-Prod. The owner's private journal remains owner-only. Verification includes 119 tests, actual disposable dual-Worker delivery/isolation and restart persistence, and staff/player browser checks at desktop and phone viewport sizes. This is not a new physical-phone verification. Prod retains its prior fixed build until deliberate promotion. Quizzes remain WIP; independent internet hosting and real email authentication remain deferred.
+
 The goal remains open. A deployed site, green tests, or a narrow module check does not establish a polished end-to-end coaching product.
 
 | Requirement | Current evidence | What is still needed |

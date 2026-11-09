@@ -38,6 +38,14 @@ Each environment has separate identities and signed browser cookies. Choosing an
 
 These selectors are local test tooling only; they are not a replacement for managed authentication on an internet-facing deployment.
 
+## Team conversations (Non-Prod)
+
+Messages now supports team channels and direct conversations between connected accounts. Coaches create channels; active coaches and linked players can read and reply. Players open Messages from Your installs. Choose Refresh messages to check for new replies; email, push notifications and automatic live updates are not enabled.
+
+Direct conversations appear only for their two participants in Messages. Team owners retain full team backup access, including conversation records; this is not end-to-end encrypted messaging. Revoking access prevents further use, and a remaining participant can still read the prior conversation. Messages and files persist in each environment's separate local storage.
+
+The owner's earlier private journal stays under Personal saved notes and is not shared with staff or players. Unsent message drafts stay while changing conversations in the same page; leaving the page warns before losing them. They are not permanent saved drafts.
+
 ## Changes and promotion
 
 ```text

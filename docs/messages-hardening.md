@@ -12,4 +12,14 @@ Validation: 40 automated tests pass. Conversation integration tests exercise rea
 
 The release rehearsal also saves a private conversation/message, retries it without duplication, and reads the preserved record across candidate/rollback/forward transitions and full backup verification. The previous build has no UI for this new record; it retains the data and the forward build exposes it again.
 
-Remaining: staff/player membership, explicit conversation access policies, invitations, notifications, attachments, reactions, message editing/deletion and delivery/read receipts are not implemented by this release. Before enabling other team accounts, define visibility for these owner-private records and enforce it server-side. Private saved messages are not a replacement for those full communication workflows, which remain part of the broader handoff work.
+The preceding notes describe the original owner-private journal, which is retained separately rather than shared with new team members.
+
+## Connected team conversations — local Non-Prod, 9 November 2026
+
+`/api/team-messages` now supports team channels and two-member direct conversations under verified active team access. Coaches create channels. Active staff and linked players can read/reply; direct conversations are visible in Messages only to their participants. People expose names, account IDs and roles, not roster health, staff notes or contact details. Team backup owners can export team-domain conversation records; this is not end-to-end encryption.
+
+Messages are append-only, server-authored, individually persisted records with stable retry IDs, a 4,000-character limit and cursor-paged history. Writes recheck membership and direct recipient access atomically. Revocation stops new messages, while the remaining active participant can read prior history. The general workspace-state API cannot open these protected records. They remain part of the existing portable domain backup.
+
+The UI has a collapsed conversation list once a thread is selected, retained per-thread drafts within the page, explicit refresh and earlier-message controls, and no claim of email, push, read receipts or live delivery. Attachments, reactions, message editing/deletion and automatic notifications remain unavailable. Future authentication migration must explicitly map verified participant identities; restoring old records does not grant former accounts team access.
+
+Evidence: `tests/private-workspace.test.mjs`, `scripts/check-local-pilot.mjs`, and `outputs/local-pilot-check-WCL3ht/report.json`; real local Worker delivery, retry deduplication, direct-thread privacy, environment isolation and restart persistence passed. Staff sending, player receipt/reply, draft switching and phone-width layout were also checked through the browser against disposable records. User Prod data was not used.
