@@ -695,6 +695,7 @@ async function verifyPlayerAccess(label, create = false) {
 async function verifyMediaWrites(label) {
   const upload = async (key, bytes) => fetch(`${origin}/api/media?key=${key}`, {
     method: 'POST', headers: { ...ownerHeaders('a'), origin, 'content-type': 'video/mp4', 'x-chalktalk-upload-size': String(bytes.length) }, body: bytes,
+    signal: AbortSignal.timeout(15_000),
   });
   const bytes = Buffer.from('immutable saved video bytes');
   const key = 'film-protected-write-' + crypto.randomUUID();

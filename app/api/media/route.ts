@@ -234,7 +234,10 @@ async function uploadMedia(request: Request) {
       },
     });
     if (!stored) {
-      await fixed.readable.cancel().catch(() => {});
+      // A conditional failure need not consume the upload. Cancellation of a
+      // FixedLengthStream can wait for the sender; never hold the 409 response
+      // open while that upstream cancellation settles.
+      void fixed.readable.cancel().catch(() => {});
       throw new WorkspaceAccessError(
         'This file was uploaded on another request. Upload new film as a separate file.',
         409,
