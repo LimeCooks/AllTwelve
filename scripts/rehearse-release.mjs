@@ -194,9 +194,11 @@ async function api(
 }
 
 let processHandle;
+let workerLog = '';
 async function start(config, label) {
   console.log(`Starting ${label} against the same isolated local storage…`);
   let log = '';
+  workerLog = '';
   processHandle = spawn(
     process.execPath,
     [
@@ -222,9 +224,11 @@ async function start(config, label) {
   const child = processHandle;
   child.stdout.on('data', (chunk) => {
     log += chunk;
+    workerLog += chunk;
   });
   child.stderr.on('data', (chunk) => {
     log += chunk;
+    workerLog += chunk;
   });
   child.on('error', (error) => {
     log += error.message;
@@ -693,31 +697,44 @@ async function verifyPlayerAccess(label, create = false) {
 }
 
 async function verifyMediaWrites(label) {
-  const upload = async (key, bytes) => fetch(`${origin}/api/media?key=${key}`, {
+  const upload = async (key, bytes) => {
+    const response = await fetch(`${origin}/api/media?key=${key}`, {
     method: 'POST', headers: { ...ownerHeaders('a'), origin, 'content-type': 'video/mp4', 'x-chalktalk-upload-size': String(bytes.length) }, body: bytes,
     signal: AbortSignal.timeout(15_000),
-  });
+    });
+    await response.text();
+    return response;
+  };
   const bytes = Buffer.from('immutable saved video bytes');
   const key = 'film-protected-write-' + crypto.randomUUID();
   assert.equal((await upload(key, bytes)).status, 200);
+  console.log(`${label}: video upload finished`);
   let registered = await api('/api/film', 'a', {action:'register',storageKey:key,title:'Protected video',durationSeconds:10}, 'POST',201);
   assert.equal((await upload(key, Buffer.from('replacement'))).status,409);
-  const removed = await fetch(`${origin}/api/media?key=${key}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin}});
+  console.log(`${label}: video replacement rejected`);
+  const removed = await fetch(`${origin}/api/media?key=${key}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin},signal:AbortSignal.timeout(15_000)});
   assert.equal(removed.status,409);
-  const read = await fetch(`${origin}/api/media?key=${key}`,{headers:{...ownerHeaders('a'),range:'bytes=1-5'}});
+  await removed.text();
+  console.log(`${label}: raw deletion rejected`);
+  const read = await fetch(`${origin}/api/media?key=${key}`,{headers:{...ownerHeaders('a'),range:'bytes=1-5'},signal:AbortSignal.timeout(15_000)});
   assert.equal(read.status,206);
   assert.deepEqual(Buffer.from(await read.arrayBuffer()),bytes.subarray(1,6));
-  const erase = await fetch(`${origin}/api/film?assetId=${registered.asset.id}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin,'x-chalktalk-film-version':registered.asset.version}});
+  console.log(`${label}: protected byte range verified`);
+  const erase = await fetch(`${origin}/api/film?assetId=${registered.asset.id}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin,'x-chalktalk-film-version':registered.asset.version},signal:AbortSignal.timeout(15_000)});
   assert.equal(erase.status,200);
+  await erase.text();
+  console.log(`${label}: versioned video removal finished`);
   const raceKey='film-concurrent-write-'+crypto.randomUUID();
   const candidates=[Buffer.alloc(4096,17),Buffer.alloc(4096,29)];
   const replies=await Promise.all(candidates.map(value=>upload(raceKey,value)));
   assert.deepEqual(replies.map(response=>response.status).sort(),[200,409]);
   const winner=replies.findIndex(response=>response.status===200);
-  const actual=await fetch(`${origin}/api/media?key=${raceKey}`,{headers:ownerHeaders('a')});
+  const actual=await fetch(`${origin}/api/media?key=${raceKey}`,{headers:ownerHeaders('a'),signal:AbortSignal.timeout(15_000)});
   assert.deepEqual(Buffer.from(await actual.arrayBuffer()),candidates[winner]);
   registered=await api('/api/film','a',{action:'register',storageKey:raceKey,title:'Race winner',durationSeconds:10},'POST',201);
-  assert.equal((await fetch(`${origin}/api/film?assetId=${registered.asset.id}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin,'x-chalktalk-film-version':registered.asset.version}})).status,200);
+  const erasedRace=await fetch(`${origin}/api/film?assetId=${registered.asset.id}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin,'x-chalktalk-film-version':registered.asset.version},signal:AbortSignal.timeout(15_000)});
+  assert.equal(erasedRace.status,200);
+  await erasedRace.text();
   report.stages.push({label:`${label}: immutable video bytes, concurrent upload winner and versioned film removal verified`,verifiedAt:new Date().toISOString()});
 }
 
@@ -1437,6 +1454,7 @@ try {
 } catch (error) {
   report.status = 'failed';
   report.error = error instanceof Error ? error.message : String(error);
+  await writeFile(path.join(runDirectory, 'failed-worker.log'), workerLog);
   throw error;
 } finally {
   try {

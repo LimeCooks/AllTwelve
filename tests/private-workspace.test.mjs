@@ -4521,7 +4521,17 @@ test('raw media cannot replace or delete saved film and simultaneous uploads pre
       if(target===`teams/${db.teamId}/${raceKey}`&&!injected){injected=true;await originalPut.call(this,target,first,{httpMetadata:{contentType:'video/mp4'}})}
       return originalPut.call(this,target,body,options);
     };
-    assert.equal((await media.POST(upload(raceKey,new Uint8Array([8,8])))).status,409);
+    let incomingCancelled=false;
+    const incoming=new ReadableStream({start(controller){
+      controller.enqueue(new Uint8Array([8,8]));
+      controller.enqueue(new Uint8Array([7,7]));
+      controller.enqueue(new Uint8Array([6,6]));
+      controller.close();
+    },cancel(){incomingCancelled=true;}});
+    const raceRequest=new Request(url(raceKey),{method:'POST',headers:{'content-type':'video/mp4','x-chalktalk-upload-size':'6'},body:incoming,duplex:'half'});
+    assert.equal((await media.POST(raceRequest)).status,409);
+    assert.equal(incomingCancelled,false,'a rejected competing upload must drain rather than reset the HTTP input');
+    assert.equal((await raceRequest.body.getReader().read()).done,true);
     assert.equal(injected,true);
     assert.deepEqual(new Uint8Array(await (await media.GET(new Request(url(raceKey)))).arrayBuffer()),first);
     assert.equal((await media.DELETE(new Request(url(raceKey),{method:'DELETE'}))).status,409,'unregistered video also cannot race registration through raw deletion');

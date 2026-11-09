@@ -218,7 +218,7 @@ async function uploadMedia(request: Request) {
   // Raw file requests avoid the framework's 1 MB progressive form-action
   // parser. FixedLengthStream validates size while keeping the body streamed.
   const fixed = new FixedLengthStream(size);
-  const piping = stream.pipeTo(fixed.writable);
+  const piping = stream.pipeTo(fixed.writable, { preventCancel: true });
   // Observe streaming errors immediately, including a failed conditional put.
   void piping.catch(() => {});
   try {
@@ -238,6 +238,7 @@ async function uploadMedia(request: Request) {
       // FixedLengthStream can wait for the sender; never hold the 409 response
       // open while that upstream cancellation settles.
       void fixed.readable.cancel().catch(() => {});
+      await piping.catch(() => {});
       throw new WorkspaceAccessError(
         'This file was uploaded on another request. Upload new film as a separate file.',
         409,
@@ -246,6 +247,7 @@ async function uploadMedia(request: Request) {
     await piping;
   } catch (error) {
     void fixed.readable.cancel().catch(() => {});
+    await piping.catch(() => {});
     if (error instanceof WorkspaceAccessError) throw error;
     throw new WorkspaceAccessError(
       'The upload did not finish. Please retry.',
@@ -285,6 +287,17 @@ async function handle(
   try {
     return await action(request);
   } catch (error) {
+    // Drain an ordinary rejected upload without buffering it. Cancelling its
+    // HTTP body can reset a reused connection and break the following request.
+    if (request.body && !request.body.locked) {
+      let discarded = 0;
+      await request.body.pipeTo(new WritableStream<Uint8Array>({
+        write(chunk) {
+          discarded += chunk.byteLength;
+          if (discarded > MAX_UPLOAD_BYTES) throw new Error('Upload too large.');
+        },
+      })).catch(() => {});
+    }
     return Response.json(
       {
         error:
