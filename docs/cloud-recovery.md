@@ -1,6 +1,6 @@
 # Separate-destination cloud recovery
 
-Status: the separate owner-private recovery service has restored the disposable release-rehearsal backup in hosted D1/R2. Independent native database reads match every source row across all 19 domain tables and confirm one new owner grant. Opening the recovered data in the normal application is the next verification step. No recovery endpoint or overwrite action has been added to the live pilot.
+Status: the separate owner-private recovery service has restored the disposable release-rehearsal backup in hosted D1/R2. Independent native database reads match every source row across all 19 domain tables and confirm one new owner grant. The normal ChalkTalk application now opens that recovered team under the signed-in owner, including its defensive play and linked install. No recovery endpoint or overwrite action has been added to the live pilot.
 
 ## Local preparation
 
@@ -20,7 +20,7 @@ The manifest contains all 19 domain tables and original media metadata plus file
 
 `lib/recovery-plan.ts` validates exact current columns and tables, a single source team, consistent file totals/parts, SHA-256s, safe media keys, primitive database values, and readable saved JSON. Its D1 insert plan uses the existing foreign-key-safe table order and adds only the explicitly chosen trusted owner grant. The first statement checks for any domain or ownership rows inside the same transaction as the inserts. An existing destination, including one populated after validation, causes failure instead of merging or replacing data. D1 foreign keys must remain enabled; a missing parent must roll back the batch.
 
-The database plan is only one part of the recovery boundary. Before exposing a hosted import, the service must also authenticate the owner, stream and checksum every file, support safe interruption/retry, keep unverified data inaccessible, recheck destination emptiness atomically, and verify completion. Large-library D1/runtime capacity still needs real hosted testing. Do not call this a completed cloud recovery feature based on the local plan tests.
+The database plan is only one part of the recovery boundary. The separate hosted service implements owner authentication, streamed/checksummed files, safe interruption/retry, inaccessible unverified data, an atomic empty-destination check, and exact completion verification. Large-library D1/runtime capacity still needs real hosted testing. Do not call this a completed cloud recovery feature based on the local plan tests.
 
 ## Current evidence
 
@@ -41,3 +41,12 @@ The local real-Worker test also uploaded the first chunk of an 8 MiB-plus file, 
 After native row verification, `scripts/stage-recovered-app.mjs` stages the normal application into that lab checkout while preserving the lab Site ID. It refuses the pilot checkout or an incomplete/mismatched row audit. It does not publish, migrate data or access hosted storage; the normal source/build/private-deploy workflow is still required. Keep the lab clearly separate from the owner's real workspace.
 
 R2 integrity/conditional stream behavior follows the [official Workers API](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/). D1 batch execution remains bounded by the [official D1 limits](https://developers.cloudflare.com/d1/platform/limits/); full-limit cloud load testing and a simpler owner recovery handoff remain unfinished.
+
+
+## Recovered application check
+
+The normal application was built from committed source `c81e574` into the lab's source commit `20193211cfce5770df498187a15dd9ecd04dcf40`. The exact package passed the production-Worker restart rehearsal at `outputs/release-rehearsal-52CBEN/report.json`, then was deployed to the same recovery Site while retaining its D1/R2 bindings and already-restored data. No live-pilot deployment, database replacement, audience change or prototype migration occurred.
+
+A second independent native database read after deployment still matched every row across all 19 domain tables and the new owner grant; see `outputs/recovery-cloud-application-audit.json`. The signed-in browser opened the restored workspace directly, loaded its uploaded team image, opened Rehearsal → Rehearsal defence, and rendered the exact segmented route (`M250 650 L250 620 L290 620`), attached ellipse, opponent look, custom colours and teaching label. Install opened Corrected rehearsal install with that same linked play and diagram. The screenshot `outputs/recovery-cloud-playbook.png` shows the recovered drawing. This completes the small, separate-destination cloud/application recovery rehearsal, including the new destination's real owner sign-in.
+
+Remaining recovery handoff work: simplify the operator-assisted ZIP/manifest preparation, verify the owner's real device download flow, exercise maximum-size cloud transfers/record sets, and define retention/cleanup for backup and abandoned recovery copies. The recovery lab currently serves the normal application; the recovery-only service remains available as its prior saved source/version for a future separate empty destination. Do not deploy it over the owner's live pilot to test recovery or imply the pilot has a restore-over-live UI.

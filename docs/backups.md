@@ -16,7 +16,7 @@ A stored progress count makes copying resumable. A retry recognizes previously c
 
 The current prepared download links last 24 hours or until another backup is prepared. Completed preserved snapshots also appear in the collapsed Saved backup history panel; their recovery-copy downloads remain available after those quick links expire or are replaced. Settings shows expiry, hides expired links, and restores current preparation status across navigation and devices. Older pre-copy snapshots remain readable but are explicitly labelled as depending on original uploads; prepare a new backup to gain independent copies.
 
-Completed copy sets/manifests are retained and downloadable from Saved backup history. Preparation is intentionally manual, following the owner's November 8 preference. Automatic pruning/retention limits and an exercised cloud restore procedure are unfinished. Repeated preparation uses additional storage, and unfinished or replaced preparations can leave internal file copies until cleanup is implemented. Do not describe this as an unattended disaster-recovery service or imply that the UI can overwrite the live workspace from a retained snapshot. No hosted restore-over-live action exists.
+Completed copy sets/manifests are retained and downloadable from Saved backup history. Preparation is intentionally manual, following the owner's November 8 preference. A separate owner-private cloud recovery rehearsal now restores a disposable backup and opens it in normal ChalkTalk; see [cloud-recovery.md](cloud-recovery.md). Automatic pruning/retention limits, full-size cloud testing and a simpler owner recovery handoff remain unfinished. Repeated preparation uses additional storage, and unfinished or replaced preparations can leave internal file copies until cleanup is implemented. Do not describe this as an unattended disaster-recovery service or imply that the UI can overwrite the live workspace from a retained snapshot. No hosted restore-over-live action exists.
 
 ## Offline recovery check
 
@@ -30,7 +30,7 @@ Supply every part path for multipart backups; order does not matter. The tool ne
 
 Recovery verifies ZIP CRCs, sizes, available MD5 ETags, complete/matching parts, safe paths, schema/columns, team ownership and foreign keys. A failed attempt leaves `RESTORE_INCOMPLETE.txt`; retry into a different new directory. Never replace the live database with an offline recovery without a separate reviewed procedure.
 
-Current offline recoveries also retain SHA-256 file digests for the separate-destination recovery preparation tool. See [cloud-recovery.md](cloud-recovery.md) for its local-only preparation and validation status. A hosted recovery service has not yet been exercised or exposed.
+Current offline recoveries also retain SHA-256 file digests for the separate-destination recovery preparation tool. See [cloud-recovery.md](cloud-recovery.md) for its local-only preparation and validation status. The separate recovery lab has exercised the hosted transfer and reopened the recovered play/install in the normal application; the pilot exposes no restore-over-live action.
 
 ## Verification and limits
 
