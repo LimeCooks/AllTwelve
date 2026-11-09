@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getDatabase } from '@/db/client';
+import { getDatabase, getWorkspaceAccess } from '@/db/client';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
 
 type WorkspaceStateRow = {
@@ -22,7 +22,10 @@ export async function GET(request: NextRequest) {
     );
 
   try {
-    const database = await getDatabase();
+    const database =
+      key === 'team-settings'
+        ? (await getWorkspaceAccess('team.read')).database
+        : await getDatabase();
     const row = await database
       .prepare(
         'SELECT state_key, value_json, updated_at FROM workspace_state WHERE team_id = ? AND state_key = ?',

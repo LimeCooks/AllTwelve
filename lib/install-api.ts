@@ -1,4 +1,4 @@
-import { getDatabase, type TeamDatabase } from '@/db/client';
+import { getCoachingDatabase as getDatabase, type TeamDatabase } from '@/db/client';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
 class InstallInputError extends Error {}
 async function version(row: PackageRow) {

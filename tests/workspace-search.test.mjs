@@ -6,7 +6,7 @@ const source = await readFile(
   new URL('../lib/workspace-search.ts', import.meta.url),
   'utf8',
 );
-const code = ts.transpileModule(source, {
+const code = ts.transpileModule(source.replace("import { workspaceFetch as fetch } from '@/lib/workspace-fetch';", "const fetch = (...args) => globalThis.fetch(...args);"), {
   compilerOptions: {
     target: ts.ScriptTarget.ES2022,
     module: ts.ModuleKind.ESNext,

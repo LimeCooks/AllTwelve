@@ -158,6 +158,7 @@ const ownerHeaders = (owner) =>
     ? {
         'oai-authenticated-user-id': `local-release-owner-${owner}`,
         'oai-authenticated-user-full-name': `Local rehearsal ${owner}`,
+        'oai-authenticated-user-email': `local-release-${owner}@example.test`,
       }
     : {};
 async function api(
@@ -636,6 +637,29 @@ async function verifySaved(label) {
   console.log(
     `${label}: custom diagram, team/scout formations, install, practice, event and uploaded bytes verified.`,
   );
+}
+
+async function verifyStaffAccess(label, create = false) {
+  if (create) {
+    const id = crypto.randomUUID();
+    await api('/api/team-access', 'a', { id, email: 'local-release-staff@example.test', role: 'staff' }, 'POST', 201);
+    const pending = await api('/api/session', 'staff');
+    assert.equal(pending.team, null);
+    assert.equal(pending.canCreateTeam, false);
+    const invite = pending.invitations.find((row) => row.id === id);
+    await api('/api/team-invitations', 'b', { id, version: invite.version }, 'POST', 403);
+    await api('/api/team-invitations', 'staff', { id, version: invite.version });
+  }
+  const joined = await api('/api/session', 'staff');
+  assert.equal(joined.team.id, fixture.team);
+  assert.equal(joined.team.role, 'staff');
+  assert.ok((await api('/api/playbooks', 'staff')).plays.some((row) => row.id === fixture.play));
+  for (const path of ['/api/team-access', '/api/backups', '/api/messages', '/api/sideline', '/api/media?key=coach-profile']) {
+    await api(path, 'staff', undefined, 'GET', 403);
+  }
+  const forged = await fetch(`${origin}/api/playbooks`, { headers: { ...ownerHeaders('staff'), 'x-chalktalk-team-id': (await api('/api/session', 'b')).team.id } });
+  assert.equal(forged.status, 403);
+  report.stages.push({ label: `${label}: staff membership, owner privacy and forged-team rejection verified`, verifiedAt: new Date().toISOString() });
 }
 
 try {
@@ -1330,6 +1354,7 @@ try {
     400,
   );
   await verifySaved('candidate');
+  await verifyStaffAccess('candidate', true);
   await stop();
   await start(
     snapshots[1] ?? snapshots[0],
@@ -1339,6 +1364,12 @@ try {
   await stop();
   await start(snapshots[0], 'forward again');
   await verifySaved('forward again');
+  await verifyStaffAccess('forward again');
+  const access = await api('/api/team-access');
+  const member = access.memberships.find((row) => row.user_id === 'local-release-owner-staff');
+  await api('/api/team-access', 'a', { kind: 'membership', id: member.id, version: member.version }, 'PATCH');
+  await api('/api/playbooks', 'staff', undefined, 'GET', 409);
+  assert.equal((await api('/api/session', 'staff')).canCreateTeam, false);
   report.status = 'passed';
 } catch (error) {
   report.status = 'failed';

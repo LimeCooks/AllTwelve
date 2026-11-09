@@ -16,3 +16,7 @@ export async function requestIdentity() {
     throw new WorkspaceAccessError('Sign in to access your workspace.', 401);
   return identity;
 }
+
+export async function requestWorkspaceId() {
+  return (await headers()).get('x-chalktalk-team-id')?.trim() ?? '';
+}

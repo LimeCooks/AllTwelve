@@ -1,3 +1,4 @@
+import { workspaceFetch as fetch } from '@/lib/workspace-fetch';
 import { wrapPrintText } from '@/lib/print-layout';
 import type { PracticeGameplanSource } from '@/lib/practice-generation';
 

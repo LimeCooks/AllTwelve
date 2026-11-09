@@ -5,7 +5,7 @@ import {
 } from '@/lib/playbook-revision';
 import { prepareCreation, CreationError } from '@/lib/playbook-creation';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
-import { getDatabase, type TeamDatabase } from '@/db/client';
+import { getCoachingDatabase as getDatabase, type TeamDatabase } from '@/db/client';
 import { validatePlayDiagram } from '@/lib/validate-play';
 import { startingPlayers } from '@/lib/play-designer';
 

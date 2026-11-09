@@ -9,11 +9,30 @@ import {
 } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { bindWorkspaceScope } from '@/lib/workspace-fetch';
+import {
+  WorkspaceEntry,
+  type PendingTeamInvitation,
+} from '@/components/workspace-entry';
 
 export type WorkspaceSession = {
   mode: 'prototype' | 'pilot';
   user: { id: string; email: string; name: string };
-  team: { id: string; name?: string; season?: string } | null;
+  team: {
+    id: string;
+    name?: string;
+    season?: string;
+    role?: 'owner' | 'staff' | 'player';
+    athleteId?: string | null;
+  } | null;
+  workspaces?: {
+    id: string;
+    name: string;
+    season: string;
+    role: 'owner' | 'staff' | 'player';
+  }[];
+  invitations?: PendingTeamInvitation[];
+  canCreateTeam?: boolean;
 };
 
 const WorkspaceContext = createContext<WorkspaceSession | null>(null);
@@ -32,25 +51,51 @@ export function WorkspaceGate({
   const [error, setError] = useState('');
   const [signIn, setSignIn] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [query] = useState(() =>
+    typeof window === 'undefined' ? '' : window.location.search,
+  );
+  const requestedTeam = new URLSearchParams(query).get('team') ?? '';
+  const showInvitations = new URLSearchParams(query).has('invitations');
   const load = async () => {
     try {
-      const response = await fetch('/api/session', { cache: 'no-store' });
+      const response = await fetch(
+        '/api/session' +
+          (requestedTeam ? '?team=' + encodeURIComponent(requestedTeam) : ''),
+        { cache: 'no-store' },
+      );
       if (response.status === 401) {
         setSignIn(true);
-        return;
+        return false;
       }
       const data = (await response.json()) as WorkspaceSession & {
         error?: string;
       };
       if (!response.ok)
         throw new Error(data.error || 'Unable to open your workspace.');
+      if (
+        !data.user ||
+        typeof data.user.id !== 'string' ||
+        !data.user.id ||
+        !['prototype', 'pilot'].includes(data.mode) ||
+        (data.mode === 'pilot' &&
+          data.team &&
+          !['owner', 'staff', 'player'].includes(data.team.role ?? '')) ||
+        (data.mode === 'pilot' &&
+          (!Array.isArray(data.workspaces) || !Array.isArray(data.invitations)))
+      )
+        throw new Error(
+          'Your workspace identity could not be verified. Reload before continuing.',
+        );
+      if (data.team?.id) bindWorkspaceScope(data.team.id);
       setSignIn(false);
       setError('');
       setSession(data);
+      return true;
     } catch (err) {
       setError(
         err instanceof Error ? err.message : 'Unable to open your workspace.',
       );
+      return false;
     }
   };
   useEffect(() => {
@@ -85,11 +130,48 @@ export function WorkspaceGate({
       setBusy(false);
     }
   };
+  if (
+    session &&
+    (showInvitations ||
+      (!session.team &&
+        (Boolean(session.invitations?.length) ||
+          Boolean(session.workspaces?.length))))
+  )
+    return (
+      <WorkspaceEntry
+        session={session}
+        refreshError={error}
+        showInvitations={
+          showInvitations || Boolean(session.invitations?.length)
+        }
+        onRefresh={load}
+      />
+    );
   if (session?.team)
     return (
       <WorkspaceContext.Provider value={session}>
         {children(session)}
       </WorkspaceContext.Provider>
+    );
+  if (session?.mode === 'pilot' && session.canCreateTeam === false)
+    return (
+      <main className="workspace-welcome">
+        <section>
+          <span className="eyebrow">ChalkTalk · Private workspace</span>
+          <h1>Team access is unavailable.</h1>
+          <p>
+            Ask your team owner for a current invitation. Your account will open
+            that team's saved workspace after access is restored.
+          </p>
+          {error ? <p role="alert">{error}</p> : null}
+          <Button disabled={busy} onClick={() => void load()}>
+            Check team access
+          </Button>
+          <a href="/signout-with-chatgpt?return_to=%2F" target="_top">
+            Sign out
+          </a>
+        </section>
+      </main>
     );
   return (
     <main className="workspace-welcome">
@@ -103,6 +185,11 @@ export function WorkspaceGate({
               : 'Opening your workspace…'}
         </h1>
         {error ? <p role="alert">{error}</p> : null}
+        {error && requestedTeam ? (
+          <a href="/" target="_top">
+            Choose another workspace
+          </a>
+        ) : null}
         {signIn ? (
           <>
             <p>Sign in to open your own team’s workspace.</p>

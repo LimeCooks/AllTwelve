@@ -1,3 +1,4 @@
+import { workspaceFetch as fetch } from '@/lib/workspace-fetch';
 import type { AthleteMetrics } from '@/types/domain';
 
 export async function readRosterAvailability(

@@ -1,3 +1,4 @@
+import { workspaceFetch as fetch } from '@/lib/workspace-fetch';
 export type FilmAssetRecord = {
   version?: string;
   id: string;

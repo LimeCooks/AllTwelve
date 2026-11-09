@@ -1,6 +1,8 @@
 import { getRawDatabase } from '@/db/client';
 import { isPrototype, requestIdentity } from '@/lib/request-identity';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
+import { workspaceGrants } from '@/lib/team-permissions';
+import { hasTeamAccessHistory } from '@/lib/team-invitations';
 
 export async function POST(request: Request) {
   try {
@@ -30,6 +32,14 @@ export async function POST(request: Request) {
       return Response.json(
         { error: 'Your team already exists. Reload to open it.' },
         { status: 409 },
+      );
+    if (
+      (await workspaceGrants(database, user)).length ||
+      (await hasTeamAccessHistory(database, user))
+    )
+      throw new WorkspaceAccessError(
+        'Open your existing team or ask its owner for a current invitation instead of creating a separate workspace.',
+        409,
       );
     const teamId = crypto.randomUUID(),
       now = new Date().toISOString();

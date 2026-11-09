@@ -33,3 +33,25 @@ The private Site's hosting allowlist is a separate access boundary. Adding an ap
 | Quizzes | WIP, deferred | WIP, deferred | WIP, deferred |
 
 This file records requirements and verified gaps; it does not claim that memberships, invitations or delivery have been implemented.
+
+## Local implementation progress
+
+The unpublished access foundation now has an additive, empty identity-table migration; explicit owner/staff/player capability sets; and server-side membership selection that checks real grants, rejects foreign team hints, rejects revoked members, preserves existing owner authority, and verifies a player's athlete belongs to the same team. Owner identity remains separate from membership roles.
+
+Invitation services use the authenticated recipient's email only for the initial acceptance, then bind the stable Site user ID. No bearer link or separate password is introduced. The owner controls role/profile/expiry and explicit revocation. Creation retries use stable IDs. Pending invitations are visible only to the bound recipient; acceptance pins the reviewed revision, checks eligibility again inside an atomic transaction, and cannot replay a used invitation to reactivate revoked membership. A new owner-issued invitation is required for rejoining. Copies of the ordinary private Site URL do not grant hosting or application access and do not send email.
+
+Backup recovery was updated to keep the two new grant tables outside the 19 portable football/domain tables. Tests include actual nonempty access fixtures excluded from export, with zero invitations/memberships after restore. Recovery preparation rejects a recovered database carrying existing membership/invitation grants rather than republishing those grants to a new destination.
+
+All 108 local tests and type checking pass at this stage, including recipient mismatch, retry preservation, expired/revoked and late-revoked acceptance, stale revocation, rejoining with a new invitation, foreign team selection and athlete binding. These services are not yet connected to hosted routes or UI and the new migration is not deployed. The live pilot still runs the verified practice-printout release and remains owner-only.
+
+Remaining integration must bind every open browser tab's selected team to its API requests; a shared server preference or cookie alone could send an older tab's writes to a different team after another tab switches. Generic owner-private state, private messages/account media, backup controls and settings need explicit permission handling before staff access is enabled. Athlete removal must also account for membership/invitation dependencies. Complete actual staff sign-in/permission checks before player delivery, and keep quizzes WIP as requested.
+
+## Staff integration verification (2026-11-08)
+
+The unpublished candidate now connects the services to `/api/team-access`, `/api/team-invitations`, session discovery and recipient review/join screens. Settings → Staff & permissions allows the owner to create an email-bound staff invitation and review/revoke active access. It does not send email or alter Sites hosting access. The selected real test recipient is liam@thecooksns.com; supplying that address did not authorize sending mail or granting hosted access.
+
+Coaching APIs resolve owner/staff capabilities on every request. Settings writes, backups, owner-private messages and sideline records remain owner-only. Owner account images are also denied to staff; shared team crests remain readable. Each browser document binds its team to API requests and native media URLs; a foreign hint is rejected, and switching workspaces requires a full navigation. Athlete removal checks membership/invitation history and portable backups exclude both grant tables.
+
+All 112 tests pass, including actual route handlers for invitation create/retry/accept, wrong-recipient rejection, staff roster writes visible to the owner, owner-only denials, forged-team rejection and immediate revocation. Type checking and the production build pass. An isolated real Worker/browser test created an invitation through the owner UI, reviewed/joined through a different synthetic staff identity, opened the existing team, verified the reduced staff navigation at desktop and phone width, revoked through the owner UI, and confirmed that the staff page could no longer reopen the team. Browser testing caught and fixed the join flow blocking its own navigation with the in-flight unload guard.
+
+The new migration was applied only to disposable local storage. No real staff invitation or hosting grant has been created yet. Before release, run the complete packaged candidate/rollback/forward rehearsal with the new staff checks. Real staff sign-in and player delivery remain open handoff gates. Player invitations are not exposed in the owner UI; player-specific published-material and acknowledgement workflows still need implementation before they can be claimed usable. Quizzes remain WIP.

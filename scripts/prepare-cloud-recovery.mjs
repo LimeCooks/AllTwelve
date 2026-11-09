@@ -102,6 +102,13 @@ export async function prepareCloudRecovery({ directory, output }) {
           'The recovered columns do not match the current schema.',
         );
       if (name === 'workspace_owners') continue;
+      if (['team_invitations', 'team_memberships'].includes(name)) {
+        if (database.prepare(`SELECT 1 FROM ${name} LIMIT 1`).get())
+          throw new Error(
+            'Recovery preparation must not carry existing invitations or memberships. Restore the portable backup into a new directory first.',
+          );
+        continue;
+      }
       tables[name] = database
         .prepare(`SELECT * FROM ${name}`)
         .all()

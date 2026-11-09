@@ -1,3 +1,4 @@
+import { workspaceFetch as fetch } from '@/lib/workspace-fetch';
 export const GAMEPLAN_KEY = 'gameplan-active-v3';
 export type GameplanState = {
   filmSelection?: string;

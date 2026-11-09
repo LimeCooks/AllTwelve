@@ -1,5 +1,12 @@
 import { env } from 'cloudflare:workers';
 import { isPrototype, requestIdentity } from '@/lib/request-identity';
+import { requestWorkspaceId } from '@/lib/request-identity';
+import {
+  resolveWorkspaceGrant,
+  requireTeamPermission,
+  type TeamPermission,
+  type WorkspaceGrant,
+} from '@/lib/team-permissions';
 import { scopedDatabase, WorkspaceAccessError } from '@/lib/workspace-identity';
 export type { TeamDatabase } from '@/lib/workspace-identity';
 
@@ -216,16 +223,44 @@ export async function getRawDatabase() {
 }
 
 export async function getDatabase() {
+  return (await getWorkspaceAccess('owner.private')).database;
+}
+
+export async function getCoachingDatabase(requestedTeamId?: string) {
+  return (await getWorkspaceAccess('coaching.read', requestedTeamId)).database;
+}
+
+export async function getWorkspaceAccess(
+  permission: TeamPermission,
+  requestedTeamId?: string,
+) {
   const identity = await requestIdentity();
   const database = await getRawDatabase();
-  if (isPrototype()) return scopedDatabase(database, TEAM_ID);
-  const owner = await database
-    .prepare('SELECT team_id FROM workspace_owners WHERE user_id = ?')
-    .bind(identity.id)
-    .first<{ team_id: string }>();
-  if (!owner)
+  if (isPrototype())
+    return {
+      database: scopedDatabase(database, TEAM_ID),
+      identity,
+      grant: {
+        teamId: TEAM_ID,
+        teamName: 'Local prototype',
+        season: '',
+        role: 'owner',
+        userId: identity.id,
+        athleteId: null,
+      } as WorkspaceGrant,
+    };
+  const headerHint = await requestWorkspaceId();
+  if (requestedTeamId && headerHint && requestedTeamId !== headerHint)
+    throw new WorkspaceAccessError(
+      'The request does not match the open team workspace.',
+      400,
+    );
+  const hint = requestedTeamId ?? headerHint;
+  const grant = await resolveWorkspaceGrant(database, identity, hint);
+  if (!grant)
     throw new WorkspaceAccessError('Create your team to continue.', 409);
-  return scopedDatabase(database, owner.team_id);
+  requireTeamPermission(grant, permission);
+  return { database: scopedDatabase(database, grant.teamId), identity, grant };
 }
 
 async function initialize(database: D1Database) {

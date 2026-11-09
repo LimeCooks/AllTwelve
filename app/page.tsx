@@ -1,4 +1,6 @@
 'use client';
+import { workspaceFetch as fetch } from '@/lib/workspace-fetch';
+import { workspaceMediaUrl } from '@/lib/workspace-fetch';
 import {
   readFilmData,
   parseFilmPayload,
@@ -19,6 +21,7 @@ import { CalendarAvailability } from '@/components/calendar-availability';
 import { PrintoutsWorkspace } from '@/components/printouts-workspace';
 import { MessagesWorkspace } from '@/components/messages-workspace';
 import { BackupControls } from '@/components/backup-controls';
+import { TeamAccessControls } from '@/components/team-access-controls';
 import { SidelineWorkspace } from '@/components/sideline-workspace';
 import { parseDepthLayouts } from '@/lib/depth-layout';
 import {
@@ -183,6 +186,7 @@ const workspaceNavigation = [
 
 const focusableTools = new Set(['Film Room', 'Sideline', 'Playbook']);
 const playerAllowedViews = new Set(['Home', 'Messages', 'Install']);
+const ownerOnlyViews = new Set(['Settings', 'Messages', 'Sideline']);
 
 type NoticeTone = 'success' | 'info' | 'warning' | 'error';
 type Notify = (message: string, tone?: NoticeTone) => void;
@@ -267,7 +271,9 @@ function quoteCsv(value: unknown) {
 }
 
 function mediaUrl(key: string, revision = 0) {
-  return `/api/media?key=${encodeURIComponent(key)}&v=${revision}`;
+  return workspaceMediaUrl(
+    `/api/media?key=${encodeURIComponent(key)}&v=${revision}`,
+  );
 }
 
 async function uploadMedia(key: string, file: File) {
@@ -404,12 +410,19 @@ function MediaUploadControl({
 export default function Home() {
   return (
     <WorkspaceGate>
-      {(session) => <WorkspaceHome session={session} />}
+      {(session) => (
+        <WorkspaceHome
+          key={`${session.team?.id}:${session.team?.role ?? 'prototype'}`}
+          session={session}
+        />
+      )}
     </WorkspaceGate>
   );
 }
 
 function WorkspaceHome({ session }: { session: WorkspaceSession }) {
+  const ownerAccess =
+    session.mode === 'prototype' || session.team?.role === 'owner';
   const [searchTarget, setSearchTarget] = useState<
     (SearchResult & { revision: number }) | null
   >(null);
@@ -422,18 +435,24 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
   const onPlayEditingChange = useCallback((editing: boolean) => {
     editingPlayRef.current = editing;
   }, []);
-  const setActiveView = useCallback((view: string) => {
-    if (editingPlayRef.current) setPendingView(view);
-    else {
-      setSearchTarget(null);
-      if (view !== 'Install') setInstallTarget('');
-      if (view !== 'Practice Plans') setPracticeGameplanTarget('');
-      if (view !== 'Gameplanning') setGameplanTarget('');
-      setActiveViewUnsafe(view);
-    }
-  }, []);
+  const setActiveView = useCallback(
+    (view: string) => {
+      if (!ownerAccess && ownerOnlyViews.has(view)) return;
+      if (editingPlayRef.current) setPendingView(view);
+      else {
+        setSearchTarget(null);
+        if (view !== 'Install') setInstallTarget('');
+        if (view !== 'Practice Plans') setPracticeGameplanTarget('');
+        if (view !== 'Gameplanning') setGameplanTarget('');
+        setActiveViewUnsafe(view);
+      }
+    },
+    [ownerAccess],
+  );
   const [isDark, setIsDark] = useState(true);
-  const [userRole, setUserRole] = useState<'Coach' | 'Player'>('Coach');
+  const [userRole, setUserRole] = useState<'Coach' | 'Player'>(
+    session.team?.role === 'player' ? 'Player' : 'Coach',
+  );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [assetRevision, setAssetRevision] = useState(0);
@@ -628,7 +647,14 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
   };
 
   const accountName =
-    userRole === 'Coach' ? session.user.name : 'Player account';
+    session.mode === 'pilot' || userRole === 'Coach'
+      ? session.user.name
+      : 'Player account';
+  const accountMediaKey = ownerAccess
+    ? userRole === 'Coach'
+      ? 'coach-profile'
+      : 'player-profile'
+    : `member-${session.user.id}-photo`;
   const openDataset = (
     selection: string,
     destination: 'Film Room' | 'Reports' | 'Gameplanning',
@@ -660,7 +686,9 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
     { label: 'Playbook', icon: BookOpen },
     { label: 'Install', icon: ClipboardList },
   ].filter(
-    (item) => userRole === 'Coach' || playerAllowedViews.has(item.label),
+    (item) =>
+      (userRole === 'Coach' || playerAllowedViews.has(item.label)) &&
+      (ownerAccess || !ownerOnlyViews.has(item.label)),
   );
   const mobileAllLinks = [
     ...primaryNavigation,
@@ -673,7 +701,9 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
     ...planningNavigation,
     ...workspaceNavigation,
   ].filter(
-    (item) => userRole === 'Coach' || playerAllowedViews.has(item.label),
+    (item) =>
+      (userRole === 'Coach' || playerAllowedViews.has(item.label)) &&
+      (ownerAccess || !ownerOnlyViews.has(item.label)),
   );
   const teamShortName =
     teamSettings.teamName
@@ -795,7 +825,39 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
                 </span>
                 <Check />
               </div>
-              {userRole === 'Coach' ? (
+              {(session.workspaces ?? [])
+                .filter((team) => team.id !== session.team?.id)
+                .map((team) => (
+                  <a
+                    key={team.id}
+                    href={'/?team=' + encodeURIComponent(team.id)}
+                    target="_top"
+                    role="menuitem"
+                    onClick={(event) => {
+                      if (editingPlayRef.current) {
+                        event.preventDefault();
+                        notify(
+                          'Save or cancel your current work before switching teams.',
+                          'info',
+                        );
+                      }
+                    }}
+                  >
+                    <Users />
+                    <span>
+                      <strong>{team.name}</strong>
+                      <small>
+                        {team.role === 'owner'
+                          ? 'Owner'
+                          : team.role === 'staff'
+                            ? 'Staff'
+                            : 'Player'}{' '}
+                        · {team.season}
+                      </small>
+                    </span>
+                  </a>
+                ))}
+              {userRole === 'Coach' && ownerAccess ? (
                 <button
                   onClick={() => {
                     setActiveView('Settings');
@@ -812,7 +874,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
                 </button>
               ) : (
                 <p>
-                  <Lock /> Team settings are managed by coaches.
+                  <Lock /> Team settings are managed by the owner.
                 </p>
               )}
             </div>
@@ -822,7 +884,11 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
         <nav aria-label="Main navigation" className="nav-stack">
           <p className="nav-label">Team</p>
           {primaryNavigation
-            .filter((item) => userRole === 'Coach' || item.label === 'Home')
+            .filter(
+              (item) =>
+                (userRole === 'Coach' || item.label === 'Home') &&
+                (ownerAccess || !ownerOnlyViews.has(item.label)),
+            )
             .map((item) => (
               <button
                 className={
@@ -894,12 +960,13 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
                 <span>{item.label}</span>
               </button>
             ))}
-          <p className="nav-label mt-7">Workspace</p>
+          {ownerAccess ? <p className="nav-label mt-7">Workspace</p> : null}
           {workspaceNavigation
             .filter(
               (item) =>
-                userRole === 'Coach' ||
-                ['Messages', 'Install'].includes(item.label),
+                (userRole === 'Coach' ||
+                  ['Messages', 'Install'].includes(item.label)) &&
+                (ownerAccess || !ownerOnlyViews.has(item.label)),
             )
             .map((item) => (
               <button
@@ -973,9 +1040,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
                 type="button"
               >
                 <MediaAvatar
-                  assetKey={
-                    userRole === 'Coach' ? 'coach-profile' : 'player-profile'
-                  }
+                  assetKey={accountMediaKey}
                   className="profile-avatar"
                   fallback={accountInitials}
                   label={`${accountName} profile photo`}
@@ -993,11 +1058,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
                 >
                   <div className="profile-menu-head">
                     <MediaAvatar
-                      assetKey={
-                        userRole === 'Coach'
-                          ? 'coach-profile'
-                          : 'player-profile'
-                      }
+                      assetKey={accountMediaKey}
                       className="profile-avatar"
                       fallback={accountInitials}
                       label={`${accountName} profile photo`}
@@ -1005,10 +1066,41 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
                     />
                     <span>
                       <strong>{accountName}</strong>
-                      <small>{userRole} workspace</small>
+                      <small>
+                        {session.team?.role === 'staff'
+                          ? 'Staff coaching access'
+                          : `${userRole} workspace`}
+                      </small>
                     </span>
                   </div>
-                  {userRole === 'Coach' ? (
+                  {session.invitations?.length ? (
+                    <a
+                      href={
+                        '/?invitations=1&team=' +
+                        encodeURIComponent(session.team?.id ?? '')
+                      }
+                      target="_top"
+                      role="menuitem"
+                      onClick={(event) => {
+                        if (editingPlayRef.current) {
+                          event.preventDefault();
+                          notify(
+                            'Save or cancel your current work before opening invitations.',
+                            'info',
+                          );
+                        }
+                      }}
+                    >
+                      <UserPlus />
+                      <span>
+                        <strong>
+                          Team invitations ({session.invitations.length})
+                        </strong>
+                        <small>Review access offered to your account</small>
+                      </span>
+                    </a>
+                  ) : null}
+                  {userRole === 'Coach' && ownerAccess ? (
                     <button
                       onClick={() => {
                         setActiveView('Settings');
@@ -1025,7 +1117,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
                         </small>
                       </span>
                     </button>
-                  ) : (
+                  ) : userRole === 'Player' ? (
                     <button
                       onClick={() => {
                         setActiveView('Home');
@@ -1040,7 +1132,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
                         <small>Assignments and team messages</small>
                       </span>
                     </button>
-                  )}
+                  ) : null}
                   {session.mode === 'prototype' ? (
                     <>
                       <button
@@ -1545,16 +1637,18 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
                           <small>Set starters</small>
                         </span>
                       </button>
-                      <button
-                        onClick={() => setActiveView('Sideline')}
-                        type="button"
-                      >
-                        <Radio />
-                        <span>
-                          <strong>Sideline</strong>
-                          <small>Start replay</small>
-                        </span>
-                      </button>
+                      {ownerAccess ? (
+                        <button
+                          onClick={() => setActiveView('Sideline')}
+                          type="button"
+                        >
+                          <Radio />
+                          <span>
+                            <strong>Sideline</strong>
+                            <small>Start replay</small>
+                          </span>
+                        </button>
+                      ) : null}
                     </div>
                   </section>
                 </aside>
@@ -2094,6 +2188,7 @@ function ModuleView({
     );
   return (
     <SettingsView
+      onEditingChange={onPlayEditingChange}
       assetRevision={assetRevision}
       onAssetsChanged={onAssetsChanged}
       onNavigate={onNavigate}
@@ -4685,7 +4780,9 @@ function AthletesView({
               Depth assignments: {removal.links.depthAssignments} · Install
               reviews: {removal.links.installReviews} · Saved references:{' '}
               {removal.links.savedReferences} · Unreadable records:{' '}
-              {removal.links.unreadableRecords}
+              {removal.links.unreadableRecords} · Player memberships:{' '}
+              {removal.links.playerMemberships ?? 0} · Player invitations:{' '}
+              {removal.links.playerInvitations ?? 0}
             </p>
           ) : null}
           {removal?.blocked ? (
@@ -9145,6 +9242,7 @@ function PracticePlansView({
 }
 
 function SettingsView({
+  onEditingChange,
   assetRevision,
   onAssetsChanged,
   onNavigate,
@@ -9152,6 +9250,7 @@ function SettingsView({
   teamSettings,
   onTeamSettingsChange,
 }: {
+  onEditingChange: (editing: boolean) => void;
   assetRevision: number;
   onAssetsChanged: () => void;
   onNavigate: (view: string) => void;
@@ -9163,6 +9262,11 @@ function SettingsView({
   const prototype = session.mode === 'prototype';
   const [saved, setSaved] = useState(false);
   const [activeTab, setActiveTab] = useState('Team profile');
+  const [accessEditing, setAccessEditing] = useState(false);
+  const accessEditingChange = useCallback((editing: boolean) => {
+    setAccessEditing(editing);
+    onEditingChange(editing);
+  }, [onEditingChange]);
 
   const saveSettings = async () => {
     try {
@@ -9201,6 +9305,7 @@ function SettingsView({
             <button
               className={activeTab === item ? 'active' : ''}
               key={item}
+              disabled={accessEditing && activeTab !== item}
               onClick={() => setActiveTab(item)}
               type="button"
             >
@@ -9512,8 +9617,9 @@ function SettingsView({
                 <p>
                   {prototype
                     ? 'Role previews are available in the development profile menu.'
-                    : 'This pilot is private to your account. Staff and player invitations are not enabled.'}
+                    : 'You manage membership and permissions for this team.'}
                 </p>
+                {!prototype ? <TeamAccessControls onEditingChange={accessEditingChange} /> : null}
               </div>
             ) : null}
             {activeTab === 'Notifications' ? (

@@ -65,11 +65,22 @@ globalThis.privateTestIdentity = null;
 const moduleUrl = async (path, replacements = []) => {
   let source = await readFile(new URL(path, import.meta.url), 'utf8');
   for (const [from, to] of replacements) source = source.replace(from, to);
-  return `data:text/javascript;base64,${Buffer.from(ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText).toString('base64')}`;
+  return `data:text/javascript;base64,${Buffer.from(ts.transpileModule(source.replace("import { workspaceFetch as fetch } from '@/lib/workspace-fetch';", 'const fetch = (...args) => globalThis.fetch(...args);'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText).toString('base64')}`;
 };
 const identityUrl = await moduleUrl('../lib/workspace-identity.ts');
+const permissionsUrl = await moduleUrl('../lib/team-permissions.ts', [
+  ["'@/lib/workspace-identity'", JSON.stringify(identityUrl)],
+]);
+const invitationsUrl = await moduleUrl('../lib/team-invitations.ts', [
+  ["'@/lib/workspace-identity'", JSON.stringify(identityUrl)],
+]);
 const requestUrl = `data:text/javascript;base64,${Buffer.from(`import { WorkspaceAccessError } from ${JSON.stringify(identityUrl)}; export const isPrototype = () => false; export const requestIdentity = async () => { if (!globalThis.privateTestIdentity) throw new WorkspaceAccessError('Sign in',401); return globalThis.privateTestIdentity; };`).toString('base64')}`;
 const dbUrl = await moduleUrl('../db/client.ts', [
+  [
+    "import { requestWorkspaceId } from '@/lib/request-identity';",
+    "const requestWorkspaceId = async () => globalThis.privateTestWorkspaceId ?? '';",
+  ],
+  ["'@/lib/team-permissions'", JSON.stringify(permissionsUrl)],
   [
     "import { env } from 'cloudflare:workers';",
     'const env = { DB: globalThis.privateTestDatabase };',
@@ -90,6 +101,8 @@ const practiceGenerationUrl = await moduleUrl('../lib/practice-generation.ts', [
   ["'@/lib/gameplan-state'", JSON.stringify(gameplanStateUrl)],
 ]);
 const replacements = [
+  ["'@/lib/team-permissions'", JSON.stringify(permissionsUrl)],
+  ["'@/lib/team-invitations'", JSON.stringify(invitationsUrl)],
   ["'@/lib/practice-generation'", JSON.stringify(practiceGenerationUrl)],
   ["'@/lib/gameplan-records'", JSON.stringify(gameplanRecordsUrl)],
   ["'@/lib/named-gameplans'", JSON.stringify(namedGameplansUrl)],
@@ -135,6 +148,8 @@ const session = await import(
 const onboarding = await import(
   await moduleUrl('../app/api/onboarding/route.ts', replacements)
 );
+const teamAccess = await import(await moduleUrl('../app/api/team-access/route.ts', replacements));
+const teamInvitations = await import(await moduleUrl('../app/api/team-invitations/route.ts', replacements));
 const playbooks = await import(
   await moduleUrl('../app/api/playbooks/route.ts', replacements)
 );
@@ -346,6 +361,85 @@ const request = (body) =>
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
+
+test('staff invitation handlers join the existing team, enforce owner privacy, and revoke immediately', async () => {
+  const previousIdentity = globalThis.privateTestIdentity;
+  const previousTeam = globalThis.privateTestWorkspaceId;
+  const owner = { id: 'access-handler-owner', name: 'Access Owner', email: 'owner-access@example.test' };
+  const staff = { id: 'access-handler-staff', name: 'Staff Coach', email: 'staff-access@example.test' };
+  try {
+    globalThis.privateTestIdentity = owner;
+    globalThis.privateTestWorkspaceId = '';
+    assert.equal((await onboarding.POST(request({ name: 'Staff access team', season: '2026' }))).status, 201);
+    const team = (await (await session.GET()).json()).team;
+    globalThis.privateTestWorkspaceId = team.id;
+    const invitationId = crypto.randomUUID();
+    const create = await teamAccess.POST(request({ id: invitationId, email: staff.email, role: 'staff' }));
+    assert.equal(create.status, 201, JSON.stringify(await create.clone().json()));
+    assert.equal((await teamAccess.POST(request({ id: invitationId, email: staff.email, role: 'staff' }))).status, 201);
+    globalThis.privateTestIdentity = staff;
+    globalThis.privateTestWorkspaceId = '';
+    const pending = await (await session.GET()).json();
+    assert.equal(pending.team, null);
+    assert.equal(pending.canCreateTeam, false);
+    assert.equal(pending.invitations.length, 1);
+    assert.equal((await onboarding.POST(request({ name: 'Accidental blank team', season: '2026' }))).status, 409);
+    const invitation = pending.invitations[0];
+    globalThis.privateTestIdentity = { ...staff, id: 'wrong-recipient', email: 'wrong@example.test' };
+    assert.equal((await teamInvitations.POST(request({ id: invitation.id, version: invitation.version }))).status, 403);
+    globalThis.privateTestIdentity = staff;
+    const accepted = await teamInvitations.POST(request({ id: invitation.id, version: invitation.version }));
+    assert.equal(accepted.status, 200, JSON.stringify(await accepted.clone().json()));
+    assert.equal((await (await session.GET()).json()).team.id, team.id);
+    assert.equal((await (await session.GET()).json()).team.role, 'staff');
+    globalThis.privateTestWorkspaceId = team.id;
+    assert.equal((await playbooks.GET()).status, 200);
+    assert.equal((await athletesApi.GET()).status, 200);
+    const athleteResponse = await athletesApi.POST(request({
+      firstName: 'Shared', lastName: 'Roster', number: 29, position: 'DB',
+      unit: 'Defence', graduationYear: 12, weightLb: 180, email: 'shared-roster@example.test', staffNote: 'Saved by staff',
+    }));
+    assert.equal(athleteResponse.status, 201);
+    const sharedAthlete = (await athleteResponse.json()).athlete;
+    assert.equal((await backups.GET()).status, 403);
+    for (const key of ['coach-profile', 'player-profile', 'member-another-user-photo']) {
+      assert.equal((await media.GET(new Request('https://pilot.test/api/media?key=' + key))).status, 403);
+    }
+    assert.equal((await media.GET(new Request('https://pilot.test/api/media?key=team-logo'))).status, 404);
+    assert.equal((await teamAccess.GET()).status, 403);
+    assert.equal((await messagesApi.GET()).status, 403);
+    assert.equal((await sideline.GET()).status, 403);
+    await assert.rejects(getDatabase, (cause) => cause.status === 403);
+    const settingsRequest = new Request('https://pilot.test/api/workspace-state?key=team-settings');
+    Object.assign(settingsRequest, { nextUrl: new URL(settingsRequest.url) });
+    assert.equal((await workspaceState.GET(settingsRequest)).status, 200);
+    assert.equal((await workspaceState.PUT(request({ key: 'team-settings', value: { teamName: 'Hijacked' } }))).status, 403);
+    globalThis.privateTestWorkspaceId = 'foreign-team';
+    assert.equal((await playbooks.GET()).status, 403);
+    globalThis.privateTestWorkspaceId = team.id;
+    globalThis.privateTestIdentity = owner;
+    assert.equal((await (await athletesApi.GET()).json()).athletes.find((row) => row.id === sharedAthlete.id).staffNote, 'Saved by staff');
+    const access = await (await teamAccess.GET()).json();
+    const membership = access.memberships.find((item) => item.user_id === staff.id);
+    assert.equal((await teamAccess.PATCH(request({ kind: 'membership', id: membership.id, version: membership.version }))).status, 200);
+    globalThis.privateTestIdentity = staff;
+    assert.equal((await playbooks.GET()).status, 403);
+    globalThis.privateTestWorkspaceId = '';
+    const revoked = await (await session.GET()).json();
+    assert.equal(revoked.team, null);
+    assert.equal(revoked.canCreateTeam, false);
+    assert.equal((await teamInvitations.POST(request({ id: invitation.id, version: invitation.version }))).status, 409);
+  } finally {
+    globalThis.privateTestIdentity = previousIdentity;
+    globalThis.privateTestWorkspaceId = previousTeam;
+    // Leave the shared empty-workspace assertions below unchanged.
+    sqlite.prepare('DELETE FROM team_memberships WHERE team_id IN (SELECT team_id FROM workspace_owners WHERE user_id=?)').run(owner.id);
+    sqlite.prepare('DELETE FROM team_invitations WHERE team_id IN (SELECT team_id FROM workspace_owners WHERE user_id=?)').run(owner.id);
+    const owned = sqlite.prepare('SELECT team_id FROM workspace_owners WHERE user_id=?').get(owner.id);
+    sqlite.prepare('DELETE FROM workspace_owners WHERE user_id=?').run(owner.id);
+    if (owned) sqlite.prepare('DELETE FROM teams WHERE id=?').run(owned.team_id);
+  }
+});
 
 test('fresh hosted migration chain is empty, identity required, owners receive isolated blank teams', async () => {
   assert.equal((await playbooks.GET()).status, 401);
@@ -1549,6 +1643,35 @@ test('complete backup restores all team tables and file bytes offline without to
     'NEVER EXPORT',
     { httpMetadata: { contentType: 'video/mp4' } },
   );
+  sqlite
+    .prepare(
+      'INSERT INTO team_invitations(id,team_id,email,role,created_by,created_at,expires_at) VALUES(?,?,?,?,?,?,?)',
+    )
+    .run(
+      'backup-excluded-invite',
+      scoped.teamId,
+      'staff@example.test',
+      'staff',
+      'owner-a',
+      '2026-11-08',
+      '2026-11-15',
+    );
+  sqlite
+    .prepare(
+      'INSERT INTO team_memberships(id,team_id,user_id,email,name,role,invitation_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+    )
+    .run(
+      'backup-excluded-member',
+      scoped.teamId,
+      'backup-staff',
+      'staff@example.test',
+      'Staff fixture',
+      'staff',
+      'backup-excluded-invite',
+      'active',
+      '2026-11-08',
+      '2026-11-08',
+    );
   const prepared = await backups.POST();
   assert.equal(prepared.status, 200, await prepared.clone().text());
   const job = await prepared.json();
@@ -1577,6 +1700,8 @@ test('complete backup restores all team tables and file bytes offline without to
   assert.equal(snapshot.tables.teams.length, 1);
   assert.equal(snapshot.tables.teams[0].id, scoped.teamId);
   assert.equal('workspace_owners' in snapshot.tables, false);
+  assert.equal('team_invitations' in snapshot.tables, false);
+  assert.equal('team_memberships' in snapshot.tables, false);
   for (const [table] of backupTables)
     assert.ok(
       snapshot.tables[table].length > 0,
@@ -1615,6 +1740,14 @@ test('complete backup restores all team tables and file bytes offline without to
     'recovery-owner',
   );
   assert.equal(recovered.prepare('PRAGMA foreign_key_check').all().length, 0);
+  assert.equal(
+    recovered.prepare('SELECT COUNT(*) n FROM team_memberships').get().n,
+    0,
+  );
+  assert.equal(
+    recovered.prepare('SELECT COUNT(*) n FROM team_invitations').get().n,
+    0,
+  );
   recovered.close();
   assert.equal(
     await readFile(path.join(output, 'media', 'film-backup'), 'utf8'),

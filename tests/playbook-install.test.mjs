@@ -8,7 +8,7 @@ const url = async (file, replacements = []) => {
   return (
     'data:text/javascript;base64,' +
     Buffer.from(
-      ts.transpileModule(source, {
+      ts.transpileModule(source.replace("import { workspaceFetch as fetch } from '@/lib/workspace-fetch';", "const fetch = (...args) => globalThis.fetch(...args);"), {
         compilerOptions: {
           target: ts.ScriptTarget.ES2022,
           module: ts.ModuleKind.ESNext,

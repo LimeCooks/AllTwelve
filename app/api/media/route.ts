@@ -1,10 +1,30 @@
 import { env } from 'cloudflare:workers';
-import { getDatabase } from '@/db/client';
+import { getWorkspaceAccess } from '@/db/client';
 import { isPrototype } from '@/lib/request-identity';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
 
-async function storageKey(key: string) {
-  const database = await getDatabase();
+async function storageKey(key: string, request: Request) {
+  const hint =
+    new URL(request.url).searchParams.get('workspace')?.trim() || undefined;
+  const { database, grant, identity } = await getWorkspaceAccess('coaching.read', hint);
+  if (
+    grant.role !== 'owner' &&
+    (['coach-profile', 'player-profile'].includes(key) ||
+      (key.startsWith('member-') && key !== `member-${identity.id}-photo`))
+  )
+    throw new WorkspaceAccessError('This account image is private to its owner.', 403);
+  if (
+    !['GET', 'HEAD'].includes(request.method) &&
+    grant.role !== 'owner' &&
+    (['team-logo', 'opponent-logo', 'coach-profile', 'player-profile'].includes(
+      key,
+    ) ||
+      key.startsWith('member-'))
+  )
+    throw new WorkspaceAccessError(
+      'Only the team owner can change these account or team images.',
+      403,
+    );
   return isPrototype() ? key : `teams/${database.teamId}/${key}`;
 }
 
@@ -35,7 +55,7 @@ async function readMedia(request: Request) {
       { error: 'A valid media key is required.' },
       { status: 400 },
     );
-  const storedKey = await storageKey(key);
+  const storedKey = await storageKey(key, request);
   const metadata = await mediaBucket().head(storedKey);
   if (!metadata)
     return Response.json({ error: 'Media not found.' }, { status: 404 });
@@ -103,7 +123,7 @@ async function uploadMedia(request: Request) {
       { error: 'A valid media key is required.' },
       { status: 400 },
     );
-  const storedKey = await storageKey(key);
+  const storedKey = await storageKey(key, request);
   let name: string,
     contentType: string,
     size: number,
@@ -198,7 +218,7 @@ async function deleteMedia(request: Request) {
       { error: 'A valid media key is required.' },
       { status: 400 },
     );
-  await mediaBucket().delete(await storageKey(key));
+  await mediaBucket().delete(await storageKey(key, request));
   return Response.json({ deleted: true });
 }
 

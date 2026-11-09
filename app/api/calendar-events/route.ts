@@ -1,4 +1,4 @@
-import { getDatabase } from '@/db/client';
+import { getCoachingDatabase as getDatabase } from '@/db/client';
 import type { CalendarEventRecord, CalendarEventType } from '@/types/domain';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
 

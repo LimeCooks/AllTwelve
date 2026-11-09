@@ -44,16 +44,30 @@ globalThis.chalkTestDatabase = database;
 const moduleUrl = async (path, replacements = []) => {
   let source = await readFile(new URL(path, import.meta.url), 'utf8');
   for (const [from, to] of replacements) source = source.replace(from, to);
-  const result = ts.transpileModule(source, {
-    compilerOptions: {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
+  const result = ts.transpileModule(
+    source.replace(
+      "import { workspaceFetch as fetch } from '@/lib/workspace-fetch';",
+      'const fetch = (...args) => globalThis.fetch(...args);',
+    ),
+    {
+      compilerOptions: {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.ESNext,
+      },
     },
-  });
+  );
   return `data:text/javascript;base64,${Buffer.from(result.outputText).toString('base64')}`;
 };
 const identityUrl = await moduleUrl('../lib/workspace-identity.ts');
+const permissionsUrl = await moduleUrl('../lib/team-permissions.ts', [
+  ["'@/lib/workspace-identity'", JSON.stringify(identityUrl)],
+]);
 const dbUrl = await moduleUrl('../db/client.ts', [
+  [
+    "import { requestWorkspaceId } from '@/lib/request-identity';",
+    "const requestWorkspaceId = async () => '';",
+  ],
+  ["'@/lib/team-permissions'", JSON.stringify(permissionsUrl)],
   [
     "import { isPrototype, requestIdentity } from '@/lib/request-identity';",
     "const isPrototype = () => true; const requestIdentity = async () => ({id: 'local-test'});",

@@ -210,7 +210,7 @@ export async function restoreBackup({ archives, output, ownerId }) {
     database.exec('PRAGMA foreign_keys = ON');
     const tables = database
       .prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'workspace_owners' ORDER BY name",
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('workspace_owners','team_invitations','team_memberships') ORDER BY name",
       )
       .all()
       .map((r) => r.name);

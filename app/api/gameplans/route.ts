@@ -1,4 +1,4 @@
-import { getDatabase } from '@/db/client';
+import { getCoachingDatabase as getDatabase } from '@/db/client';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
 import {
   getGameplan,
