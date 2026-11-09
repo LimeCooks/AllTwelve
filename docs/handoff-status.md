@@ -30,3 +30,9 @@ Independent named gameplans and explicitly sourced practice generation now have 
 Publication confirmed: the named-gameplan update is live on the existing private pilot with its owner-only audience preserved. Read-only browser verification opened the real owner's existing team and its Previous gameplan, with collapsed secondary panels and no fixture writes. The next owner check is generating a practice from a named gameplan and reopening the resulting saved script on a second physical device. The broader goal remains active.
 
 Owner confirmation: the named-gameplan objective appeared in its generated practice on both physical devices. This closes that specific cross-device persistence check. The saved practice printout workflow is being verified separately; membership, delivery, quizzes and the broader handoff remain incomplete.
+
+## Current handoff scope - owner clarification
+
+Only quizzes are explicitly deferred as WIP. The owner clarified that necessary staff/player access and delivery remain in scope; the desire to wrap up soon is not permission to omit those workflows. The first real access check should use a staff member. No recipient email has been provided yet, and no invitation or hosting access grant has been sent or created.
+
+The practice-printout release is now live and passed compatible rollback/forward rehearsal in outputs/release-rehearsal-BYJQVk/report.json. The owner confirmed its PDF opens and saves on a physical device. Quizzes are not a completion gate for this handoff. Staff membership, server-enforced permissions, actual private sign-in and bounded player delivery remain gates. See access-and-delivery-audit.md for the current evidence and implementation boundary.
