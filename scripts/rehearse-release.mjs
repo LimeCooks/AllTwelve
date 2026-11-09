@@ -1135,7 +1135,7 @@ try {
     'a',
     { key: `gameplan-record-v1:${source.id}`, value: {} },
     'PUT',
-    403,
+    400,
   );
   planningFixture = { source, second, practice: generated };
   const savedEvent = await api(

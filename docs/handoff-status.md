@@ -22,3 +22,7 @@ The goal remains open. A deployed site, green tests, or a narrow module check do
 3. Complete the remaining owner coaching workflows, then implement real staff/player membership before enabling invitations, delivery or player quizzes. Preserve the current owner-private boundary throughout.
 
 Recent releases hardened touch routes, manual backup history, mobile athlete details, note conflicts, unused roster removal, and Calendar availability failures. Their tests use separate local fixtures/storage. No hosted fixture records, audience expansion, prototype migration or product reset is part of these changes.
+
+## Named planning workflow — November 8
+
+Independent named gameplans and explicitly sourced practice generation now have domain tests and isolated browser/restart/backup evidence; see planning-hardening.md, practice-hardening.md and releases.md. Film observations and plan summary are collapsed by default, objective cards use the main width, and arbitrary gameplan readiness scoring has been removed. Multi-plan planning is no longer an implementation gap, but the owner's real cross-device walkthrough is still required. Membership, delivery, quizzes, broader printouts and the other unresolved gates above remain open. No hosted test fixture or prototype migration is part of this release.

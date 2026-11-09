@@ -42,3 +42,11 @@ At candidate, rollback and forward-again stages, assertions compare every drawin
 ## Staff-note safety baseline — November 8
 
 The rehearsal now submits a stale note baseline together with an availability change, requires 409, and verifies that both saved fields remain intact at each version/restart stage. Earlier archives lack this guard and are no longer approved rollback targets for this corrected baseline. Use `--restart-only` for its initial rehearsal; later rollback builds must include note protection and pass all checks. This adds a data-safety gate rather than treating unchanged row counts as proof against lost work.
+
+## Named-gameplan baseline — November 8
+
+The source now supports independent named gameplans with optional dates/opponents and archived state, rather than a single active planning slot. Existing active/legacy content is preserved as a virtual Previous gameplan and materialized only on an explicit save; neither original record is rewritten. Practice records retain source ID/title/revision after manual edits. New named records use dedicated owned/versioned writes. Older browsers must refresh to obtain the new API; generic legacy writes are rejected.
+
+The strengthened rehearsal checks two independent named gameplans, team isolation, source-generated segments, stable source history after a manual adjustment, safe creation replay, archive/restore, stale generation rejection, persistence through restarts and exact source/segment content in backup manifests. The packaged application passed in `outputs/release-rehearsal-unmxo8/report.json`. Its first run stopped safely on an incorrect harness expectation: invalid generic keys return 400 before reaching protected-key rejection. The harness expectation was corrected; application code was unchanged for the passing run.
+
+Use a restart-only baseline for this first protocol release. Earlier artifacts do not implement named gameplans or explicit practice sources and are not approved rollback targets for this workflow. This release adds no schema migration or automatic data rewrite. A future compatible artifact must pass the current strengthened rehearsal before being approved for rollback.
