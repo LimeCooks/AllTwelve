@@ -411,14 +411,16 @@ function MediaUploadControl({
 export default function Home() {
   return (
     <WorkspaceGate>
-      {(session) => session.mode === 'pilot' && session.team?.role === 'player' ? (
-        <PlayerWorkspace key={session.team.id} session={session} />
-      ) : (
-        <WorkspaceHome
-          key={`${session.team?.id}:${session.team?.role ?? 'prototype'}`}
-          session={session}
-        />
-      )}
+      {(session) =>
+        session.mode === 'pilot' && session.team?.role === 'player' ? (
+          <PlayerWorkspace key={session.team.id} session={session} />
+        ) : (
+          <WorkspaceHome
+            key={`${session.team?.id}:${session.team?.role ?? 'prototype'}`}
+            session={session}
+          />
+        )
+      }
     </WorkspaceGate>
   );
 }
@@ -1026,13 +1028,13 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
           )}
           <div className="top-actions">
             <Button
-              aria-label="Notifications"
+              aria-label="Open messages"
               className="rounded-full"
               onClick={() => setActiveView('Messages')}
               size="icon-lg"
               variant="ghost"
             >
-              <Bell />
+              <MessageSquareText />
             </Button>
             <div className="profile-menu-wrap" ref={profileMenuRef}>
               <button
@@ -7207,6 +7209,14 @@ function CalendarView({
   const [monthOffset, setMonthOffset] = useState(0);
   const [eventSaving, setEventSaving] = useState(false);
   const [calendarEventError, setCalendarEventError] = useState('');
+  const [calendarConflict, setCalendarConflict] = useState(false);
+  const [calendarReloadOpen, setCalendarReloadOpen] = useState(false);
+  const [calendarDeleteOpen, setCalendarDeleteOpen] = useState(false);
+  const [calendarDetailError, setCalendarDetailError] = useState('');
+  const [calendarFormRevision, setCalendarFormRevision] = useState(0);
+  const calendarFormRef = useRef<HTMLFormElement>(null);
+  const calendarCreationId = useRef('');
+  useEffect(() => setCalendarDetailError(''), [selectedEvent?.id]);
   const calendarWriteLock = useRef(false);
   const [calendarLoad, setCalendarLoad] = useState<
     'loading' | 'ready' | 'error'
@@ -7268,7 +7278,10 @@ function CalendarView({
 
   useEffect(() => {
     let active = true;
-    fetch('/api/calendar-events', { cache: 'no-store' })
+    fetch('/api/calendar-events', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(20000),
+    })
       .then(async (response) => {
         const data = (await response.json()) as {
           events?: CalendarEventRecord[];
@@ -7317,12 +7330,16 @@ function CalendarView({
       return typeof field === 'string' ? field : '';
     };
     const date = value('date');
+    const calendarRequestId =
+      eventEditor?.id ?? (calendarCreationId.current ||= crypto.randomUUID());
     try {
       const response = await fetch('/api/calendar-events', {
         method: eventEditor ? 'PUT' : 'POST',
+        signal: AbortSignal.timeout(20000),
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          ...(eventEditor ? { id: eventEditor.id } : {}),
+          id: calendarRequestId,
+          ...(eventEditor ? { version: eventEditor.version } : {}),
           title: value('title'),
           eventType: value('eventType'),
           startsAt: calendarEditInstant(
@@ -7343,7 +7360,13 @@ function CalendarView({
         event?: CalendarEventRecord;
         error?: string;
       };
-      if (!response.ok || !data.event)
+      if (response.status === 409) setCalendarConflict(true);
+      if (
+        !response.ok ||
+        !data.event ||
+        data.event.id !== calendarRequestId ||
+        !/^[a-f0-9]{64}$/.test(data.event.version ?? '')
+      )
         throw new Error(data.error ?? 'Unable to save the event.');
       setCalendarEvents((events) =>
         [
@@ -7356,6 +7379,8 @@ function CalendarView({
       setEventDirty(false);
       if (eventEditor) setSelectedEvent(data.event);
       setEventEditor(null);
+      calendarCreationId.current = '';
+      setCalendarConflict(false);
       onNotify(
         `${data.event.title} ${eventEditor ? 'updated' : 'added to the calendar'}.`,
       );
@@ -7379,27 +7404,109 @@ function CalendarView({
     try {
       const response = await fetch(
         `/api/calendar-events?id=${encodeURIComponent(selectedEvent.id)}`,
-        { method: 'DELETE' },
+        {
+          method: 'DELETE',
+          headers: {
+            'x-chalktalk-calendar-version': selectedEvent.version ?? '',
+          },
+          signal: AbortSignal.timeout(20000),
+        },
       );
       const data = (await response.json()) as {
         deleted?: string;
         error?: string;
       };
-      if (!response.ok || !data.deleted)
+      if (!response.ok || data.deleted !== selectedEvent.id)
         throw new Error(data.error ?? 'Unable to remove the event.');
       setCalendarEvents((events) =>
         events.filter((event) => event.id !== selectedEvent.id),
       );
       onNotify(`${selectedEvent.title} removed from the calendar.`, 'info');
       setSelectedEvent(null);
+      setCalendarDeleteOpen(false);
       setCalendarMessage(
         'Saved schedule · times shown in this device’s time zone',
       );
     } catch (error) {
+      setCalendarDetailError(
+        error instanceof Error ? error.message : 'Unable to remove the event.',
+      );
+      setCalendarDeleteOpen(false);
       onNotify(
         error instanceof Error ? error.message : 'Unable to remove the event.',
         'error',
       );
+    } finally {
+      calendarWriteLock.current = false;
+      setEventSaving(false);
+    }
+  };
+
+  const reloadSavedCalendarEvent = async () => {
+    if (calendarWriteLock.current) return;
+    const id = eventOpen
+      ? (eventEditor?.id ?? calendarCreationId.current)
+      : selectedEvent?.id;
+    if (!id) return;
+    calendarWriteLock.current = true;
+    setEventSaving(true);
+    try {
+      const response = await fetch(
+        '/api/calendar-events?id=' + encodeURIComponent(id),
+        { cache: 'no-store', signal: AbortSignal.timeout(20000) },
+      );
+      const data = (await response.json()) as {
+        event?: CalendarEventRecord;
+        error?: string;
+      };
+      if (response.status === 404 && !eventOpen) {
+        setCalendarEvents((events) => events.filter((item) => item.id !== id));
+        setSelectedEvent(null);
+        setCalendarDetailError('');
+        onNotify(
+          'This event has already been removed from the saved schedule.',
+          'info',
+        );
+        return;
+      }
+      if (
+        !response.ok ||
+        !data.event ||
+        data.event.id !== id ||
+        !data.event.version
+      )
+        throw new Error(
+          data.error ??
+            'The latest saved event could not be verified. Your draft is retained.',
+        );
+      const latest = data.event;
+      setCalendarEvents((events) =>
+        [...events.filter((item) => item.id !== id), latest].sort(
+          (a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt),
+        ),
+      );
+      if (eventOpen) {
+        setEventEditor(latest);
+        setEventStartDate(calendarDate(latest.startsAt));
+        setEventEndDate(calendarDate(latest.endsAt));
+        setNewEventLocation(latest.location);
+        setCalendarFormRevision((value) => value + 1);
+        setEventDirty(false);
+        setCalendarConflict(false);
+        setCalendarEventError('');
+      } else {
+        setSelectedEvent(latest);
+        setCalendarDetailError('');
+      }
+      setCalendarReloadOpen(false);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'The latest saved event could not be loaded.';
+      if (eventOpen) setCalendarEventError(message);
+      else setCalendarDetailError(message);
+      setCalendarReloadOpen(false);
     } finally {
       calendarWriteLock.current = false;
       setEventSaving(false);
@@ -7430,6 +7537,9 @@ function CalendarView({
       ? setMonthOffset((offset) => offset + direction)
       : setWeekOffset((offset) => offset + direction);
   const openNewEvent = () => {
+    calendarCreationId.current = crypto.randomUUID();
+    setCalendarConflict(false);
+    setCalendarFormRevision((value) => value + 1);
     setEventEditor(null);
     setEventDirty(false);
     setEventStartDate(localDateKey(new Date()));
@@ -7730,13 +7840,53 @@ function CalendarView({
       >
         <DialogContent className="athlete-dialog sm:max-w-[620px]">
           <form
-            key={eventEditor?.id ?? 'new-event'}
+            key={`${eventEditor?.id ?? 'new-event'}:${calendarFormRevision}`}
+            ref={calendarFormRef}
             inert={eventSaving}
             onChangeCapture={() => setEventDirty(true)}
             onSubmit={createCalendarEvent}
           >
             {calendarEventError ? (
               <p role="alert">{calendarEventError}</p>
+            ) : null}
+            {calendarEventError ? (
+              <div className="flex flex-wrap gap-2 my-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={eventSaving}
+                  onClick={() => {
+                    const fields = calendarFormRef.current
+                      ? Object.fromEntries(
+                          new FormData(calendarFormRef.current),
+                        )
+                      : {};
+                    downloadText(
+                      'calendar-event-draft.json',
+                      JSON.stringify(
+                        {
+                          id: eventEditor?.id ?? calendarCreationId.current,
+                          version: eventEditor?.version,
+                          fields,
+                        },
+                        null,
+                        2,
+                      ),
+                      'application/json',
+                    );
+                  }}
+                >
+                  Download draft
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={eventSaving}
+                  onClick={() => setCalendarReloadOpen(true)}
+                >
+                  Load latest saved event
+                </Button>
+              </div>
             ) : null}
             <DialogHeader>
               <DialogTitle>
@@ -7905,7 +8055,7 @@ function CalendarView({
               </label>
             </div>
             <DialogFooter>
-              <Button disabled={eventSaving} type="submit">
+              <Button disabled={eventSaving || calendarConflict} type="submit">
                 {eventSaving
                   ? 'Saving…'
                   : eventEditor
@@ -7915,6 +8065,69 @@ function CalendarView({
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={calendarReloadOpen}
+        onOpenChange={(open) => {
+          if (!eventSaving) setCalendarReloadOpen(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Replace this draft with the saved event?</DialogTitle>
+            <DialogDescription>
+              Your unsaved fields will be replaced only after the latest event
+              loads successfully. Download your draft first if you want to keep
+              a copy.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={eventSaving}
+              onClick={() => setCalendarReloadOpen(false)}
+            >
+              Keep draft
+            </Button>
+            <Button
+              disabled={eventSaving}
+              onClick={() => void reloadSavedCalendarEvent()}
+            >
+              {eventSaving ? 'Loading…' : 'Replace draft with saved event'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={calendarDeleteOpen}
+        onOpenChange={(open) => {
+          if (!eventSaving) setCalendarDeleteOpen(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove this calendar event?</DialogTitle>
+            <DialogDescription>
+              {selectedEvent?.title} will be removed from the shared team
+              schedule.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={eventSaving}
+              onClick={() => setCalendarDeleteOpen(false)}
+            >
+              Keep event
+            </Button>
+            <Button
+              disabled={eventSaving}
+              onClick={() => void deleteCalendarEvent()}
+            >
+              {eventSaving ? 'Removing…' : 'Remove event'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
       <Dialog open={eventLeaveOpen} onOpenChange={setEventLeaveOpen}>
@@ -7958,6 +8171,18 @@ function CalendarView({
             </DialogDescription>
           </DialogHeader>
           <div className="event-detail-copy">
+            {calendarDetailError ? (
+              <div>
+                <p role="alert">{calendarDetailError}</p>
+                <Button
+                  disabled={eventSaving}
+                  variant="outline"
+                  onClick={() => void reloadSavedCalendarEvent()}
+                >
+                  Reload saved event
+                </Button>
+              </div>
+            ) : null}
             <Badge>{selectedEvent?.eventType}</Badge>
             <p>{selectedEvent?.notes || 'No additional notes.'}</p>
           </div>
@@ -7971,6 +8196,9 @@ function CalendarView({
                 setEventStartDate(calendarDate(selectedEvent.startsAt));
                 setEventEndDate(calendarDate(selectedEvent.endsAt));
                 setCalendarEventError('');
+                setCalendarConflict(false);
+                setCalendarDetailError('');
+                setCalendarFormRevision((value) => value + 1);
                 setEventDirty(false);
                 setSelectedEvent(null);
                 setEventOpen(true);
@@ -7980,7 +8208,7 @@ function CalendarView({
             </Button>
             <Button
               disabled={eventSaving}
-              onClick={() => void deleteCalendarEvent()}
+              onClick={() => setCalendarDeleteOpen(true)}
               variant="ghost"
             >
               <Trash2 /> Remove
@@ -9266,10 +9494,13 @@ function SettingsView({
   const [saved, setSaved] = useState(false);
   const [activeTab, setActiveTab] = useState('Team profile');
   const [accessEditing, setAccessEditing] = useState(false);
-  const accessEditingChange = useCallback((editing: boolean) => {
-    setAccessEditing(editing);
-    onEditingChange(editing);
-  }, [onEditingChange]);
+  const accessEditingChange = useCallback(
+    (editing: boolean) => {
+      setAccessEditing(editing);
+      onEditingChange(editing);
+    },
+    [onEditingChange],
+  );
 
   const saveSettings = async () => {
     try {
@@ -9622,7 +9853,9 @@ function SettingsView({
                     ? 'Role previews are available in the development profile menu.'
                     : 'You manage membership and permissions for this team.'}
                 </p>
-                {!prototype ? <TeamAccessControls onEditingChange={accessEditingChange} /> : null}
+                {!prototype ? (
+                  <TeamAccessControls onEditingChange={accessEditingChange} />
+                ) : null}
               </div>
             ) : null}
             {activeTab === 'Notifications' ? (

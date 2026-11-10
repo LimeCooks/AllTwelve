@@ -993,6 +993,7 @@ test('calendar preserves real instants, rejects invalid input, and isolates save
   const correction = {
     ...body,
     id: saved.id,
+    version: saved.version,
     title: 'Corrected travel',
     eventType: 'travel',
     startsAt: '2026-11-06T23:30:00-04:00',
@@ -1056,7 +1057,7 @@ test('calendar preserves real instants, rejects invalid input, and isolates save
   assert.equal(
     (
       await calendarEvents.DELETE(
-        new Request(`https://pilot.test/api/calendar-events?id=${saved.id}`),
+        new Request(`https://pilot.test/api/calendar-events?id=${saved.id}`,{headers:{'x-chalktalk-calendar-version':corrected.version}}),
       )
     ).status,
     200,
@@ -4666,4 +4667,55 @@ test('team conversations deliver across roles while private threads, authorship,
     assert.equal((await read(await get(dm.id))).messages[0].text,'Private coaching reply');
     assert.equal((await post({action:'send',id:crypto.randomUUID(),conversationId:dm.id,text:'Recipient inactive'})).status,409);
   } finally {globalThis.privateTestIdentity=oldIdentity;globalThis.privateTestWorkspaceId=oldTeam;}
+});
+
+test('calendar retries do not duplicate events and stale or late changes cannot overwrite or delete newer schedules', async () => {
+  const previous=globalThis.privateTestIdentity,previousTeam=globalThis.privateTestWorkspaceId;
+  const read=async(response,status=200)=>{assert.equal(response.status,status,JSON.stringify(await response.clone().json()));return response.json();};
+  const get=id=>calendarEvents.GET(new Request('https://pilot.test/api/calendar-events?id='+id));
+  const remove=event=>calendarEvents.DELETE(new Request('https://pilot.test/api/calendar-events?id='+event.id,{headers:{'x-chalktalk-calendar-version':event.version}}));
+  try {
+    globalThis.privateTestIdentity={id:'calendar-version-owner',email:'calendar-version@example.test',name:'Schedule owner'};globalThis.privateTestWorkspaceId='';
+    await read(await onboarding.POST(request({name:'Versioned schedule',season:'2026'})),201);
+    const body={id:crypto.randomUUID(),title:'Team practice',eventType:'practice',startsAt:'2026-11-10T20:00:00Z',endsAt:'2026-11-10T21:00:00Z',location:'Field',notes:'Original'};
+    const first=(await read(await calendarEvents.POST(request(body)),201)).event;
+    assert.match(first.version,/^[a-f0-9]{64}$/);
+    assert.deepEqual((await read(await calendarEvents.POST(request(body)),201)).event,first);
+    assert.equal((await calendarEvents.POST(request({...body,title:'Conflicting create'}))).status,409);
+    assert.equal((await read(await calendarEvents.GET())).events.length,1);
+    assert.deepEqual((await read(await get(first.id))).event,first);
+    assert.equal((await calendarEvents.PUT(request({...body,title:'Missing baseline'}))).status,400);
+    const writes=await Promise.all(['First coach','Second coach'].map(title=>calendarEvents.PUT(request({...first,title}))));
+    assert.deepEqual(writes.map(response=>response.status).sort(),[200,409]);
+    let current=(await read(await get(first.id))).event;
+    assert.notEqual(current.version,first.version);
+    assert.equal((await remove(first)).status,409);
+    assert.deepEqual((await read(await get(first.id))).event,current);
+    const db=await getDatabase(),originalPrepare=database.prepare;
+    for(const method of ['PUT','DELETE']){
+      let injected=false;
+      database.prepare=function(sql){
+        if(!injected && sql.startsWith(method==='PUT'?'UPDATE calendar_events SET':'DELETE FROM calendar_events WHERE')){
+          injected=true;sqlite.prepare('UPDATE calendar_events SET notes=? WHERE id=? AND team_id=?').run('Late change '+method,current.id,db.teamId);
+        }
+        return originalPrepare.call(this,sql);
+      };
+      try{
+        const response=method==='PUT' ? await calendarEvents.PUT(request({...current,title:'Must not overwrite'})) : await remove(current);
+        assert.equal(response.status,409);
+      }finally{database.prepare=originalPrepare;}
+      assert.equal(injected,true);
+      current=(await read(await get(first.id))).event;
+      assert.equal(current.notes,'Late change '+method);
+      assert.notEqual(current.title,'Must not overwrite');
+    }
+    globalThis.privateTestIdentity={id:'calendar-version-other',email:'calendar-other@example.test',name:'Other owner'};globalThis.privateTestWorkspaceId='';
+    await read(await onboarding.POST(request({name:'Other schedule',season:'2026'})),201);
+    assert.equal((await get(first.id)).status,404);
+    assert.equal((await calendarEvents.POST(request(body))).status,409);
+    assert.equal((await remove(current)).status,404);
+    globalThis.privateTestIdentity={id:'calendar-version-owner',email:'calendar-version@example.test',name:'Schedule owner'};
+    await read(await remove(current));assert.equal((await get(first.id)).status,404);
+    assert.equal((await calendarEvents.POST(request(body))).status,409,'a delayed create retry cannot resurrect a removed event');
+  }finally{globalThis.privateTestIdentity=previous;globalThis.privateTestWorkspaceId=previousTeam;}
 });

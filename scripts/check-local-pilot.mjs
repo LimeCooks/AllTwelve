@@ -200,6 +200,141 @@ try {
     { kind: 'play', name: 'Published teaching', playbookId: book.createdId },
     201,
   );
+  const eventBody = {
+    id: randomUUID(),
+    title: 'Team practice',
+    eventType: 'practice',
+    startsAt: '2026-11-10T20:00:00Z',
+    endsAt: '2026-11-10T21:30:00Z',
+    location: 'Practice field',
+    notes: 'Original staff plan',
+  };
+  const firstEvent = (
+    await api('prod', owners.prod, '/api/calendar-events', eventBody, 201)
+  ).event;
+  assert.deepEqual(
+    (await api('prod', owners.prod, '/api/calendar-events', eventBody, 201))
+      .event,
+    firstEvent,
+  );
+  const currentEvent = (
+    await api(
+      'prod',
+      staff,
+      '/api/calendar-events',
+      {
+        ...firstEvent,
+        title: 'Team practice — revised',
+        notes: 'Bring playbooks',
+      },
+      200,
+      'PUT',
+    )
+  ).event;
+  await api(
+    'prod',
+    owners.prod,
+    '/api/calendar-events',
+    { ...firstEvent, title: 'Stale event must not replace staff changes' },
+    409,
+    'PUT',
+  );
+  await api(
+    'prod',
+    owners.prod,
+    '/api/calendar-events?id=' + firstEvent.id,
+    undefined,
+    409,
+    'DELETE',
+    { 'x-chalktalk-calendar-version': firstEvent.version },
+  );
+  const depth = await api('prod', owners.prod, '/api/depth-charts');
+  const removedBody = {
+    ...eventBody,
+    id: randomUUID(),
+    title: 'Disposable removed-event retry check',
+  };
+  const removedEvent = (
+    await api('prod', owners.prod, '/api/calendar-events', removedBody, 201)
+  ).event;
+  await api(
+    'prod',
+    owners.prod,
+    '/api/calendar-events?id=' + removedEvent.id,
+    undefined,
+    200,
+    'DELETE',
+    { 'x-chalktalk-calendar-version': removedEvent.version },
+  );
+  await api('prod', owners.prod, '/api/calendar-events', removedBody, 409);
+  const layouts = {
+    ...depth.layouts,
+    Defence: [
+      {
+        id: randomUUID(),
+        pos: 'Field safety',
+        athleteId: athlete.id,
+        x: 50,
+        y: 35,
+        notes: 'Communicate coverage',
+      },
+    ],
+  };
+  await api(
+    'prod',
+    staff,
+    '/api/depth-charts',
+    { layouts, version: depth.version },
+    200,
+    'PUT',
+  );
+  const gameplan = (
+    await api(
+      'prod',
+      staff,
+      '/api/gameplans',
+      {
+        id: randomUUID(),
+        title: 'Opponent preparation',
+        opponent: 'Scout team',
+        date: '2026-11-10',
+        archived: false,
+        state: {
+          unit: 'Defence',
+          included: [],
+          objectives: [
+            {
+              title: 'Communicate coverage',
+              detail: 'Confirm the call before every snap',
+              target: 'All DBs',
+            },
+          ],
+          callBuckets: [{ name: 'Base calls', plays: [play.createdId] }],
+        },
+      },
+      201,
+    )
+  ).plan;
+  const generated = await api(
+    'prod',
+    staff,
+    '/api/practice-plans',
+    {
+      id: randomUUID(),
+      title: 'Defensive teaching practice',
+      practiceDate: '2026-11-10',
+      generateFrom: { id: gameplan.id, version: gameplan.version },
+    },
+    201,
+  );
+  const practice = generated.plans.find(
+    (plan) => plan.id === generated.savedPlanId,
+  );
+  assert.ok(practice);
+  assert.ok(JSON.stringify(practice).includes('Communicate coverage'));
+  report.checks.push(
+    'Shared calendar rejects stale edits/deletes and retries without duplicates; depth assignments and named gameplan-to-practice generation save real linked records',
+  );
   const pack = (
     await api(
       'prod',
@@ -383,6 +518,38 @@ try {
         )
         .get(teams.prod, 'team-message-v1:' + channel.id + ':' + messageId),
     );
+    assert.equal(
+      recovered
+        .prepare('SELECT notes FROM calendar_events WHERE id=?')
+        .get(currentEvent.id).notes,
+      currentEvent.notes,
+    );
+    assert.deepEqual(
+      JSON.parse(
+        recovered
+          .prepare(
+            'SELECT value_json FROM workspace_state WHERE team_id=? AND state_key=?',
+          )
+          .get(teams.prod, 'depth-layouts-v3').value_json,
+      ),
+      layouts,
+    );
+    assert.equal(
+      JSON.parse(
+        recovered
+          .prepare(
+            'SELECT value_json FROM workspace_state WHERE team_id=? AND state_key=?',
+          )
+          .get(teams.prod, 'gameplan-record-v1:' + gameplan.id).value_json,
+      ).title,
+      gameplan.title,
+    );
+    assert.ok(
+      recovered
+        .prepare('SELECT plan_json FROM practice_plans WHERE id=?')
+        .get(practice.id)
+        .plan_json.includes('Communicate coverage'),
+    );
   } finally {
     recovered.close();
   }
@@ -402,6 +569,30 @@ try {
   }
   learning = await api('prod', player, '/api/player-learning');
   assert.deepEqual(learning.items[0].play, issuedMaterial);
+  assert.deepEqual(
+    (
+      await api(
+        'prod',
+        owners.prod,
+        '/api/calendar-events?id=' + currentEvent.id,
+      )
+    ).event,
+    currentEvent,
+  );
+  assert.deepEqual(
+    (await api('prod', staff, '/api/depth-charts')).layouts,
+    layouts,
+  );
+  assert.deepEqual(
+    (await api('prod', staff, '/api/gameplans?id=' + gameplan.id)).plan,
+    gameplan,
+  );
+  assert.deepEqual(
+    (await api('prod', staff, '/api/practice-plans')).plans.find(
+      (plan) => plan.id === practice.id,
+    ),
+    practice,
+  );
   assert.equal(
     (
       await api(

@@ -114,6 +114,7 @@ export type CalendarEventType =
 
 export type CalendarEventRecord = {
   id: string;
+  version?: string;
   title: string;
   eventType: CalendarEventType;
   startsAt: string;

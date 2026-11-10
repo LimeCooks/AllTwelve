@@ -1,5 +1,15 @@
 # Calendar reliability
 
+## Shared-edit protection — local Non-Prod, 10 November 2026
+
+Editing or removing an event requires the version the coach opened. The database compares the original fields again as part of the write, so a change between validation and saving still rejects the stale operation. A new event keeps the same request ID across retries. A protected creation receipt is saved with the event and retained if the event is removed, preventing a delayed retry from recreating it. No schema migration is required.
+
+A rejected edit keeps every unsaved field and offers Download draft and Load latest saved event. Replacing the draft requires confirmation, and failed loads leave the draft in place. Removal requires confirmation and a stale removal offers the latest saved event. The toolbar's message shortcut is labelled for what it opens.
+
+Verification: 121 automated tests and type checking passed. The actual local Worker report at outputs/local-pilot-check-Mrrjst/report.json includes same-request retries, stale owner/staff operations, versioned removal, rejection of a removed-event retry, and restart/backup verification of the revised event plus depth and planning records. Two isolated browser tabs reproduced a stale save, downloaded the unsaved note, confirmed reload and saved against the new version. A stale removal was rejected at 390px and reloading showed the newer saved note. No user environment was seeded or modified by the tests.
+
+Earlier Calendar checks follow below.
+
 New events now convert the device's local date/time to UTC with its actual daylight-saving offset. The event dialog names the device time zone. Calendar day grouping and time labels convert saved instants back into that zone; they no longer extract the original stored string's date or hour. Existing records are normalized when read, without rewriting them.
 
 The week view expands its hourly range for morning and late events instead of clamping everything into the original 3–8 PM grid. A failed schedule load shows a retry state before editing is available. A failed create keeps the dialog open with a visible error; pending writes prevent double submission and accidental dialog closure. API validation rejects missing time zones, impossible dates, empty titles, invalid types and non-positive durations. Authentication failures retain their correct status, and records remain team-scoped.
