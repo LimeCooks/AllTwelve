@@ -513,6 +513,7 @@ async function verifySaved(label) {
     headers: ownerHeaders('b'),
   });
   assert.equal(foreignMedia.status, 404);
+  await foreignMedia.text();
   await Promise.all(
     Array.from({ length: 12 }, async (_, index) => {
       const owner = index % 2 ? 'a' : 'b';
@@ -1254,6 +1255,7 @@ try {
   );
   const correctedEvent = {
     id: savedEvent.event.id,
+    version: savedEvent.event.version,
     title: 'Corrected rehearsal practice',
     eventType: 'practice',
     startsAt: '2026-11-06T20:30:00Z',
