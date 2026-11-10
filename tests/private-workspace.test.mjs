@@ -151,6 +151,7 @@ const onboarding = await import(
 );
 const teamAccess = await import(await moduleUrl('../app/api/team-access/route.ts', replacements));
 const teamInvitations = await import(await moduleUrl('../app/api/team-invitations/route.ts', replacements));
+replacements.push(["'@/lib/install-material'", JSON.stringify(await moduleUrl('../lib/install-material.ts', replacements))]);
 const playerLearningUrl = await moduleUrl('../lib/player-learning.ts', replacements);
 const teamMessagesUrl = await moduleUrl('../lib/team-messages.ts', replacements);
 const teamMessagesApi = await import(await moduleUrl('../app/api/team-messages/route.ts',[
@@ -4427,6 +4428,8 @@ test('linked player receives only own published installs and acknowledgements st
     const book=await json(await playbooks.POST(request({kind:'book',name:'Delivery defence',side:'Defence'})),201);
     const saved=await json(await playbooks.POST(request({kind:'play',playbookId:book.createdId,name:'Published teaching'})),201);
     const play=saved.plays.find(p=>p.id===saved.createdId);
+    sqlite.prepare('UPDATE plays SET notes=? WHERE id=?').run('Issued coaching note',play.id);
+    sqlite.prepare('INSERT INTO play_assignments(id,play_id,position,title,detail,sort_order) VALUES(?,?,?,?,?,?)').run('issued-assignment',play.id,'FS','Deep middle','Read the quarterback',0);
     const draft=await json(await playbooks.POST(request({kind:'play',playbookId:book.createdId,name:'SECRET DRAFT PLAY'})),201);
     const pack=(await json(await installs.POST(request({kind:'package',name:'Any cadence teaching',unit:'Defence',dueAt:''})),201)).package;
     await json(await installs.POST(request({packageId:pack.id,playId:play.id})));
@@ -4446,6 +4449,35 @@ test('linked player receives only own published installs and acknowledgements st
     assert.equal(learning.items[0].play.id,play.id);
     assert.equal(learning.items[0].play.players.length,play.players.length);
     assert.equal(learning.items[0].package.dueAt,'');
+    assert.equal(learning.items[0].materialSource,'published');
+    assert.equal(learning.items[0].play.notes,'Issued coaching note');
+    assert.equal(learning.items[0].play.assignments[0].detail,'Read the quarterback');
+    globalThis.privateTestIdentity=owner;
+    const livePlay=(await json(await playbooks.GET())).plays.find(row=>row.id===play.id);
+    assert.equal((await playbooks.PUT(request({...livePlay,name:'Changed library title'}))).status,409,'ordinary library edits stay locked for issued plays');
+    // Simulate a future source migration bypassing the ordinary play lock.
+    sqlite.prepare('UPDATE plays SET name=?,notes=?,diagram_json=? WHERE id=?').run('Changed library title','New coaching note',JSON.stringify({diagramVersion:2,fieldPosition:30,players:[],routes:[],zones:[],labels:[],showOpponent:false,opponentPlayers:[]}),play.id);
+    sqlite.prepare('UPDATE play_assignments SET detail=? WHERE play_id=?').run('Changed teaching',play.id);
+    const coachInstall=await json(await installs.GET(new Request('https://pilot.test/api/install?packageId='+pack.id)));
+    assert.equal(coachInstall.items[0].title,'Published teaching');
+    assert.deepEqual(coachInstall.items[0].material,learning.items[0].play);
+    globalThis.privateTestIdentity=player;
+    assert.deepEqual((await json(await playerLearningApi.GET())).items[0].play,learning.items[0].play,'library edits must not alter an issued diagram, assignments or notes');
+    const snapshotKey='install-published-v1:'+pack.id;
+    const snapshotRow=sqlite.prepare('SELECT * FROM workspace_state WHERE team_id=? AND state_key=?').get(team.id,snapshotKey);
+    sqlite.prepare('DELETE FROM workspace_state WHERE id=?').run(snapshotRow.id);
+    const legacy=(await json(await playerLearningApi.GET())).items[0];
+    assert.equal(legacy.materialSource,'legacy-live');
+    assert.equal((await playerLearningApi.PATCH(request({id:legacy.id,version:legacy.version,kind:'reviewed'}))).status,409,'old publications must not pretend to have preserved teaching');
+    sqlite.prepare('INSERT INTO workspace_state(id,team_id,state_key,value_json,updated_at) VALUES(?,?,?,?,?)').run(snapshotRow.id,snapshotRow.team_id,snapshotRow.state_key,'broken JSON',snapshotRow.updated_at);
+    assert.equal((await playerLearningApi.GET()).status,500,'corrupt preserved material cannot fall back to a different live play');
+    sqlite.prepare('UPDATE workspace_state SET value_json=? WHERE id=?').run(snapshotRow.value_json,snapshotRow.id);
+    sqlite.prepare('DELETE FROM plays WHERE id=?').run(play.id);
+    assert.deepEqual((await json(await playerLearningApi.GET())).items[0].play,learning.items[0].play,'source loss must not remove issued teaching');
+    globalThis.privateTestIdentity=owner;
+    const detached=await json(await installs.GET(new Request('https://pilot.test/api/install?packageId='+pack.id)));
+    assert.deepEqual(detached.items[0].material,learning.items[0].play);
+    globalThis.privateTestIdentity=player;
     assert.ok(!JSON.stringify(learning).includes('SECRET'));
     assert.ok(!JSON.stringify(learning).includes('DO NOT EXPOSE'));
     assert.ok(!JSON.stringify(learning).includes(roster[1].id));

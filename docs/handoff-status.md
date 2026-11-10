@@ -1,5 +1,9 @@
 # Private pilot handoff status — 8 November 2026
 
+## Latest local milestone — 10 November 2026
+
+Non-Prod now retains independent published teaching copies, consumed by both coach Install and the restricted player workspace. Source locks remain; legacy publications are labelled honestly and cannot gain new acknowledgements without a fresh publication. All 120 tests and type checking pass. The real dual-Worker rehearsal downloads a manual ZIP, restores preserved teaching and connected messages into an independent offline database, and verifies local restart persistence: `outputs/local-pilot-check-Oz9b6J/report.json`. Browser checks verify the coach preview and 390px player version, not physical-device access. See install-followup.md for the precise boundary. Prod's build/data, the old hosted pilot and prototype remain unchanged.
+
 ## Working environment update — 9 November 2026
 
 The owner has chosen local Prod and Non-Prod while arranging future independent hosting and sign-in. The old internet pilot is no longer the working destination and has not been reset or removed. See [local-pilot.md](local-pilot.md) for running, data separation, local account testing and promotion. The historical hosted evidence below does not establish current local physical-device access: these local addresses work only on this PC.

@@ -23,6 +23,7 @@ function readPayload(raw: unknown, athleteId: string): PlayerLearning {
         !item.package ||
         !item.package.publishedAt ||
         typeof item.title !== 'string' ||
+        !['published', 'legacy-live'].includes(item.materialSource) ||
         ['reviewed', 'assignment', 'note'].some(
           (key) => typeof item[key as 'reviewed'] !== 'boolean',
         ),
@@ -235,6 +236,19 @@ export function PlayerWorkspace({ session }: { session: WorkspaceSession }) {
               <header>
                 <h2>{item.title}</h2>
                 <p>{item.package.name}</p>
+                {item.materialSource === 'legacy-live' ? (
+                  <p role="alert">
+                    This older install shows current playbook material because
+                    its original version was not preserved. Earlier reviews may
+                    refer to a different version. Ask your coach to publish a
+                    new install before marking it reviewed.
+                  </p>
+                ) : (
+                  <p>
+                    Published teaching version · later playbook edits do not
+                    change this material.
+                  </p>
+                )}
               </header>
               {item.play ? (
                 <>
@@ -244,7 +258,7 @@ export function PlayerWorkspace({ session }: { session: WorkspaceSession }) {
                   ) : (
                     <Button
                       variant="outline"
-                      disabled={busy}
+                      disabled={busy || item.materialSource === 'legacy-live'}
                       onClick={() => void acknowledge('reviewed', item)}
                     >
                       Mark play reviewed
@@ -271,7 +285,7 @@ export function PlayerWorkspace({ session }: { session: WorkspaceSession }) {
                     ) : (
                       <Button
                         variant="outline"
-                        disabled={busy}
+                        disabled={busy || item.materialSource === 'legacy-live'}
                         onClick={() => void acknowledge('assignment', item)}
                       >
                         Mark assignments reviewed
@@ -286,7 +300,7 @@ export function PlayerWorkspace({ session }: { session: WorkspaceSession }) {
                     ) : (
                       <Button
                         variant="outline"
-                        disabled={busy}
+                        disabled={busy || item.materialSource === 'legacy-live'}
                         onClick={() => void acknowledge('note', item)}
                       >
                         Mark notes reviewed

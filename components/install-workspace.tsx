@@ -79,7 +79,10 @@ export function InstallWorkspace<T extends InstallPlay>({
   const requestId = useRef(0);
   const selected =
     data.items.find((item) => item.id === selectedId) ?? data.items[0];
-  const play = plays.find((item) => item.id === selected?.playId);
+  const play =
+    selected?.materialSource === 'published'
+      ? (selected.material as T | undefined)
+      : plays.find((item) => item.id === selected?.playId);
   const published = Boolean(data.package?.publishedAt);
   const currentReviews = data.reviews.filter(
     (review) => review.itemId === selected?.id,
@@ -468,7 +471,12 @@ export function InstallWorkspace<T extends InstallPlay>({
                   <header>
                     <div>
                       <h2>{selected.title}</h2>
-                      <span>{selected.group} · Saved play</span>
+                      <span>
+                        {selected.group} ·{' '}
+                        {selected.materialSource === 'published'
+                          ? 'Published version'
+                          : 'Saved play'}
+                      </span>
                     </div>
                     {!published ? (
                       <Button
@@ -487,6 +495,14 @@ export function InstallWorkspace<T extends InstallPlay>({
                       </Button>
                     ) : null}
                   </header>
+                  {selected.materialSource === 'legacy-live' ? (
+                    <p role="alert">
+                      This older install did not preserve its original material.
+                      The preview uses the current playbook; earlier reviews may
+                      refer to a different version. Publish a new install for
+                      versioned teaching.
+                    </p>
+                  ) : null}
                   {play ? (
                     <>
                       {play.players?.length ||
@@ -631,7 +647,7 @@ export function InstallWorkspace<T extends InstallPlay>({
             </DialogTitle>
             <DialogDescription>
               {dialog === 'publish'
-                ? 'All plays will be assigned to matching roster athletes. Published installs and their plays are locked to keep review records accurate.'
+                ? 'All plays will be assigned to matching roster athletes. A copy of each diagram, position assignment and coaching note is preserved as issued. Published installs and their source plays stay locked.'
                 : dialog === 'delete'
                   ? 'This deletes the draft package. The source plays stay in Playbook.'
                   : 'Choose the content and timing that fit your team.'}

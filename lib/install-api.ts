@@ -1,5 +1,15 @@
-import { getCoachingDatabase as getDatabase, type TeamDatabase } from '@/db/client';
+import {
+  getCoachingDatabase as getDatabase,
+  type TeamDatabase,
+} from '@/db/client';
 import { WorkspaceAccessError } from '@/lib/workspace-identity';
+import {
+  publishedMaterial,
+  materialPlay,
+  publishedMaterialSql,
+  installMaterialKey,
+  parsePublishedMaterial,
+} from '@/lib/install-material';
 class InstallInputError extends Error {}
 async function version(row: PackageRow) {
   const bytes = await crypto.subtle.digest(
@@ -110,13 +120,38 @@ async function payload(database: TeamDatabase, requestedId = '') {
     dueAt: row.due_at,
     publishedAt: row.published_at,
   });
+  const snapshot = selected?.published_at
+    ? await publishedMaterial(database, selected.id, selected.published_at)
+    : null;
+  if (
+    snapshot &&
+    (snapshot.items.length !== items.results.length ||
+      items.results.some(
+        (item) => !snapshot.items.some((saved) => saved.itemId === item.id),
+      ))
+  )
+    throw new Error(
+      'Published install items do not match their preserved material.',
+    );
   return {
     packages: await Promise.all(result.results.map(pack)),
     package: selected ? await pack(selected) : null,
     items: items.results.map((item) => ({
       id: item.id,
       playId: item.play_id,
-      title: item.title,
+      title:
+        snapshot?.items.find((saved) => saved.itemId === item.id)?.name ??
+        item.title,
+      materialSource: snapshot
+        ? 'published'
+        : selected?.published_at
+          ? 'legacy-live'
+          : 'draft',
+      material: snapshot
+        ? materialPlay(
+            snapshot.items.find((saved) => saved.itemId === item.id)!,
+          )
+        : null,
       type: 'Play',
       group: item.unit ?? 'Team',
       due: selected?.due_at || 'No due date',
@@ -304,17 +339,55 @@ export async function PATCH(request: Request) {
           'Every play needs at least one matching roster athlete before publishing.',
         );
       const eligible = `p.published_at IS NULL AND EXISTS (SELECT 1 FROM install_items i WHERE i.package_id = p.id) AND NOT EXISTS (SELECT 1 FROM install_items i LEFT JOIN plays q ON q.id = i.play_id AND q.team_id = p.team_id WHERE i.package_id = p.id AND (q.id IS NULL OR q.unit != i.position_group OR (p.unit != 'Team' AND p.unit != q.unit))) AND NOT EXISTS (SELECT 1 FROM install_items i WHERE i.package_id = p.id AND NOT EXISTS (SELECT 1 FROM athletes a WHERE a.team_id = p.team_id AND (i.position_group = 'Team' OR i.position_group = a.unit)))`;
+      const publishedAt = new Date().toISOString();
+      const preview = await database
+        .prepare(
+          `SELECT ${publishedMaterialSql} AS value_json FROM install_packages p WHERE p.id=? AND p.team_id=?`,
+        )
+        .bind(publishedAt, packageId, database.teamId)
+        .first<{ value_json: string }>();
+      try {
+        if (!preview) throw new Error();
+        parsePublishedMaterial(preview.value_json, packageId, publishedAt);
+      } catch {
+        throw new InstallInputError(
+          'One or more plays contain unreadable teaching material. Check the saved plays before publishing.',
+        );
+      }
+      const snapshotGuard = `EXISTS(SELECT 1 FROM workspace_state s WHERE s.team_id=p.team_id AND s.state_key=? AND json_valid(s.value_json) AND json_extract(s.value_json,'$.publishedAt')=?)`;
       await database.batch([
+        database
+          .prepare(`INSERT INTO workspace_state(id,team_id,state_key,value_json,updated_at)
+          SELECT lower(hex(randomblob(16))),p.team_id,?,${publishedMaterialSql},? FROM install_packages p
+          WHERE p.id=? AND p.team_id=? AND ${eligible} ON CONFLICT(team_id,state_key) DO NOTHING`)
+          .bind(
+            installMaterialKey(packageId),
+            publishedAt,
+            publishedAt,
+            packageId,
+            database.teamId,
+          ),
         database
           .prepare(`INSERT OR IGNORE INTO athlete_reviews (id, install_item_id, athlete_id, reviewed_at, assignment_acknowledged_at, note_acknowledged_at)
           SELECT lower(hex(randomblob(16))), i.id, a.id, NULL, NULL, NULL FROM install_packages p JOIN install_items i ON i.package_id = p.id JOIN athletes a ON a.team_id = p.team_id AND (i.position_group = 'Team' OR i.position_group = a.unit)
-          WHERE p.id = ? AND p.team_id = ? AND ${eligible}`)
-          .bind(packageId, database.teamId),
+          WHERE p.id = ? AND p.team_id = ? AND ${eligible} AND ${snapshotGuard}`)
+          .bind(
+            packageId,
+            database.teamId,
+            installMaterialKey(packageId),
+            publishedAt,
+          ),
         database
           .prepare(
-            `UPDATE install_packages AS p SET published_at = ? WHERE p.id = ? AND p.team_id = ? AND ${eligible}`,
+            `UPDATE install_packages AS p SET published_at = ? WHERE p.id = ? AND p.team_id = ? AND ${eligible} AND ${snapshotGuard}`,
           )
-          .bind(new Date().toISOString(), packageId, database.teamId),
+          .bind(
+            publishedAt,
+            packageId,
+            database.teamId,
+            installMaterialKey(packageId),
+            publishedAt,
+          ),
       ]);
       const saved = await payload(database, packageId);
       if (!saved.package?.publishedAt)

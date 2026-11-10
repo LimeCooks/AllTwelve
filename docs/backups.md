@@ -8,6 +8,8 @@ Once ready, the backup uses the preserved file copies. Replacing or deleting an 
 
 The export contains all 19 team/domain tables plus uploaded image/video bytes and their original metadata. Ownership grants are excluded. All database reads, source objects, recovery copies and manifests are scoped to the authenticated owner's team. Another account cannot retrieve a backup using its ID. Internal `_backups/` objects are excluded from future source-media enumeration, preventing recursive backups.
 
+The protected workspace records now include connected team conversations and preserved teaching from new install publications. The real local production-build check downloaded a ZIP and restored both into an independent offline database (`outputs/local-pilot-check-Oz9b6J/report.json`). Existing ownership and member grants remain excluded; recovery does not grant former accounts access.
+
 Large libraries are split at file boundaries into parts containing up to 512 MiB of media plus the manifest. Each ZIP part contains the same `chalktalk-backup.json` and its own `media/` files. Copying and ZIP downloads use streaming backpressure, not whole-library buffering. The current limits remain 10,000 uploaded files, 16 MiB of structured records, and 512 MiB per file/ZIP media part; normal uploads remain limited to 250 MiB. Large-limit performance has not been load-tested.
 
 ## Interruption, replacement and retention

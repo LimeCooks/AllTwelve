@@ -5,6 +5,7 @@ import {
 import type { WorkspaceGrant } from '@/lib/team-permissions';
 import { validatePlayDiagram } from '@/lib/validate-play';
 import type { Drawing, Assignment } from '@/lib/play-designer';
+import { publishedMaterial, materialPlay } from '@/lib/install-material';
 
 export type PlayerLearningItem = {
   id: string;
@@ -15,6 +16,7 @@ export type PlayerLearningItem = {
   assignment: boolean;
   note: boolean;
   version: string;
+  materialSource: 'published' | 'legacy-live';
   play:
     | (Drawing & {
         id: string;
@@ -126,10 +128,29 @@ export async function playerLearning(
     });
     assignments.set(row.play_id, list);
   }
+  const snapshots = new Map<
+    string,
+    Awaited<ReturnType<typeof publishedMaterial>>
+  >();
+  for (const row of rows.results) {
+    if (!snapshots.has(row.package_id))
+      snapshots.set(
+        row.package_id,
+        await publishedMaterial(database, row.package_id, row.published_at),
+      );
+  }
   const items = await Promise.all(
     rows.results.map(async (row): Promise<PlayerLearningItem> => {
       let play: PlayerLearningItem['play'] = null;
-      if (row.play_id && row.play_name && row.diagram_json) {
+      const snapshot = snapshots.get(row.package_id);
+      if (snapshot) {
+        const material = snapshot.items.find(
+          (item) => item.itemId === row.install_item_id,
+        );
+        if (!material)
+          throw new Error('Published assignment material is missing.');
+        play = materialPlay(material);
+      } else if (row.play_id && row.play_name && row.diagram_json) {
         // Corrupt material stays unavailable; never substitute a sample diagram.
         try {
           const drawing = JSON.parse(row.diagram_json) as Record<
@@ -168,7 +189,8 @@ export async function playerLearning(
           dueAt: row.due_at,
           publishedAt: row.published_at,
         },
-        title: row.play_name ?? row.title,
+        title: play?.name ?? row.play_name ?? row.title,
+        materialSource: snapshot ? 'published' : 'legacy-live',
         reviewed: Boolean(row.reviewed_at),
         assignment: Boolean(row.assignment_acknowledged_at),
         note: Boolean(row.note_acknowledged_at),
@@ -229,6 +251,11 @@ export async function acknowledgeLearning(
       'This material is unavailable. Ask your coach to check it.',
       409,
     );
+  if (item.materialSource !== 'published')
+    throw new WorkspaceAccessError(
+      'This older install did not preserve its original teaching material. Ask your coach to publish a new install before acknowledging it.',
+      409,
+    );
   const kind = body.kind as keyof typeof columns;
   if (item[kind]) return current; // Retrying an acknowledgement never changes its timestamp.
   if (item.version !== body.version)
@@ -246,8 +273,10 @@ export async function acknowledgeLearning(
   const saved = await database
     .prepare(`UPDATE athlete_reviews SET ${column}=?
     WHERE id=? AND athlete_id=? AND reviewed_at IS ? AND assignment_acknowledged_at IS ? AND note_acknowledged_at IS ?
-    AND EXISTS(SELECT 1 FROM install_items i JOIN install_packages k ON k.id=i.package_id JOIN plays p ON p.id=i.play_id AND p.team_id=k.team_id
-      WHERE i.id=athlete_reviews.install_item_id AND k.team_id=? AND k.published_at IS NOT NULL)
+    AND EXISTS(SELECT 1 FROM install_items i JOIN install_packages k ON k.id=i.package_id
+      JOIN workspace_state s ON s.team_id=k.team_id AND s.state_key='install-published-v1:'||k.id
+      WHERE i.id=athlete_reviews.install_item_id AND k.team_id=? AND k.published_at IS NOT NULL
+        AND json_valid(s.value_json) AND json_extract(s.value_json,'$.publishedAt')=k.published_at)
     AND EXISTS(SELECT 1 FROM team_memberships m JOIN athletes a ON a.id=m.athlete_id AND a.team_id=m.team_id
       WHERE m.team_id=? AND m.user_id=? AND m.athlete_id=? AND m.role='player' AND m.status='active') RETURNING id`)
     .bind(

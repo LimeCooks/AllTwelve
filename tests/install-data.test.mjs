@@ -59,6 +59,8 @@ test('installs distinguish a blank team from malformed, wrong-package or inconsi
     { ...valid, packages: [pack, pack] },
     { ...valid, items: [item, item] },
     { ...valid, items: [{ ...item, complete: 101 }] },
+    { ...valid, items: [{ ...item, materialSource: 'published', material: null }] },
+    { ...valid, items: [{ ...item, materialSource: 'published', material: {id:'different-play',name:'Wrong teaching',notes:'',assignments:[]} }] },
     { ...valid, reviews: [{ ...review, itemId: 'missing' }] },
     { ...valid, reviews: [{ ...review, acknowledged: true }] },
   ])

@@ -13,6 +13,8 @@ export type Item = {
   group: string;
   reviewCount: number;
   complete: number;
+  materialSource?: 'published' | 'legacy-live' | 'draft';
+  material?: import('@/lib/install-material').InstallMaterial | null;
 };
 export type Review = {
   id: string;
@@ -71,6 +73,19 @@ export function parseInstallPayload(value: unknown, requestedId = ''): Payload {
         (item.playId === null || string(item.playId)) &&
         string(item.title) &&
         string(item.group) &&
+        (item.materialSource === undefined ||
+          ['published', 'legacy-live', 'draft'].includes(
+            item.materialSource,
+          )) &&
+        (item.materialSource !== 'published' ||
+          Boolean(
+            item.material &&
+            string(item.material.id) &&
+            string(item.material.name) &&
+            string(item.material.notes) &&
+            Array.isArray(item.material.assignments) &&
+            (item.playId === null || item.material.id === item.playId),
+          )) &&
         Number.isInteger(item.reviewCount) &&
         item.reviewCount >= 0 &&
         Number.isFinite(item.complete) &&

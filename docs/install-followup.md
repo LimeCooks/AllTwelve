@@ -1,5 +1,17 @@
 # Hosted Install follow-up
 
+## Preserved publication material — local Non-Prod, 10 November 2026
+
+New publications retain an independent copy of each issued diagram, play name/unit, position assignment and coaching note. The copy, roster review assignments and publication timestamp are written in one transaction. Pre-existing unreadable material prevents publication; late eligibility failures leave no partial copy or reviews. Retrying publication does not replace an issued copy. Normal source-play and formation locks remain in place.
+
+Coach Install and the restricted player workspace read the same preserved material. Future source changes or loss do not substitute different teaching or remove the saved version. The copies live in protected team-scoped workspace records and are included in the existing portable manual backup without changing its 19-table schema.
+
+Older publications without a copy remain explicitly labelled as current-library previews, not reconstructed historical versions. Their prior review records are retained; new player acknowledgements require a newly published install. Corrupt preserved material fails visibly instead of silently falling back to the live library.
+
+Evidence: 120 passing tests and type checking; `outputs/local-pilot-check-Oz9b6J/report.json` verifies the actual production build, matching coach/player material, restart persistence, downloadable ZIPs and independent offline recovery of issued material plus team messages. Separate browser checks opened the preserved coach preview and the player version at 390px with secondary details collapsed. Raw source-change/loss and corruption cases use disposable SQLite tests, not user data. The first expanded rehearsal used a JSON-bodied request unlike the actual backup button and stalled; the corrected body-free app request passed. Prod retains its earlier release.
+
+The historical notes below describe the earlier implementation.
+
 This supplements the historical local-only audit in `playbook-install-audit.md`. The hosted pilot now uses authenticated, team-scoped storage. Real player membership and account-to-athlete linking remain separate unfinished work; coach views never claim that a player received a notification or completed a review.
 
 Install loads validate complete package, play and review data. Loading and failed reloads gate editing; a network failure cannot expose apparently empty or editable stale contents. Requests are sequenced so older reads cannot replace a newer selection. Missing selected packages can recover through View all installs. Mutation retries are locked while a write is in flight, and an unconfirmed save response requires a reload rather than an immediate duplicate write.

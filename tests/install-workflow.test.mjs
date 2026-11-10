@@ -94,6 +94,7 @@ const replacements = [
   ["'@/lib/validate-play'", JSON.stringify(validatorUrl)],
   ["'@/lib/play-designer'", JSON.stringify(designerUrl)],
 ];
+replacements.push(["'@/lib/install-material'", JSON.stringify(await moduleUrl('../lib/install-material.ts', replacements))]);
 const installs = await import(
   await moduleUrl('../lib/install-api.ts', replacements)
 );
@@ -1360,4 +1361,37 @@ test('delete checks content and new child/install links inside the transaction r
       .get().n,
     0,
   );
+});
+
+test('publication preserves one atomic teaching copy and rejects unreadable material without partial publication', async () => {
+  const {teamId}=await getDatabase();
+  const now=new Date().toISOString();
+  sqlite.prepare("INSERT INTO athletes(id,team_id,number,first_name,last_name,position,unit,graduation_year,height,weight_lb,status,eligibility,attendance_percent,install_percent,email,phone,staff_note,created_at,updated_at) VALUES(?,?,99,'Snapshot','Player','X','Offence',12,'',0,'Active','Cleared',0,0,'snapshot@example.invalid','','',?,?)").run('snapshot-athlete',teamId,now,now);
+  const book=ok(await call(playbooks,'POST',{kind:'book',name:'Issued versions',side:'Offence'}));
+  const made=ok(await call(playbooks,'POST',{kind:'play',playbookId:book.createdId,name:'Issued route'}));
+  const source=sqlite.prepare('SELECT diagram_json FROM plays WHERE id=?').get(made.createdId).diagram_json;
+  const pack=ok(await call(installs,'POST',{kind:'package',name:'Camp afternoon',unit:'Offence'})).package;
+  ok(await call(installs,'POST',{packageId:pack.id,playId:made.createdId}));
+  sqlite.prepare('UPDATE plays SET diagram_json=? WHERE id=?').run('{"players":"invalid"}',made.createdId);
+  assert.equal((await call(installs,'PATCH',{kind:'publish',packageId:pack.id})).status,400);
+  assert.equal(sqlite.prepare('SELECT published_at FROM install_packages WHERE id=?').get(pack.id).published_at,null);
+  assert.equal(sqlite.prepare('SELECT count(*) n FROM athlete_reviews r JOIN install_items i ON i.id=r.install_item_id WHERE i.package_id=?').get(pack.id).n,0);
+  assert.equal(sqlite.prepare('SELECT id FROM workspace_state WHERE team_id=? AND state_key=?').get(teamId,'install-published-v1:'+pack.id),undefined);
+  sqlite.prepare('UPDATE plays SET diagram_json=? WHERE id=?').run(source,made.createdId);
+  const originalBatch=database.batch;
+  let injected=false;
+  database.batch=async function(statements){
+    if(!injected){injected=true;sqlite.prepare('UPDATE plays SET notes=? WHERE id=?').run('Latest committed instruction',made.createdId);}
+    return originalBatch.call(this,statements);
+  };
+  let published;
+  try{published=ok(await call(installs,'PATCH',{kind:'publish',packageId:pack.id}));}finally{database.batch=originalBatch;}
+  assert.equal(injected,true);
+  assert.equal(published.items[0].materialSource,'published');
+  assert.equal(published.items[0].material.notes,'Latest committed instruction');
+  const frozen=published.items[0].material;
+  sqlite.prepare('UPDATE plays SET notes=? WHERE id=?').run('Different future source',made.createdId);
+  const reopened=ok(await call(installs,'GET',null,'?packageId='+pack.id));
+  assert.deepEqual(reopened.items[0].material,frozen);
+  assert.deepEqual(ok(await call(installs,'PATCH',{kind:'publish',packageId:pack.id})).items[0].material,frozen,'publication retry cannot replace the issued version');
 });

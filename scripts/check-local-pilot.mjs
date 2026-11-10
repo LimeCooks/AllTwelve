@@ -3,6 +3,8 @@ import http from 'node:http';
 import path from 'node:path';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import { restoreBackup } from './restore-backup.mjs';
 import {
   workspace,
   captureRelease,
@@ -241,6 +243,13 @@ try {
   let learning = await api('prod', player, '/api/player-learning');
   assert.equal(learning.items.length, 1);
   assert.equal(learning.items[0].play.id, play.createdId);
+  assert.equal(learning.items[0].materialSource, 'published');
+  const issuedMaterial = learning.items[0].play;
+  assert.deepEqual(
+    (await api('prod', owners.prod, '/api/install?packageId=' + pack.id))
+      .items[0].material,
+    issuedMaterial,
+  );
   assert.ok(!JSON.stringify(learning).includes('Private staff note'));
   for (const kind of ['reviewed', 'assignment', 'note']) {
     const row = learning.items[0];
@@ -323,6 +332,63 @@ try {
   report.checks.push(
     'Team channels deliver across roles, retries do not duplicate, direct conversations exclude other accounts and the other environment',
   );
+  const backup = await api(
+    'prod',
+    owners.prod,
+    '/api/backups',
+    undefined,
+    200,
+    'POST',
+  );
+  assert.equal(backup.state, 'ready');
+  const archives = [];
+  for (let part = 1; part <= backup.parts; part++) {
+    const response = await fetch(
+      `http://127.0.0.1:${settings.prod.port}/api/backups?archiveId=${backup.id}&part=${part}`,
+      { headers: { cookie: owners.prod }, signal: AbortSignal.timeout(10000) },
+    );
+    assert.equal(response.status, 200);
+    const archive = path.join(root, `backup-${part}.zip`);
+    await writeFile(archive, Buffer.from(await response.arrayBuffer()));
+    archives.push(archive);
+  }
+  await restoreBackup({
+    archives,
+    output: path.join(root, 'offline-recovery'),
+    ownerId: 'local-recovery-owner',
+  });
+  const recovered = new DatabaseSync(
+    path.join(root, 'offline-recovery', 'workspace.sqlite'),
+    { readOnly: true },
+  );
+  try {
+    const retained = JSON.parse(
+      recovered
+        .prepare(
+          'SELECT value_json FROM workspace_state WHERE team_id=? AND state_key=?',
+        )
+        .get(teams.prod, 'install-published-v1:' + pack.id).value_json,
+    );
+    assert.equal(retained.items[0].playId, issuedMaterial.id);
+    assert.deepEqual(
+      JSON.parse(retained.items[0].diagramJson).players,
+      issuedMaterial.players,
+    );
+    assert.deepEqual(retained.items[0].assignments, issuedMaterial.assignments);
+    assert.equal(retained.items[0].notes, issuedMaterial.notes);
+    assert.ok(
+      recovered
+        .prepare(
+          'SELECT 1 FROM workspace_state WHERE team_id=? AND state_key=?',
+        )
+        .get(teams.prod, 'team-message-v1:' + channel.id + ':' + messageId),
+    );
+  } finally {
+    recovered.close();
+  }
+  report.checks.push(
+    'Published teaching and connected messages are present in downloaded manual backup ZIPs and restore into an independent offline database',
+  );
   for (const entry of running.values()) await entry.stop();
   running.clear();
   for (const env of ['prod', 'nonprod'])
@@ -335,6 +401,7 @@ try {
     assert.deepEqual(await readFile(env, owners[env]), bytes[env]);
   }
   learning = await api('prod', player, '/api/player-learning');
+  assert.deepEqual(learning.items[0].play, issuedMaterial);
   assert.equal(
     (
       await api(

@@ -48,6 +48,8 @@ The owner's earlier private journal stays under Personal saved notes and is not 
 
 ## Changes and promotion
 
+Non-Prod also preserves teaching material when publishing new installs. Coach and player previews use the issued copy; later source changes do not change that copy. Older installs without a preserved copy are labelled separately and require a new publication for further player acknowledgements.
+
 ```text
 npm run local:update
 ```
@@ -83,4 +85,4 @@ The dual-instance integration checker uses fresh disposable directories under `o
 node scripts/check-local-pilot.mjs
 ```
 
-It verifies independent blank onboarding, roster and file isolation, rejected foreign-team hints, real local staff invitation/acceptance, bound-player published material and coach-visible acknowledgements. It then restarts both disposable instances and verifies the saved records and bytes remain independent. The Windows host may require loopback permission for these tests. Current setup evidence: `outputs/local-pilot-check-y2FJU5/report.json` and 117 passing tests.
+It verifies independent blank onboarding, roster and file isolation, rejected foreign-team hints, local staff invitation/acceptance, bound-player preserved teaching and coach-visible acknowledgements, and scoped team conversations. It downloads a manual backup and restores issued material and messages into a separate offline database, then restarts both disposable instances and checks records and bytes remain independent. The Windows host may require loopback permission for these tests. Current evidence: `outputs/local-pilot-check-Oz9b6J/report.json` and 120 passing tests.
