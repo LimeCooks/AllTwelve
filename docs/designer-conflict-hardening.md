@@ -1,0 +1,15 @@
+# Designer conflict protection
+
+The owner confirmed on November 7, 2026 that the same team workspace and the same saved play diagram appear on laptop and iPhone/tablet. This verifies those real owner flows, not uploaded file playback or a complete coaching walkthrough.
+
+Playbook, play and formation responses now include a SHA-256 version of the raw saved record. Play versions also include ordered assignments. Versions are derived from the actual rows used to build a response, never from a later reread that might attach a newer token to older drawing data. No schema migration is required.
+
+Updates require the version that was opened. An outdated or missing version fails without replacing saved work. A second check runs inside the D1 batch, comparing raw fields and all assignment entries, and checking publication locks. A temporary workspace assertion row uses a NOT NULL constraint to abort the entire batch on conflict; it is deleted in that same batch on success. The diagram update and replacement assignments therefore commit together or not at all. Formation ownership changes and book unit changes also recheck use by plays at commit. These temporary assertion rows do not remain in storage.
+
+The designer retains its drawing, notes, assignments and history on a failed save. Recovery actions download the exact current draft as JSON or explicitly reload the saved record. Reload asks before replacing a draft; failed reloads keep it. A fallback download link supports browsers that do not start automatic downloads. The file is a recovery artifact, not an automatic merge or an import feature. Drafts are still in memory unless downloaded; closing the browser does not provide offline recovery. An uncertain successful save can produce a conflict on retry; inspect/reload the saved copy instead of forcing an overwrite.
+
+Book settings retain the version from when the form was opened, including if the surrounding library refreshes. Old clients without versions must reload after deployment. Existing old releases still run against the unchanged database schema, but their old save handlers cannot provide these new concurrency guarantees during a rollback.
+
+Validation includes actual SQL/handler tests for stale book, play and formation updates, missing versions and an assignment changed after preflight but before the transaction. The local browser test used only a disposable book/play: a simulated newer-device save was preserved, the rejected older draft remained editable, Keep editing preserved it, the downloaded JSON contained the older draft with all twelve players, and explicit reload opened the newer record. Phone recovery controls were visually checked at 390px and wrapped within the screen. QA records were removed and the original local library matched its pre-test snapshot exactly. Hosted owner data was not used for QA.
+
+Copy and delete transaction protection is documented in `playbook-record-safety.md`. Remaining: automatic merge, draft import/offline draft storage, large-library pagination, physical touch/stylus validation and the remaining private-pilot handoff gates.

@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>ChalkTalk · Recovery workspace</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, sans-serif;
+        color: #e7edf5;
+        background: #0a1421;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 24px 16px;
+      }
+      main {
+        max-width: 880px;
+        margin: auto;
+      }
+      header {
+        border-bottom: 1px solid #28374a;
+        padding: 8px 0 22px;
+        margin-bottom: 24px;
+      }
+      .eyebrow {
+        font-size: 12px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: #96adc6;
+      }
+      h1 {
+        font-size: clamp(25px, 5vw, 36px);
+        margin: 8px 0;
+      }
+      h2 {
+        font-size: 20px;
+      }
+      p {
+        line-height: 1.6;
+        color: #b9c7d7;
+      }
+      section,
+      details {
+        border: 1px solid #29394d;
+        background: #101d2d;
+        border-radius: 14px;
+        padding: 20px;
+        margin: 18px 0;
+      }
+      summary {
+        cursor: pointer;
+        font-weight: 650;
+      }
+      label {
+        display: block;
+        line-height: 1.6;
+        margin: 12px 0;
+      }
+      input[type='file'] {
+        display: block;
+        max-width: 100%;
+        padding: 12px 0;
+        color: #c9d7e6;
+      }
+      button,
+      input::file-selector-button {
+        font: inherit;
+        border: 1px solid #426080;
+        border-radius: 8px;
+        background: #274766;
+        color: #f1f5fa;
+        padding: 10px 15px;
+        cursor: pointer;
+      }
+      button:disabled,
+      input:disabled {
+        opacity: 0.5;
+        cursor: wait;
+      }
+      button:focus-visible,
+      input:focus-visible,
+      summary:focus-visible {
+        outline: 3px solid #91c4ef;
+        outline-offset: 3px;
+      }
+      .file {
+        border-top: 1px solid #29394d;
+        padding: 14px 0;
+        overflow-wrap: anywhere;
+      }
+      .file strong {
+        display: block;
+      }
+      .file small {
+        color: #9bb0c7;
+        line-height: 1.5;
+      }
+      .verified {
+        color: #91d5bd;
+      }
+      #error {
+        color: #ffd5c9;
+        border-left: 3px solid #d69b87;
+        padding: 8px 12px;
+      }
+      #status {
+        min-height: 25px;
+        line-height: 1.5;
+      }
+      #refresh {
+        background: transparent;
+      }
+      #finish {
+        margin-top: 12px;
+      }
+      .muted {
+        color: #9bb0c7;
+        font-size: 14px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      @media (max-width: 480px) {
+        section,
+        details {
+          padding: 16px;
+        }
+        button {
+          width: 100%;
+          margin-top: 8px;
+        }
+      }
+    </style>
+    <script src="/recovery-client.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="eyebrow">ChalkTalk · Separate recovery workspace</div>
+        <h1>Recover your team</h1>
+        <p>
+          This destination has its own database and file storage. Recovery never
+          replaces or merges an existing team.
+        </p>
+      </header>
+      <p id="status" role="status">Checking this recovery workspace…</p>
+      <p id="error" role="alert" hidden></p>
+      <button id="refresh">Refresh recovery status</button>
+      <details>
+        <summary>How recovery works</summary>
+        <p>
+          Use every downloaded backup part with the offline recovery tool, then
+          prepare its verified cloud-recovery.json. Choose that manifest below.
+          Each original recovered file is uploaded and checked before any team
+          records are restored.
+        </p>
+        <p>
+          Uploads and large-file chunks already verified here survive a refresh.
+          Choose the same file again after an interruption. Your old ownership
+          grants are excluded; the restored team belongs to the account signed
+          in here.
+        </p>
+      </details>
+      <section id="choose" hidden>
+        <h2>Choose your prepared backup</h2>
+        <label for="manifest">Verified recovery manifest</label
+        ><input type="file" id="manifest" accept="application/json,.json" />
+        <p class="muted">
+          Choose cloud-recovery.json from the complete offline recovery folder.
+          No team records are written at this step.
+        </p>
+      </section>
+      <section id="prepared" hidden>
+        <h2 id="team"></h2>
+        <p id="totals"></p>
+        <div id="files"></div>
+        <div id="confirm">
+          <label
+            ><input type="checkbox" id="understand" /> Restore these records
+            into this empty recovery workspace.</label
+          ><button id="finish" disabled>Restore team records</button>
+        </div>
+        <p id="complete" class="verified" hidden>
+          Recovery is verified. The team records and uploaded files match the
+          prepared backup. This destination is ready for the normal ChalkTalk
+          application.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

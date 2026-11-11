@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { check, index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 export const teams = sqliteTable('teams', {
   id: text('id').primaryKey(),
@@ -8,6 +8,12 @@ export const teams = sqliteTable('teams', {
   season: text('season').notNull(),
   createdAt: text('created_at').notNull(),
 });
+
+export const workspaceOwners = sqliteTable('workspace_owners', {
+  userId: text('user_id').primaryKey(),
+  teamId: text('team_id').notNull().references(() => teams.id, { onDelete: 'cascade' }),
+  createdAt: text('created_at').notNull(),
+}, (table) => [uniqueIndex('idx_workspace_owner_team').on(table.teamId)]);
 
 export const workspaceState = sqliteTable('workspace_state', {
   id: text('id').primaryKey(),
@@ -222,4 +228,45 @@ export const filmClips = sqliteTable('film_clips', {
   yardLine: text('yard_line'),
   result: text('result'),
   tagsJson: text('tags_json').notNull().default('[]'),
-}, (table) => [index('idx_film_clips_asset_number').on(table.filmAssetId, table.clipNumber)]);
+}, (table) => [uniqueIndex('idx_film_clip_number_unique').on(table.filmAssetId, table.clipNumber)]);
+
+// Access grants are not included in portable team/domain backups.
+export const teamInvitations = sqliteTable('team_invitations', {
+  id: text('id').primaryKey(),
+  teamId: text('team_id').notNull().references(() => teams.id, { onDelete: 'cascade' }),
+  email: text('email').notNull(),
+  role: text('role').notNull(),
+  athleteId: text('athlete_id').references(() => athletes.id, { onDelete: 'restrict' }),
+  createdBy: text('created_by').notNull(),
+  createdAt: text('created_at').notNull(),
+  expiresAt: text('expires_at').notNull(),
+  acceptedBy: text('accepted_by'),
+  acceptedAt: text('accepted_at'),
+  revokedAt: text('revoked_at'),
+}, table => [
+  index('idx_team_invitation_team').on(table.teamId, table.createdAt),
+  index('idx_team_invitation_email').on(table.email, table.acceptedAt, table.revokedAt),
+  check('team_invitation_role', sql`${table.role} IN ('staff','player')`),
+  check('team_invitation_athlete', sql`(${table.role}='staff' AND ${table.athleteId} IS NULL) OR (${table.role}='player' AND ${table.athleteId} IS NOT NULL)`),
+  check('team_invitation_acceptance', sql`(${table.acceptedBy} IS NULL AND ${table.acceptedAt} IS NULL) OR (${table.acceptedBy} IS NOT NULL AND ${table.acceptedAt} IS NOT NULL)`),
+]);
+export const teamMemberships = sqliteTable('team_memberships', {
+  id: text('id').primaryKey(),
+  teamId: text('team_id').notNull().references(() => teams.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull(),
+  email: text('email').notNull(),
+  name: text('name').notNull(),
+  role: text('role').notNull(),
+  athleteId: text('athlete_id').references(() => athletes.id, { onDelete: 'restrict' }),
+  invitationId: text('invitation_id').notNull().references(() => teamInvitations.id, { onDelete: 'restrict' }),
+  status: text('status').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, table => [
+  uniqueIndex('team_memberships_team_id_user_id_unique').on(table.teamId, table.userId),
+  index('idx_team_membership_user').on(table.userId, table.status),
+  uniqueIndex('idx_team_membership_active_athlete').on(table.teamId, table.athleteId).where(sql`${table.status}='active' AND ${table.athleteId} IS NOT NULL`),
+  check('team_membership_role', sql`${table.role} IN ('staff','player')`),
+  check('team_membership_status', sql`${table.status} IN ('active','revoked')`),
+  check('team_membership_athlete', sql`(${table.role}='staff' AND ${table.athleteId} IS NULL) OR (${table.role}='player' AND ${table.athleteId} IS NOT NULL)`),
+]);

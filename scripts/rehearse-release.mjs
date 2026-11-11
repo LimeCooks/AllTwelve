@@ -1,0 +1,1472 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { spawn, spawnSync } from 'node:child_process';
+import { readFile, writeFile, mkdir, mkdtemp } from 'node:fs/promises';
+import net from 'node:net';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { unzipSync } from 'fflate';
+
+// Local-only production-build rehearsal. No deployment or remote-storage command
+// exists here; fixture identities are sent exclusively to a loopback Worker.
+const root = fileURLToPath(new URL('../', import.meta.url));
+const outputs = path.join(root, 'outputs');
+const args = process.argv.slice(2);
+const option = (name) => args[args.indexOf(name) + 1];
+const restartOnly = args.includes('--restart-only');
+if (
+  !args.includes('--candidate') ||
+  args.includes('--rollback') === restartOnly
+)
+  throw new Error(
+    'Usage: node scripts/rehearse-release.mjs --candidate outputs/current.tar.gz (--rollback outputs/previous.tar.gz | --restart-only)',
+  );
+const archives = [
+  option('--candidate'),
+  ...(restartOnly ? [] : [option('--rollback')]),
+].map((value) => path.resolve(root, value));
+for (const archive of archives)
+  if (!archive.startsWith(outputs + path.sep) || !archive.endsWith('.tar.gz'))
+    throw new Error('Use reviewed deployment archives inside outputs.');
+await mkdir(outputs, { recursive: true });
+const runDirectory = await mkdtemp(path.join(outputs, 'release-rehearsal-'));
+const storage = path.join(runDirectory, 'storage');
+const wrangler = path.join(
+  root,
+  'node_modules',
+  'wrangler',
+  'bin',
+  'wrangler.js',
+);
+const environment = {
+  ...process.env,
+  CI: '1',
+  CLOUDFLARE_SEND_METRICS: 'false',
+};
+const report = {
+  mode: restartOnly
+    ? 'candidate restart only - no rollback approval'
+    : 'candidate rollback and forward',
+  startedAt: new Date().toISOString(),
+  directory: runDirectory,
+  storage,
+  stages: [],
+  artifacts: [],
+};
+console.log(`Isolated rehearsal: ${runDirectory}`);
+
+function command(executable, arguments_) {
+  const result = spawnSync(executable, arguments_, {
+    cwd: runDirectory,
+    env: environment,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 120_000,
+  });
+  if (result.status !== 0)
+    throw new Error(
+      `${path.basename(executable)} failed: ${result.error?.message ?? result.stderr ?? result.stdout}`,
+    );
+  return result.stdout;
+}
+
+const snapshots = [];
+for (const [index, archive] of archives.entries()) {
+  const entries = command('tar', ['-tzf', archive])
+    .split(/\r?\n/)
+    .filter(Boolean);
+  if (
+    entries.some(
+      (entry) =>
+        path.isAbsolute(entry) ||
+        /^[A-Za-z]:/.test(entry) ||
+        entry.split(/[\\/]/).includes('..'),
+    )
+  )
+    throw new Error('Unsafe archive path.');
+  const snapshot = path.join(
+    runDirectory,
+    index === 0 ? 'candidate' : 'rollback',
+  );
+  await mkdir(snapshot);
+  command('tar', ['-xzf', archive, '-C', snapshot]);
+  const original = JSON.parse(
+    await readFile(path.join(snapshot, 'dist/server/wrangler.json'), 'utf8'),
+  );
+  const config = path.join(snapshot, 'rehearsal.json');
+  await writeFile(
+    config,
+    JSON.stringify(
+      {
+        name: 'chalktalk-release-rehearsal',
+        main: path.join(snapshot, 'dist/server/index.js'),
+        compatibility_date: original.compatibility_date,
+        compatibility_flags: original.compatibility_flags,
+        no_bundle: true,
+        rules: original.rules,
+        assets: { directory: path.join(snapshot, 'dist/client') },
+        vars: { CHALKTALK_MODE: 'pilot' },
+        d1_databases: [
+          {
+            binding: 'DB',
+            database_name: 'chalktalk-rehearsal-local',
+            database_id: '00000000-0000-4000-8000-000000000001',
+            migrations_dir: path.join(snapshot, 'dist/.openai/drizzle'),
+          },
+        ],
+        r2_buckets: [
+          { binding: 'MEDIA', bucket_name: 'chalktalk-rehearsal-local' },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  snapshots.push(config);
+  report.artifacts.push({
+    archive,
+    sha256: createHash('sha256')
+      .update(await readFile(archive))
+      .digest('hex'),
+  });
+}
+console.log('Applying schema to fresh local storage only…');
+command(process.execPath, [
+  wrangler,
+  'd1',
+  'migrations',
+  'apply',
+  'DB',
+  '--local',
+  '--persist-to',
+  storage,
+  '--config',
+  snapshots[0],
+]);
+
+const port = await new Promise((resolve, reject) => {
+  const server = net.createServer();
+  server.once('error', reject);
+  server.listen(0, '127.0.0.1', () => {
+    const assigned = server.address().port;
+    server.close(() => resolve(assigned));
+  });
+});
+const origin = `http://127.0.0.1:${port}`;
+const ownerHeaders = (owner) =>
+  owner
+    ? {
+        'oai-authenticated-user-id': `local-release-owner-${owner}`,
+        'oai-authenticated-user-full-name': `Local rehearsal ${owner}`,
+        'oai-authenticated-user-email': `local-release-${owner}@example.test`,
+      }
+    : {};
+async function api(
+  url,
+  owner = 'a',
+  body,
+  method = body === undefined ? 'GET' : 'POST',
+  expected = 200,
+) {
+  assert.equal(
+    new URL(url, origin).origin,
+    origin,
+    'rehearsal requests must stay on loopback',
+  );
+  const response = await fetch(new URL(url, origin), {
+    method,
+    headers: {
+      ...ownerHeaders(owner),
+      ...(body === undefined
+        ? {}
+        : { 'content-type': 'application/json', origin }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const result = await response.json();
+  assert.equal(
+    response.status,
+    expected,
+    `${method} ${url}: ${JSON.stringify(result)}`,
+  );
+  return result;
+}
+
+let processHandle;
+let workerLog = '';
+async function start(config, label) {
+  console.log(`Starting ${label} against the same isolated local storage…`);
+  let log = '';
+  workerLog = '';
+  processHandle = spawn(
+    process.execPath,
+    [
+      wrangler,
+      'dev',
+      '--local',
+      '--ip',
+      '127.0.0.1',
+      '--port',
+      String(port),
+      '--persist-to',
+      storage,
+      '--config',
+      config,
+    ],
+    {
+      cwd: runDirectory,
+      env: environment,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  const child = processHandle;
+  child.stdout.on('data', (chunk) => {
+    log += chunk;
+    workerLog += chunk;
+  });
+  child.stderr.on('data', (chunk) => {
+    log += chunk;
+    workerLog += chunk;
+  });
+  child.on('error', (error) => {
+    log += error.message;
+  });
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null)
+      throw new Error(`${label} stopped before readiness: ${log}`);
+    try {
+      const response = await fetch(`${origin}/api/session`, {
+        headers: ownerHeaders('a'),
+        signal: AbortSignal.timeout(1500),
+      });
+      if (response.status === 200) {
+        const session = await response.json();
+        assert.equal(session.mode, 'pilot');
+        report.stages.push({ label, readyAt: new Date().toISOString() });
+        return;
+      }
+    } catch {
+      /* Poll this same process; do not launch another one. */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`${label} did not become ready: ${log}`);
+}
+async function stop() {
+  if (!processHandle) return;
+  const child = processHandle;
+  if (child.exitCode === null) {
+    const exited = new Promise((resolve) => child.once('exit', resolve));
+    if (process.platform === 'win32')
+      command('taskkill', ['/PID', String(child.pid), '/T', '/F']);
+    else child.kill('SIGTERM');
+    let timer;
+    try {
+      await Promise.race([
+        exited,
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('Owned rehearsal process did not stop.')),
+            10_000,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  processHandle = null;
+}
+
+const media = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aU9sAAAAASUVORK5CYII=',
+  'base64',
+);
+let fixture;
+let designerFixture;
+let planningFixture;
+async function verifySaved(label) {
+  const ownAthlete = (await api('/api/athletes')).athletes.find(
+    (athlete) => athlete.id === fixture.athlete,
+  );
+  assert.equal(ownAthlete.firstName, 'Corrected');
+  assert.equal(ownAthlete.staffNote, 'Private rehearsal note');
+  const removalCheck = await api(`/api/athletes?athleteId=${fixture.athlete}`);
+  assert.equal(
+    removalCheck.removal.blocked,
+    true,
+    'Saved depth links must prevent roster removal',
+  );
+  await api(
+    '/api/athletes',
+    'a',
+    { id: fixture.athlete, version: removalCheck.removal.version },
+    'DELETE',
+    409,
+  );
+  await api(
+    `/api/athletes?athleteId=${fixture.athlete}`,
+    'b',
+    undefined,
+    'GET',
+    404,
+  );
+  const disposable = await api(
+    '/api/athletes',
+    'a',
+    {
+      firstName: 'Unused',
+      lastName: 'Removal rehearsal',
+      position: 'DB',
+      unit: 'Defence',
+      graduationYear: 12,
+      weightLb: 180,
+      email: 'unused-removal@example.test',
+      staffNote: 'Disposable',
+    },
+    'POST',
+    201,
+  );
+  const disposableId = disposable.athlete.id;
+  const disposableCheck = await api(`/api/athletes?athleteId=${disposableId}`);
+  assert.equal(disposableCheck.removal.blocked, false);
+  await api(
+    '/api/athletes',
+    'a',
+    { id: disposableId, status: 'Limited' },
+    'PATCH',
+    200,
+  );
+  await api(
+    '/api/athletes',
+    'a',
+    { id: disposableId, version: disposableCheck.removal.version },
+    'DELETE',
+    409,
+  );
+  const freshRemoval = await api(`/api/athletes?athleteId=${disposableId}`);
+  const removedRoster = await api(
+    '/api/athletes',
+    'a',
+    { id: disposableId, version: freshRemoval.removal.version },
+    'DELETE',
+    200,
+  );
+  assert.equal(removedRoster.removedId, disposableId);
+  assert.ok(
+    !removedRoster.athletes.some((athlete) => athlete.id === disposableId),
+  );
+  await api(
+    `/api/athletes?athleteId=${disposableId}`,
+    'a',
+    undefined,
+    'GET',
+    404,
+  );
+
+  const staleNote = await api(
+    '/api/athletes',
+    'a',
+    {
+      id: fixture.athlete,
+      staffNote: 'Must not replace newer saved work',
+      expectedStaffNote: 'An obsolete note baseline',
+      status: 'Out',
+    },
+    'PATCH',
+    409,
+  );
+  assert.match(staleNote.error, /saved note changed/);
+  const intactAthlete = (await api('/api/athletes')).athletes.find(
+    (athlete) => athlete.id === fixture.athlete,
+  );
+  assert.equal(intactAthlete.staffNote, 'Private rehearsal note');
+  assert.equal(intactAthlete.status, 'Active');
+  const foreignAthlete = await api(
+    '/api/athletes',
+    'b',
+    { id: fixture.athlete, status: 'Out' },
+    'PATCH',
+    404,
+  );
+  assert.equal(
+    foreignAthlete.athlete,
+    undefined,
+    'A failed foreign write must not reveal an athlete',
+  );
+  const a = await api('/api/session');
+  assert.equal(a.team.id, fixture.team);
+  const library = await api('/api/playbooks');
+  const drawing = library.plays.find((play) => play.id === fixture.play);
+  for (const [key, value] of Object.entries(designerFixture.drawing))
+    assert.deepEqual(drawing[key], value, `${label}: saved diagram ${key}`);
+  assert.equal(drawing.unit, 'Defence');
+  assert.equal(drawing.formationId, designerFixture.teamFormation);
+  assert.deepEqual(
+    drawing.assignments.map(({ position, title, detail }) => ({
+      position,
+      title,
+      detail,
+    })),
+    designerFixture.assignments,
+  );
+  const ownFormation = library.formations.find(
+    (formation) => formation.id === designerFixture.teamFormation,
+  );
+  assert.equal(ownFormation.scope, 'team');
+  assert.equal(ownFormation.packageName, 'Nascar - custom personnel');
+  assert.deepEqual(ownFormation.players, designerFixture.drawing.players);
+  const scoutFormation = library.formations.find(
+    (formation) => formation.id === designerFixture.scoutFormation,
+  );
+  assert.equal(scoutFormation.scope, 'scout');
+  assert.equal(scoutFormation.opponent, 'Rehearsal opponent');
+  assert.equal(scoutFormation.unit, 'Offence');
+  assert.deepEqual(
+    scoutFormation.players,
+    designerFixture.drawing.opponentPlayers,
+  );
+  assert.equal((await api('/api/playbooks', 'b')).formations.length, 0);
+  assert.equal(
+    (await api('/api/playbooks')).plays.find((play) => play.id === fixture.play)
+      .name,
+    'Rehearsal defence',
+  );
+  assert.equal(
+    (await api('/api/playbooks')).plays.find((play) => play.id === fixture.play)
+      .notes,
+    'Saved diagram revision',
+  );
+  const savedInstall = await api(`/api/install?packageId=${fixture.install}`);
+  assert.equal(savedInstall.items[0].playId, fixture.play);
+  assert.equal(savedInstall.package.name, 'Corrected rehearsal install');
+  const savedPractice = (await api('/api/practice-plans')).plans.find(
+    (plan) => plan.id === fixture.practice,
+  );
+  assert.equal(savedPractice.title, 'Corrected rehearsal practice');
+  assert.deepEqual(savedPractice.blocks, [
+    [
+      '16:00',
+      '13 min',
+      'Rehearsal segment',
+      'Corrected coaching focus',
+      'defence',
+    ],
+  ]);
+  assert.equal(savedPractice.durationMinutes, 13);
+  const sourcePlans = (await api('/api/gameplans')).plans;
+  const source = sourcePlans.find(
+    (plan) => plan.id === planningFixture.source.id,
+  );
+  assert.deepEqual(source, planningFixture.source);
+  assert.equal(
+    sourcePlans.find((plan) => plan.id === planningFixture.second.id).title,
+    'Monthly fundamentals',
+  );
+  assert.deepEqual((await api('/api/gameplans', 'b')).plans, []);
+  await api(`/api/gameplans?id=${source.id}`, 'b', undefined, 'GET', 404);
+  const generated = (await api('/api/practice-plans')).plans.find(
+    (plan) => plan.id === planningFixture.practice.id,
+  );
+  assert.deepEqual(generated, planningFixture.practice);
+  assert.equal(generated.blocks[0][2], 'Manual adjustment');
+  assert.equal(generated.gameplanSource.title, 'Opponent preparation');
+  assert.notEqual(generated.gameplanSource.version, source.version);
+  assert.equal(
+    (await api('/api/calendar-events')).events[0].title,
+    'Corrected rehearsal practice',
+  );
+  const download = await fetch(`${origin}/api/media?key=team-logo`, {
+    headers: ownerHeaders('a'),
+  });
+  assert.equal(download.status, 200);
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()), media);
+  const notebook = await api('/api/workspace-state?key=sideline-review-v3');
+  const conversations = await api(
+    '/api/workspace-state?key=private-conversations-v3',
+  );
+  assert.equal(
+    conversations.value.threads[0].name,
+    'Private rehearsal conversation',
+  );
+  assert.equal(
+    conversations.value.threads[0].messages[0].text,
+    'Durable private rehearsal message',
+  );
+  assert.equal(notebook.value.notes[0].text, 'Private bench observation');
+  const depth = await api('/api/workspace-state?key=depth-layouts-v3');
+  assert.equal(depth.value.Offence[0].athleteId, fixture.athlete);
+  assert.equal(depth.value.Offence[0].notes, 'Private role note');
+  assert.equal(
+    (await api('/api/workspace-state?key=depth-layouts-v3', 'b')).value,
+    null,
+  );
+  assert.equal(
+    (await api('/api/workspace-state?key=sideline-review-v3', 'b')).value,
+    null,
+  );
+  assert.equal((await api('/api/playbooks', 'b')).plays.length, 0);
+  const foreignMedia = await fetch(`${origin}/api/media?key=team-logo`, {
+    headers: ownerHeaders('b'),
+  });
+  assert.equal(foreignMedia.status, 404);
+  await foreignMedia.text();
+  await Promise.all(
+    Array.from({ length: 12 }, async (_, index) => {
+      const owner = index % 2 ? 'a' : 'b';
+      assert.equal(
+        (await api('/api/playbooks', owner)).plays.length,
+        owner === 'a' ? 1 : 0,
+      );
+    }),
+  );
+  const backup = await api('/api/backups', 'a', undefined, 'POST');
+  assert.equal(backup.parts, 1);
+  const backupPath = `/api/backups?id=${backup.id}&part=1`;
+  if (backup.preserved) {
+    assert.equal(backup.state, 'ready');
+    const changedSource = await fetch(`${origin}/api/media?key=team-logo`, {
+      method: 'POST',
+      headers: {
+        ...ownerHeaders('a'),
+        origin,
+        'content-type': 'image/png',
+        'x-chalktalk-upload-size': '7',
+        'x-chalktalk-filename': 'changed.png',
+      },
+      body: Buffer.from('changed'),
+    });
+    assert.equal(changedSource.status, 200);
+  }
+  const backupResponse = await fetch(`${origin}${backupPath}`, {
+    headers: ownerHeaders('a'),
+  });
+  assert.equal(backupResponse.status, 200);
+  const backupBytes = new Uint8Array(await backupResponse.arrayBuffer());
+  const backupArchive = path.join(
+    runDirectory,
+    `${label.replace(/[^a-z0-9]+/gi, '-')}-team-backup.zip`,
+  );
+  await writeFile(backupArchive, backupBytes);
+  report.artifacts.push({
+    backupArchive,
+    source: 'disposable isolated rehearsal team',
+  });
+  const zip = unzipSync(backupBytes);
+  assert.deepEqual(Buffer.from(zip['media/team-logo']), media);
+  if (backup.retainedHistory) {
+    const history = await api('/api/backups?history=1');
+    assert.ok(history.backups.some((record) => record.id === backup.id));
+    const archived = await fetch(
+      `${origin}/api/backups?archiveId=${backup.id}&part=1`,
+      { headers: ownerHeaders('a') },
+    );
+    assert.equal(archived.status, 200);
+    const archivedFiles = unzipSync(
+      new Uint8Array(await archived.arrayBuffer()),
+    );
+    assert.deepEqual(Buffer.from(archivedFiles['media/team-logo']), media);
+    assert.equal(
+      (
+        await fetch(`${origin}/api/backups?archiveId=${backup.id}&part=1`, {
+          headers: ownerHeaders('b'),
+        })
+      ).status,
+      404,
+    );
+  }
+  if (backup.preserved) {
+    const restoredSource = await fetch(`${origin}/api/media?key=team-logo`, {
+      method: 'POST',
+      headers: {
+        ...ownerHeaders('a'),
+        origin,
+        'content-type': 'image/png',
+        'x-chalktalk-upload-size': String(media.length),
+        'x-chalktalk-filename': 'rehearsal.png',
+      },
+      body: media,
+    });
+    assert.equal(restoredSource.status, 200);
+  }
+  const manifest = JSON.parse(
+    new TextDecoder().decode(zip['chalktalk-backup.json']),
+  );
+  assert.equal(manifest.teamId, fixture.team);
+  assert.ok(manifest.tables.plays.some((play) => play.id === fixture.play));
+  const backedDrawing = JSON.parse(
+    manifest.tables.plays.find((play) => play.id === fixture.play).diagram_json,
+  );
+  for (const [key, value] of Object.entries(designerFixture.drawing))
+    assert.deepEqual(
+      backedDrawing[key],
+      value,
+      `${label}: backed-up diagram ${key}`,
+    );
+  assert.ok(
+    manifest.tables.formations.some(
+      (formation) => formation.id === designerFixture.teamFormation,
+    ),
+  );
+  assert.ok(
+    manifest.tables.formations.some(
+      (formation) => formation.id === designerFixture.scoutFormation,
+    ),
+  );
+  assert.deepEqual(
+    JSON.parse(
+      manifest.tables.workspace_state.find(
+        (row) => row.state_key === `gameplan-record-v1:${source.id}`,
+      ).value_json,
+    ).state,
+    source.state,
+  );
+  const backedPractice = JSON.parse(
+    manifest.tables.practice_plans.find((row) => row.id === generated.id)
+      .plan_json,
+  );
+  assert.deepEqual(backedPractice.gameplanSource, generated.gameplanSource);
+  assert.deepEqual(backedPractice.blocks, generated.blocks);
+  assert.equal(
+    (await fetch(`${origin}${backupPath}`, { headers: ownerHeaders('b') }))
+      .status,
+    404,
+  );
+  report.stages.push({
+    label: `${label}: saved data and owner isolation verified`,
+    verifiedAt: new Date().toISOString(),
+  });
+  console.log(
+    `${label}: custom diagram, team/scout formations, install, practice, event and uploaded bytes verified.`,
+  );
+}
+
+async function verifyStaffAccess(label, create = false) {
+  if (create) {
+    const id = crypto.randomUUID();
+    await api('/api/team-access', 'a', { id, email: 'local-release-staff@example.test', role: 'staff' }, 'POST', 201);
+    const pending = await api('/api/session', 'staff');
+    assert.equal(pending.team, null);
+    assert.equal(pending.canCreateTeam, false);
+    const invite = pending.invitations.find((row) => row.id === id);
+    await api('/api/team-invitations', 'b', { id, version: invite.version }, 'POST', 403);
+    await api('/api/team-invitations', 'staff', { id, version: invite.version });
+  }
+  const joined = await api('/api/session', 'staff');
+  assert.equal(joined.team.id, fixture.team);
+  assert.equal(joined.team.role, 'staff');
+  assert.ok((await api('/api/playbooks', 'staff')).plays.some((row) => row.id === fixture.play));
+  for (const path of ['/api/team-access', '/api/backups', '/api/messages', '/api/sideline', '/api/media?key=coach-profile']) {
+    await api(path, 'staff', undefined, 'GET', 403);
+  }
+  const forged = await fetch(`${origin}/api/playbooks`, { headers: { ...ownerHeaders('staff'), 'x-chalktalk-team-id': (await api('/api/session', 'b')).team.id } });
+  assert.equal(forged.status, 403);
+  report.stages.push({ label: `${label}: staff membership, owner privacy and forged-team rejection verified`, verifiedAt: new Date().toISOString() });
+}
+
+async function verifyPlayerAccess(label, create = false) {
+  if (create) {
+    await api('/api/install','a',{kind:'publish',packageId:fixture.install},'PATCH');
+    const id=crypto.randomUUID();
+    await api('/api/team-access','a',{id,email:'local-release-player@example.test',role:'player',athleteId:fixture.athlete},'POST',201);
+    const pending=(await api('/api/team-invitations','player')).invitations.find(row=>row.id===id);
+    await api('/api/team-invitations','player',{id,version:pending.version});
+  }
+  const joined=await api('/api/session','player');
+  assert.equal(joined.team.id,fixture.team);
+  assert.equal(joined.team.athleteId,fixture.athlete);
+  assert.equal(joined.team.role,'player');
+  const learning=await api('/api/player-learning','player');
+  assert.equal(learning.athlete.id,fixture.athlete);
+  let item=learning.items.find(row=>row.play?.id===fixture.play);
+  assert.ok(item?.play?.players?.length,'published assigned diagram must be delivered');
+  assert.ok(!('staffNote' in learning.athlete));
+  for (const path of ['/api/athletes','/api/playbooks','/api/backups','/api/team-access','/api/film','/api/messages'])
+    await api(path,'player',undefined,'GET',403);
+  if (create) {
+    for (const kind of ['reviewed','assignment','note']) {
+      item=(await api('/api/player-learning','player',{id:item.id,version:item.version,kind},'PATCH')).items.find(row=>row.id===item.id);
+    }
+  }
+  assert.ok(item.reviewed && item.assignment && item.note);
+  const coach=await api('/api/install?packageId='+fixture.install);
+  assert.equal(coach.reviews.find(row=>row.athleteId===fixture.athlete&&row.itemId===item.itemId).acknowledged,true);
+  report.stages.push({label:`${label}: player assigned material, privacy and coach-visible acknowledgement verified`,verifiedAt:new Date().toISOString()});
+}
+
+async function verifyMediaWrites(label) {
+  const upload = async (key, bytes) => {
+    const response = await fetch(`${origin}/api/media?key=${key}`, {
+    method: 'POST', headers: { ...ownerHeaders('a'), origin, 'content-type': 'video/mp4', 'x-chalktalk-upload-size': String(bytes.length) }, body: bytes,
+    signal: AbortSignal.timeout(15_000),
+    });
+    await response.text();
+    return response;
+  };
+  const bytes = Buffer.from('immutable saved video bytes');
+  const key = 'film-protected-write-' + crypto.randomUUID();
+  assert.equal((await upload(key, bytes)).status, 200);
+  console.log(`${label}: video upload finished`);
+  let registered = await api('/api/film', 'a', {action:'register',storageKey:key,title:'Protected video',durationSeconds:10}, 'POST',201);
+  assert.equal((await upload(key, Buffer.from('replacement'))).status,409);
+  console.log(`${label}: video replacement rejected`);
+  const removed = await fetch(`${origin}/api/media?key=${key}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin},signal:AbortSignal.timeout(15_000)});
+  assert.equal(removed.status,409);
+  await removed.text();
+  console.log(`${label}: raw deletion rejected`);
+  const read = await fetch(`${origin}/api/media?key=${key}`,{headers:{...ownerHeaders('a'),range:'bytes=1-5'},signal:AbortSignal.timeout(15_000)});
+  assert.equal(read.status,206);
+  assert.deepEqual(Buffer.from(await read.arrayBuffer()),bytes.subarray(1,6));
+  console.log(`${label}: protected byte range verified`);
+  const erase = await fetch(`${origin}/api/film?assetId=${registered.asset.id}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin,'x-chalktalk-film-version':registered.asset.version},signal:AbortSignal.timeout(15_000)});
+  assert.equal(erase.status,200);
+  await erase.text();
+  console.log(`${label}: versioned video removal finished`);
+  const raceKey='film-concurrent-write-'+crypto.randomUUID();
+  const candidates=[Buffer.alloc(4096,17),Buffer.alloc(4096,29)];
+  const replies=await Promise.all(candidates.map(value=>upload(raceKey,value)));
+  assert.deepEqual(replies.map(response=>response.status).sort(),[200,409]);
+  const winner=replies.findIndex(response=>response.status===200);
+  const actual=await fetch(`${origin}/api/media?key=${raceKey}`,{headers:ownerHeaders('a'),signal:AbortSignal.timeout(15_000)});
+  assert.deepEqual(Buffer.from(await actual.arrayBuffer()),candidates[winner]);
+  registered=await api('/api/film','a',{action:'register',storageKey:raceKey,title:'Race winner',durationSeconds:10},'POST',201);
+  const erasedRace=await fetch(`${origin}/api/film?assetId=${registered.asset.id}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin,'x-chalktalk-film-version':registered.asset.version},signal:AbortSignal.timeout(15_000)});
+  assert.equal(erasedRace.status,200);
+  await erasedRace.text();
+  report.stages.push({label:`${label}: immutable video bytes, concurrent upload winner and versioned film removal verified`,verifiedAt:new Date().toISOString()});
+}
+
+try {
+  await start(snapshots[0], 'candidate');
+  await api('/api/session', null, undefined, 'GET', 401);
+  const crossOrigin = await fetch(`${origin}/api/onboarding`, {
+    method: 'POST',
+    headers: {
+      ...ownerHeaders('c'),
+      origin: 'https://unrelated.invalid',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ name: 'Must not be created', season: '2026' }),
+  });
+  assert.equal(crossOrigin.status, 403);
+  assert.equal((await api('/api/session', 'c')).team, null);
+  for (const owner of ['a', 'b']) {
+    assert.equal((await api('/api/session', owner)).team, null);
+    await api(
+      '/api/onboarding',
+      owner,
+      { name: `Local rehearsal ${owner}`, season: '2026' },
+      'POST',
+      201,
+    );
+    assert.equal((await api('/api/playbooks', owner)).plays.length, 0);
+    assert.equal((await api('/api/playbooks', owner)).books.length, 0);
+    assert.equal((await api('/api/athletes', owner)).athletes.length, 0);
+    assert.equal((await api('/api/install', owner)).packages.length, 0);
+    assert.equal((await api('/api/film', owner)).assets.length, 0);
+    assert.equal((await api('/api/calendar-events', owner)).events.length, 0);
+    assert.equal((await api('/api/practice-plans', owner)).plans.length, 0);
+    assert.deepEqual((await api('/api/gameplans', owner)).plans, []);
+  }
+  report.stages.push({
+    label:
+      'Authenticated blank onboarding, anonymous rejection and cross-origin write rejection verified',
+    verifiedAt: new Date().toISOString(),
+  });
+  const athlete = await api(
+    '/api/athletes',
+    'a',
+    {
+      firstName: 'Local',
+      lastName: 'Rehearsal',
+      position: 'DB',
+      unit: 'Defence',
+      graduationYear: 12,
+      weightLb: 180,
+      email: 'local-rehearsal@example.test',
+      staffNote: 'Private rehearsal note',
+    },
+    'POST',
+    201,
+  );
+  const editedAthlete = await api(
+    '/api/athletes',
+    'a',
+    {
+      id: athlete.athlete.id,
+      firstName: 'Corrected',
+      lastName: 'Rehearsal',
+      number: 0,
+      position: 'FC',
+      unit: 'Defence',
+      graduationYear: 11,
+      weightLb: 185,
+      height: '6 ft',
+      email: 'local-rehearsal@example.test',
+      phone: '555-0100',
+      staffNote: 'Must not replace saved note',
+      status: 'Out',
+    },
+    'PUT',
+  );
+  assert.equal(editedAthlete.athlete.id, athlete.athlete.id);
+  assert.equal(editedAthlete.athlete.staffNote, 'Private rehearsal note');
+  assert.equal(editedAthlete.athlete.status, 'Active');
+  const bookRequest = {
+    kind: 'book',
+    name: 'Rehearsal',
+    side: 'Defence',
+    creationId: crypto.randomUUID(),
+  };
+  const book = await api('/api/playbooks', 'a', bookRequest, 'POST', 201);
+  assert.equal(book.books.length, 1);
+  const retriedBook = await api(
+    '/api/playbooks',
+    'a',
+    bookRequest,
+    'POST',
+    200,
+  );
+  assert.equal(retriedBook.createdId, book.createdId);
+  assert.equal(retriedBook.books.length, 1);
+  const players = [
+    {
+      id: 'rehearsal-fc',
+      label: 'FC',
+      kind: 'skill',
+      symbol: 'triangle',
+      colour: '#27b8b1',
+      x: 250,
+      y: 650,
+    },
+    {
+      id: 'rehearsal-ma',
+      label: 'MA',
+      kind: 'skill',
+      symbol: 'triangle',
+      colour: '#ed6559',
+      x: 350,
+      y: 650,
+    },
+    {
+      id: 'rehearsal-n',
+      label: 'N',
+      kind: 'line',
+      symbol: 'triangle',
+      colour: '#e2b550',
+      x: 350,
+      y: 670,
+    },
+  ];
+  const opponentPlayers = [
+    {
+      id: 'rehearsal-opp-q',
+      label: 'Q',
+      kind: 'qb',
+      symbol: 'circle',
+      colour: '#b9c5cf',
+      x: 350,
+      y: 710,
+      opponent: true,
+    },
+    {
+      id: 'rehearsal-opp-x',
+      label: 'X',
+      kind: 'skill',
+      symbol: 'circle',
+      colour: '#b9c5cf',
+      x: 150,
+      y: 680,
+      opponent: true,
+    },
+  ];
+  const teamFormation = await api(
+    '/api/playbooks',
+    'a',
+    {
+      kind: 'formation',
+      name: '6-Pack',
+      unit: 'Defence',
+      scope: 'team',
+      packageName: 'Nascar - custom personnel',
+      personnel: 'Coach-defined package',
+      players,
+    },
+    'POST',
+    201,
+  );
+  const scoutFormation = await api(
+    '/api/playbooks',
+    'a',
+    {
+      kind: 'formation',
+      name: 'Unique opponent look',
+      unit: 'Offence',
+      scope: 'scout',
+      opponent: 'Rehearsal opponent',
+      players: opponentPlayers,
+    },
+    'POST',
+    201,
+  );
+  const play = await api(
+    '/api/playbooks',
+    'a',
+    {
+      kind: 'play',
+      playbookId: book.books[0].id,
+      formationId: teamFormation.createdId,
+      name: 'Rehearsal defence',
+    },
+    'POST',
+    201,
+  );
+  const openedPlay = play.plays.find((record) => record.id === play.createdId);
+  assert.equal(openedPlay.unit, 'Defence');
+  assert.deepEqual(
+    openedPlay.players,
+    players,
+    'a defensive play starts from the selected team formation',
+  );
+  designerFixture = {
+    teamFormation: teamFormation.createdId,
+    scoutFormation: scoutFormation.createdId,
+    drawing: {
+      diagramVersion: 2,
+      fieldPosition: 55,
+      players,
+      routes: [
+        {
+          id: 'rehearsal-route',
+          playerId: players[0].id,
+          startX: 250,
+          startY: 650,
+          endX: 290,
+          endY: 620,
+          points: [
+            { x: 250, y: 650 },
+            { x: 250, y: 620 },
+            { x: 290, y: 620 },
+          ],
+          colour: '#a994da',
+          lineStyle: 'dashed',
+          ending: 'arrow',
+        },
+      ],
+      zones: [
+        {
+          id: 'rehearsal-zone',
+          routeId: 'rehearsal-route',
+          x: 290,
+          y: 620,
+          width: 80,
+          height: 50,
+          colour: '#a994da',
+          shape: 'ellipse',
+          opacity: 0.3,
+          rotation: 15,
+        },
+      ],
+      labels: [
+        {
+          id: 'rehearsal-label',
+          x: 320,
+          y: 600,
+          text: 'Match the release',
+          colour: '#e2b550',
+        },
+      ],
+      showOpponent: true,
+      opponentFormationId: scoutFormation.createdId,
+      opponentPlayers,
+    },
+    assignments: [
+      {
+        position: 'FC',
+        title: 'Match release',
+        detail: 'Carry vertical, then settle in the attached zone.',
+      },
+    ],
+  };
+  await api(
+    '/api/playbooks',
+    'a',
+    {
+      ...openedPlay,
+      ...designerFixture.drawing,
+      assignments: designerFixture.assignments.map((assignment, index) => ({
+        id: 'rehearsal-assignment-' + index,
+        ...assignment,
+      })),
+      notes: 'Saved diagram revision',
+    },
+    'PUT',
+  );
+  await api(
+    '/api/playbooks',
+    'a',
+    { ...openedPlay, name: 'Stale overwrite' },
+    'PUT',
+    409,
+  );
+  const copySource = (await api('/api/playbooks')).plays.find(
+    (record) => record.id === play.createdId,
+  );
+  const duplicateRequest = {
+    kind: 'duplicate',
+    id: copySource.id,
+    version: copySource.version,
+    creationId: crypto.randomUUID(),
+  };
+  const duplicateResult = await api(
+    '/api/playbooks',
+    'a',
+    duplicateRequest,
+    'POST',
+    201,
+  );
+  const duplicatePlay = duplicateResult.plays.find(
+    (record) => record.id === duplicateResult.createdId,
+  );
+  assert.equal(duplicatePlay.notes, 'Saved diagram revision');
+  assert.equal(
+    (await api('/api/playbooks', 'a', duplicateRequest, 'POST', 200)).createdId,
+    duplicatePlay.id,
+  );
+  const changedCopy = await api(
+    '/api/playbooks',
+    'a',
+    { ...duplicatePlay, name: 'Rehearsal revised copy' },
+    'PUT',
+  );
+  await api(
+    '/api/playbooks',
+    'a',
+    { kind: 'play', id: duplicatePlay.id, version: duplicatePlay.version },
+    'DELETE',
+    409,
+  );
+  const currentCopy = changedCopy.plays.find(
+    (record) => record.id === duplicatePlay.id,
+  );
+  await api(
+    '/api/playbooks',
+    'a',
+    { kind: 'play', id: currentCopy.id, version: currentCopy.version },
+    'DELETE',
+  );
+  const install = await api(
+    '/api/install',
+    'a',
+    { kind: 'package', name: 'Any cadence', unit: 'Defence', dueAt: '' },
+    'POST',
+    201,
+  );
+  await api('/api/messages', 'a', {
+    action: 'create',
+    id: 'rehearsal-conversation',
+    name: 'Private rehearsal conversation',
+  });
+  const privateMessage = {
+    action: 'message',
+    id: 'rehearsal-message',
+    threadId: 'rehearsal-conversation',
+    text: 'Durable private rehearsal message',
+  };
+  await api('/api/messages', 'a', privateMessage);
+  await api('/api/messages', 'a', privateMessage);
+  assert.equal((await api('/api/messages')).threads[0].messages.length, 1);
+  const installRevision = {
+    kind: 'package',
+    packageId: install.package.id,
+    name: 'Corrected rehearsal install',
+    unit: 'Defence',
+    dueAt: '',
+    version: install.package.version,
+  };
+  await api('/api/install', 'a', installRevision, 'PATCH');
+  await api('/api/install', 'a', installRevision, 'PATCH', 409);
+  await api('/api/install', 'a', {
+    packageId: install.package.id,
+    playId: play.createdId,
+  });
+  const practice = await api(
+    '/api/practice-plans',
+    'a',
+    {
+      title: 'Rehearsal practice',
+      practiceDate: '2026-11-06',
+      blocks: [['TBD', '10 min', 'Rehearsal segment', '', 'defence']],
+      generated: false,
+    },
+    'POST',
+    201,
+  );
+  const practiceRevision = {
+    ...practice.plans.find((plan) => plan.id === practice.savedPlanId),
+    title: 'Corrected rehearsal practice',
+    blocks: [
+      [
+        '16:00',
+        '13 min',
+        'Rehearsal segment',
+        'Corrected coaching focus',
+        'defence',
+      ],
+    ],
+  };
+  await api('/api/practice-plans', 'a', practiceRevision, 'PUT');
+  await api('/api/practice-plans', 'a', practiceRevision, 'PUT', 409);
+  const sourceInput = {
+    id: crypto.randomUUID(),
+    title: 'Opponent preparation',
+    opponent: 'NKEC',
+    date: '',
+    archived: false,
+    state: {
+      filmSelection: 'all',
+      unit: 'Defence',
+      included: [],
+      objectives: [
+        {
+          title: 'Leverage',
+          detail: 'Keep outside arm free',
+          target: 'Every rep',
+        },
+      ],
+      callBuckets: [{ name: 'Base calls', plays: [play.createdId] }],
+    },
+  };
+  let source = (await api('/api/gameplans', 'a', sourceInput, 'POST', 201))
+    .plan;
+  const second = (
+    await api(
+      '/api/gameplans',
+      'a',
+      {
+        ...sourceInput,
+        id: crypto.randomUUID(),
+        title: 'Monthly fundamentals',
+        opponent: '',
+        state: { ...sourceInput.state, objectives: [], callBuckets: [] },
+      },
+      'POST',
+      201,
+    )
+  ).plan;
+  const generation = {
+    id: crypto.randomUUID(),
+    title: 'Source-linked practice',
+    practiceDate: '2026-11-08',
+    generated: true,
+    blocks: [],
+    generateFrom: { id: source.id, version: source.version },
+  };
+  const generatedResponse = await api(
+    '/api/practice-plans',
+    'a',
+    generation,
+    'POST',
+    201,
+  );
+  let generated = generatedResponse.plans.find(
+    (plan) => plan.id === generation.id,
+  );
+  assert.equal(generated.blocks.length, 2);
+  assert.equal(generated.blocks[1][3], 'Rehearsal defence');
+  generated = (
+    await api(
+      '/api/practice-plans',
+      'a',
+      {
+        ...generated,
+        generated: false,
+        blocks: [
+          [
+            'TBD',
+            '12 min',
+            'Manual adjustment',
+            'Preserve this work',
+            'defence',
+          ],
+        ],
+      },
+      'PUT',
+    )
+  ).plans.find((plan) => plan.id === generation.id);
+  const retry = await api('/api/practice-plans', 'a', generation, 'POST');
+  assert.deepEqual(
+    retry.plans.find((plan) => plan.id === generation.id),
+    generated,
+  );
+  source = (
+    await api(
+      '/api/gameplans',
+      'a',
+      { ...source, title: 'Revised opponent preparation', archived: true },
+      'PUT',
+    )
+  ).plan;
+  await api(
+    '/api/practice-plans',
+    'a',
+    { ...generation, version: generated.version },
+    'PUT',
+    409,
+  );
+  await api(
+    '/api/practice-plans',
+    'a',
+    {
+      ...generation,
+      id: crypto.randomUUID(),
+      generateFrom: { id: source.id, version: source.version },
+    },
+    'POST',
+    409,
+  );
+  source = (
+    await api('/api/gameplans', 'a', { ...source, archived: false }, 'PUT')
+  ).plan;
+  await api(
+    '/api/workspace-state',
+    'a',
+    { key: `gameplan-record-v1:${source.id}`, value: {} },
+    'PUT',
+    400,
+  );
+  planningFixture = { source, second, practice: generated };
+  const savedEvent = await api(
+    '/api/calendar-events',
+    'a',
+    {
+      title: 'Rehearsal practice',
+      eventType: 'practice',
+      startsAt: '2026-11-06T20:00:00Z',
+      endsAt: '2026-11-06T21:00:00Z',
+      location: '',
+      notes: '',
+    },
+    'POST',
+    201,
+  );
+  const correctedEvent = {
+    id: savedEvent.event.id,
+    version: savedEvent.event.version,
+    title: 'Corrected rehearsal practice',
+    eventType: 'practice',
+    startsAt: '2026-11-06T20:30:00Z',
+    endsAt: '2026-11-06T21:45:00Z',
+    location: 'Corrected rehearsal field',
+    notes: 'Corrected rehearsal note',
+  };
+  const foreignEvent = await api(
+    '/api/calendar-events',
+    'b',
+    correctedEvent,
+    'PUT',
+    404,
+  );
+  assert.equal(foreignEvent.event, undefined);
+  const editedEvent = await api(
+    '/api/calendar-events',
+    'a',
+    correctedEvent,
+    'PUT',
+    200,
+  );
+  assert.equal(editedEvent.event.id, savedEvent.event.id);
+  assert.equal(editedEvent.event.startsAt, '2026-11-06T20:30:00.000Z');
+  assert.equal(editedEvent.event.notes, correctedEvent.notes);
+  const uploaded = await fetch(`${origin}/api/media?key=team-logo`, {
+    method: 'POST',
+    headers: {
+      ...ownerHeaders('a'),
+      origin,
+      'content-type': 'image/png',
+      'x-chalktalk-upload-size': String(media.length),
+      'x-chalktalk-filename': 'rehearsal.png',
+    },
+    body: media,
+  });
+  assert.equal(uploaded.status, 200, await uploaded.text());
+  const range = await fetch(`${origin}/api/media?key=team-logo`, {
+    headers: { ...ownerHeaders('a'), range: 'bytes=1-3' },
+  });
+  assert.equal(range.status, 206);
+  assert.equal(range.headers.get('content-range'), `bytes 1-3/${media.length}`);
+  assert.deepEqual(
+    Buffer.from(await range.arrayBuffer()),
+    media.subarray(1, 4),
+  );
+  const head = await fetch(`${origin}/api/media?key=team-logo`, {
+    method: 'HEAD',
+    headers: ownerHeaders('a'),
+  });
+  assert.equal(head.status, 200);
+  assert.equal(Number(head.headers.get('content-length')), media.length);
+  await api(
+    '/api/sideline',
+    'a',
+    {
+      action: 'note',
+      id: 'rehearsal-sideline-note',
+      text: 'Private bench observation',
+    },
+    'POST',
+    200,
+  );
+  // Storage lifecycle fixture only; real playback is verified separately with an MP4 in the browser.
+  const disposableVideo = Buffer.from('disposable-film-storage-fixture');
+  const videoUpload = await fetch(
+    `${origin}/api/media?key=film-delete-rehearsal`,
+    {
+      method: 'POST',
+      headers: {
+        ...ownerHeaders('a'),
+        origin,
+        'content-type': 'video/mp4',
+        'x-chalktalk-upload-size': String(disposableVideo.length),
+        'x-chalktalk-filename': 'rehearsal.mp4',
+      },
+      body: disposableVideo,
+    },
+  );
+  assert.equal(videoUpload.status, 200);
+  const videoRecord = await api(
+    '/api/film',
+    'a',
+    {
+      action: 'register',
+      storageKey: 'film-delete-rehearsal',
+      title: 'Disposable film removal',
+    },
+    'POST',
+    201,
+  );
+  const chartedVideo = await api(
+    '/api/film',
+    'a',
+    {
+      action: 'upsertClip',
+      assetId: videoRecord.asset.id,
+      startSeconds: 0,
+      endSeconds: 1.25,
+      note: 'Disposable clip',
+    },
+    'POST',
+    201,
+  );
+  const staleRemove = await fetch(
+    `${origin}/api/film?assetId=${videoRecord.asset.id}`,
+    {
+      method: 'DELETE',
+      headers: {
+        ...ownerHeaders('a'),
+        origin,
+        'x-chalktalk-film-version': videoRecord.asset.version,
+      },
+    },
+  );
+  assert.equal(staleRemove.status, 409);
+  const removeVideo = await fetch(
+    `${origin}/api/film?assetId=${videoRecord.asset.id}`,
+    {
+      method: 'DELETE',
+      headers: {
+        ...ownerHeaders('a'),
+        origin,
+        'x-chalktalk-film-version': chartedVideo.asset.version,
+      },
+    },
+  );
+  assert.equal(removeVideo.status, 200, await removeVideo.text());
+  const removedBytes = await fetch(
+    `${origin}/api/media?key=film-delete-rehearsal`,
+    { method: 'HEAD', headers: ownerHeaders('a') },
+  );
+  assert.equal(removedBytes.status, 404);
+  fixture = {
+    athlete: athlete.athlete.id,
+    team: (await api('/api/session')).team.id,
+    play: play.createdId,
+    install: install.package.id,
+    practice: practice.savedPlanId,
+  };
+  const depth = await api('/api/depth-charts');
+  assert.deepEqual(depth.layouts, {
+    Offence: [],
+    Defence: [],
+    'Special teams': [],
+  });
+  const layouts = {
+    Offence: [
+      {
+        id: 'rehearsal-depth-role',
+        pos: 'Boundary half',
+        athleteId: fixture.athlete,
+        x: 25,
+        y: 40,
+        notes: 'Private role note',
+      },
+    ],
+    Defence: [],
+    'Special teams': [],
+  };
+  await api(
+    '/api/depth-charts',
+    'a',
+    { layouts, version: depth.version },
+    'PUT',
+    200,
+  );
+  const foreignDepth = await api('/api/depth-charts', 'b');
+  await api(
+    '/api/depth-charts',
+    'b',
+    { layouts, version: foreignDepth.version },
+    'PUT',
+    400,
+  );
+  await verifySaved('candidate');
+  await verifyMediaWrites('candidate');
+  await verifyStaffAccess('candidate', true);
+  await verifyPlayerAccess('candidate', true);
+  await stop();
+  await start(
+    snapshots[1] ?? snapshots[0],
+    restartOnly ? 'candidate restart' : 'rollback',
+  );
+  await verifySaved(restartOnly ? 'candidate restart' : 'rollback');
+  await stop();
+  await start(snapshots[0], 'forward again');
+  await verifySaved('forward again');
+  await verifyMediaWrites('forward again');
+  await verifyStaffAccess('forward again');
+  await verifyPlayerAccess('forward again');
+  const access = await api('/api/team-access');
+  const member = access.memberships.find((row) => row.user_id === 'local-release-owner-staff');
+  await api('/api/team-access', 'a', { kind: 'membership', id: member.id, version: member.version }, 'PATCH');
+  await api('/api/playbooks', 'staff', undefined, 'GET', 409);
+  assert.equal((await api('/api/session', 'staff')).canCreateTeam, false);
+  report.status = 'passed';
+} catch (error) {
+  report.status = 'failed';
+  report.error = error instanceof Error ? error.message : String(error);
+  await writeFile(path.join(runDirectory, 'failed-worker.log'), workerLog);
+  throw error;
+} finally {
+  try {
+    await stop();
+  } finally {
+    report.finishedAt = new Date().toISOString();
+    await writeFile(
+      path.join(runDirectory, 'report.json'),
+      JSON.stringify(report, null, 2),
+    );
+    console.log(`Report: ${path.join(runDirectory, 'report.json')}`);
+  }
+}

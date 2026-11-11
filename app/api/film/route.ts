@@ -1,4 +1,25 @@
-import { getDatabase, TEAM_ID } from '@/db/client';
+import {
+  clipColumns,
+  filmClipVersion,
+  requireFilmClipVersion,
+  filmRecordVersion,
+  markFilmForDeletion,
+} from '@/lib/film-record';
+import { getCoachingDatabase as getDatabase, type TeamDatabase } from '@/db/client';
+import { env } from 'cloudflare:workers';
+import { isPrototype } from '@/lib/request-identity';
+import { WorkspaceAccessError } from '@/lib/workspace-identity';
+import { isImageSlot } from '@/lib/media-keys';
+import { safeMediaKey } from '@/lib/team-backup';
+
+class FilmInputError extends Error {}
+function timeValue(value: unknown, fallback = 0) {
+  if (value === undefined || value === '' || value === null) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0)
+    throw new FilmInputError('Enter valid, non-negative clip times.');
+  return parsed;
+}
 
 type AssetRow = {
   id: string;
@@ -59,12 +80,26 @@ function optionalNumber(value: unknown) {
 function parseDetails(raw: string): ClipDetails {
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed)) return { tags: parsed.filter((item): item is string => typeof item === 'string'), note: '', concept: '', quarter: '', clock: '' };
+    if (Array.isArray(parsed))
+      return {
+        tags: parsed.filter((item): item is string => typeof item === 'string'),
+        note: '',
+        concept: '',
+        quarter: '',
+        clock: '',
+      };
     if (parsed && typeof parsed === 'object') {
       const value = parsed as Record<string, unknown>;
       return {
-        tags: Array.isArray(value.tags) ? value.tags.filter((item): item is string => typeof item === 'string') : [],
-        note: text(value.note), concept: text(value.concept), quarter: text(value.quarter), clock: text(value.clock),
+        tags: Array.isArray(value.tags)
+          ? value.tags.filter(
+              (item): item is string => typeof item === 'string',
+            )
+          : [],
+        note: text(value.note),
+        concept: text(value.concept),
+        quarter: text(value.quarter),
+        clock: text(value.clock),
       };
     }
   } catch {}
@@ -73,93 +108,403 @@ function parseDetails(raw: string): ClipDetails {
 
 function presentAsset(row: AssetRow) {
   return {
-    id: row.id, gameId: row.game_id, opponent: row.opponent, title: row.title,
-    storageKey: row.storage_key, durationSeconds: row.duration_seconds, status: row.status, createdAt: row.created_at,
+    id: row.id,
+    gameId: row.game_id,
+    opponent: row.opponent,
+    title: row.title,
+    storageKey: row.storage_key,
+    durationSeconds: row.duration_seconds,
+    status: row.status,
+    createdAt: row.created_at,
   };
 }
 
-function presentClip(row: ClipRow) {
+async function presentClip(row: ClipRow) {
   return {
-    id: row.id, assetId: row.film_asset_id, playId: row.play_id, playName: row.play_name,
-    clipNumber: row.clip_number, startSeconds: row.start_seconds, endSeconds: row.end_seconds,
-    odk: row.odk ?? '', down: row.down, distance: row.distance, yardLine: row.yard_line ?? '',
-    result: row.result ?? '', ...parseDetails(row.tags_json),
+    version: await filmClipVersion({ ...row }),
+    id: row.id,
+    assetId: row.film_asset_id,
+    playId: row.play_id,
+    playName: row.play_name,
+    clipNumber: row.clip_number,
+    startSeconds: row.start_seconds,
+    endSeconds: row.end_seconds,
+    odk: row.odk ?? '',
+    down: row.down,
+    distance: row.distance,
+    yardLine: row.yard_line ?? '',
+    result: row.result ?? '',
+    ...parseDetails(row.tags_json),
   };
 }
 
-async function payload(database: D1Database) {
-  const assets = await database.prepare(`${assetSelect} WHERE a.team_id = ? ORDER BY a.created_at DESC`).bind(TEAM_ID).all<AssetRow>();
-  const activeAsset = assets.results[0] ?? null;
+async function payload(database: TeamDatabase, assetId = '') {
+  const assets = await database
+    .prepare(
+      `${assetSelect} WHERE a.team_id = ? ORDER BY a.created_at DESC, a.rowid DESC`,
+    )
+    .bind(database.teamId)
+    .all<AssetRow>();
+  const activeAsset = assetId
+    ? (assets.results.find((asset) => asset.id === assetId) ?? null)
+    : (assets.results[0] ?? null);
+  if (assetId && !activeAsset)
+    throw new WorkspaceAccessError('Film record not found.', 404);
   const clips = activeAsset
-    ? await database.prepare(`${clipSelect} WHERE c.film_asset_id = ? ORDER BY c.clip_number`).bind(activeAsset.id).all<ClipRow>()
+    ? await database
+        .prepare(
+          `${clipSelect} WHERE c.film_asset_id = ? ORDER BY c.clip_number`,
+        )
+        .bind(activeAsset.id)
+        .all<ClipRow>()
     : { results: [] as ClipRow[] };
-  return { assets: assets.results.map(presentAsset), asset: activeAsset ? presentAsset(activeAsset) : null, clips: clips.results.map(presentClip) };
+  return {
+    assets: assets.results.map(presentAsset),
+    asset: activeAsset
+      ? {
+          ...presentAsset(activeAsset),
+          version: await filmRecordVersion(
+            { ...activeAsset },
+            clips.results.map((clip) => ({ ...clip })),
+          ),
+        }
+      : null,
+    clips: await Promise.all(clips.results.map(presentClip)),
+  };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const database = await getDatabase();
-    return Response.json(await payload(database));
+    return Response.json(
+      await payload(
+        database,
+        new URL(request.url).searchParams.get('assetId') ?? '',
+      ),
+    );
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : 'Unable to load film.' }, { status: 500 });
+    return Response.json(
+      {
+        error:
+          error instanceof WorkspaceAccessError
+            ? error.message
+            : 'Unable to load film. Try again.',
+      },
+      { status: error instanceof WorkspaceAccessError ? error.status : 500 },
+    );
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as Record<string, unknown>;
+    const body = (await request.json()) as Record<string, unknown>;
     const action = text(body.action);
     const database = await getDatabase();
     if (action === 'register') {
       const storageKey = text(body.storageKey);
       const title = text(body.title, 'Uploaded game film');
-      if (!storageKey) throw new Error('A stored video is required.');
-      const existing = await database.prepare('SELECT id FROM film_assets WHERE team_id = ? AND storage_key = ?').bind(TEAM_ID, storageKey).first<{ id: string }>();
+      if (!safeMediaKey(storageKey) || isImageSlot(storageKey))
+        throw new FilmInputError('A valid stored video is required.');
+      const key = isPrototype()
+        ? storageKey
+        : `teams/${database.teamId}/${storageKey}`;
+      const object = await (env as unknown as { MEDIA: R2Bucket }).MEDIA.head(
+        key,
+      );
+      if (
+        !object ||
+        !object.httpMetadata?.contentType?.startsWith('video/') ||
+        object.size === 0
+      )
+        throw new FilmInputError(
+          'Upload a video before adding it to the film library.',
+        );
+      const gameId = text(body.gameId) || null;
+      if (
+        gameId &&
+        !(await database
+          .prepare('SELECT id FROM games WHERE id = ? AND team_id = ?')
+          .bind(gameId, database.teamId)
+          .first())
+      )
+        throw new WorkspaceAccessError(
+          'Choose a game belonging to your team.',
+          400,
+        );
+      const existing = await database
+        .prepare(
+          'SELECT id, game_id, duration_seconds, status FROM film_assets WHERE team_id = ? AND storage_key = ?',
+        )
+        .bind(database.teamId, storageKey)
+        .first<{
+          id: string;
+          game_id: string | null;
+          duration_seconds: number;
+          status: string;
+        }>();
       const id = existing?.id ?? crypto.randomUUID();
       if (existing) {
-        await database.prepare("UPDATE film_assets SET title = ?, duration_seconds = ?, status = 'ready', game_id = 'game-hamilton-week-5' WHERE id = ? AND team_id = ?")
-          .bind(title, Math.max(0, Math.round(number(body.durationSeconds))), id, TEAM_ID).run();
+        if (existing.status === 'deleting')
+          throw new WorkspaceAccessError(
+            'This film is being deleted. Finish deletion before registering it again.',
+            409,
+          );
+        const saved = await database
+          .prepare(
+            "UPDATE film_assets SET title = ?, duration_seconds = ?, game_id = ?, status = 'ready' WHERE id = ? AND team_id = ? AND status != 'deleting' RETURNING id",
+          )
+          .bind(
+            title,
+            body.durationSeconds === undefined
+              ? existing.duration_seconds
+              : Math.round(timeValue(body.durationSeconds)),
+            body.gameId === undefined ? existing.game_id : gameId,
+            id,
+            database.teamId,
+          )
+          .first();
+        if (!saved)
+          throw new WorkspaceAccessError(
+            'This film changed or is being deleted. Reload before retrying.',
+            409,
+          );
       } else {
-        await database.prepare(
-          `INSERT INTO film_assets (id, team_id, game_id, title, storage_key, duration_seconds, status, created_at)
-           VALUES (?, ?, 'game-hamilton-week-5', ?, ?, ?, 'ready', ?)`,
-        ).bind(id, TEAM_ID, title, storageKey, Math.max(0, Math.round(number(body.durationSeconds))), new Date().toISOString()).run();
+        await database
+          .prepare(
+            `INSERT INTO film_assets (id, team_id, game_id, title, storage_key, duration_seconds, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'ready', ?)`,
+          )
+          .bind(
+            id,
+            database.teamId,
+            gameId,
+            title,
+            storageKey,
+            Math.max(0, Math.round(number(body.durationSeconds))),
+            new Date().toISOString(),
+          )
+          .run();
       }
-      return Response.json(await payload(database), { status: existing ? 200 : 201 });
+      return Response.json(await payload(database, id), {
+        status: existing ? 200 : 201,
+      });
+    }
+    if (action === 'metadata') {
+      const assetId = text(body.assetId),
+        duration = Number(body.durationSeconds);
+      if (!Number.isFinite(duration) || duration <= 0)
+        throw new FilmInputError('A valid film duration is required.');
+      if (
+        !(await database
+          .prepare(
+            "SELECT id FROM film_assets WHERE id = ? AND team_id = ? AND status != 'deleting'",
+          )
+          .bind(assetId, database.teamId)
+          .first())
+      )
+        throw new WorkspaceAccessError('Film record not found.', 404);
+      const saved = await database
+        .prepare(
+          "UPDATE film_assets SET duration_seconds = ? WHERE id = ? AND team_id = ? AND status != 'deleting' RETURNING id",
+        )
+        .bind(Math.round(duration), assetId, database.teamId)
+        .first();
+      if (!saved)
+        throw new WorkspaceAccessError(
+          'This film is being deleted. Reload the library.',
+          409,
+        );
+      return Response.json(await payload(database, assetId));
     }
     if (action === 'upsertClip') {
       const assetId = text(body.assetId);
-      if (!assetId) throw new Error('Upload film before charting clips.');
-      const asset = await database.prepare('SELECT id FROM film_assets WHERE id = ? AND team_id = ?').bind(assetId, TEAM_ID).first<{ id: string }>();
-      if (!asset) return Response.json({ error: 'Film record not found.' }, { status: 404 });
+      if (!assetId)
+        throw new FilmInputError('Upload film before charting clips.');
+      const asset = await database
+        .prepare(
+          "SELECT id FROM film_assets WHERE id = ? AND team_id = ? AND status != 'deleting'",
+        )
+        .bind(assetId, database.teamId)
+        .first<{ id: string }>();
+      if (!asset)
+        return Response.json(
+          { error: 'Film record not found.' },
+          { status: 404 },
+        );
       const clipId = text(body.id) || crypto.randomUUID();
-      const existing = await database.prepare('SELECT id FROM film_clips WHERE id = ? AND film_asset_id = ?').bind(clipId, assetId).first<{ id: string }>();
-      const nextNumber = await database.prepare('SELECT COALESCE(MAX(clip_number), 0) + 1 AS next_number FROM film_clips WHERE film_asset_id = ?').bind(assetId).first<{ next_number: number }>();
-      const clipNumber = Math.max(1, Math.round(number(body.clipNumber, nextNumber?.next_number ?? 1)));
-      const startSeconds = Math.max(0, number(body.startSeconds));
-      const endSeconds = Math.max(startSeconds, number(body.endSeconds, startSeconds));
+      const existing = await database
+        .prepare('SELECT * FROM film_clips WHERE id = ? AND film_asset_id = ?')
+        .bind(clipId, assetId)
+        .first<ClipRow>();
+      if (
+        body.create === true &&
+        !existing &&
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+          clipId,
+        )
+      )
+        throw new FilmInputError('Use a valid new clip request ID.');
+      if (text(body.id) && !existing && body.create !== true)
+        throw new WorkspaceAccessError(
+          'Clip record not found in this film.',
+          404,
+        );
+      const nextNumber = await database
+        .prepare(
+          'SELECT COALESCE(MAX(clip_number), 0) + 1 AS next_number FROM film_clips WHERE film_asset_id = ?',
+        )
+        .bind(assetId)
+        .first<{ next_number: number }>();
+      const clipNumber = number(
+        body.clipNumber,
+        existing?.clip_number ?? nextNumber?.next_number ?? 1,
+      );
+      if (!Number.isInteger(clipNumber) || clipNumber < 1)
+        throw new FilmInputError('Choose a positive whole clip number.');
+      const startSeconds = timeValue(body.startSeconds);
+      const endSeconds = timeValue(body.endSeconds, startSeconds);
       const playId = text(body.playId) || null;
+      if (
+        playId &&
+        !(await database
+          .prepare('SELECT id FROM plays WHERE id = ? AND team_id = ?')
+          .bind(playId, database.teamId)
+          .first())
+      )
+        throw new WorkspaceAccessError(
+          'Choose a play belonging to your team.',
+          400,
+        );
+      if (endSeconds <= startSeconds)
+        throw new FilmInputError('The clip end must be after its start.');
+      if (
+        !Number.isInteger(clipNumber) ||
+        (await database
+          .prepare(
+            'SELECT id FROM film_clips WHERE film_asset_id = ? AND clip_number = ? AND id != ?',
+          )
+          .bind(assetId, clipNumber, clipId)
+          .first())
+      )
+        throw new FilmInputError('That clip number is already in use.');
+      if (text(body.note).length > 280)
+        throw new FilmInputError('Keep teaching notes to 280 characters.');
       const details = JSON.stringify({
-        tags: Array.isArray(body.tags) ? body.tags.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()) : [],
-        note: text(body.note), concept: text(body.concept), quarter: text(body.quarter), clock: text(body.clock),
+        tags: Array.isArray(body.tags)
+          ? body.tags
+              .filter(
+                (item): item is string =>
+                  typeof item === 'string' && Boolean(item.trim()),
+              )
+              .map((item) => item.trim())
+          : [],
+        note: text(body.note),
+        concept: text(body.concept),
+        quarter: text(body.quarter),
+        clock: text(body.clock),
       });
-      const values = [playId, clipNumber, startSeconds, endSeconds, text(body.odk) || null, optionalNumber(body.down), optionalNumber(body.distance), text(body.yardLine) || null, text(body.result) || null, details];
-      if (existing) {
-        await database.prepare(
-          `UPDATE film_clips SET play_id = ?, clip_number = ?, start_seconds = ?, end_seconds = ?, odk = ?, down = ?, distance = ?, yard_line = ?, result = ?, tags_json = ?
-           WHERE id = ? AND film_asset_id = ?`,
-        ).bind(...values, clipId, assetId).run();
-      } else {
-        await database.prepare(
-          `INSERT INTO film_clips (id, film_asset_id, play_id, clip_number, start_seconds, end_seconds, odk, down, distance, yard_line, result, tags_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).bind(clipId, assetId, ...values).run();
+      const values = [
+        playId,
+        clipNumber,
+        startSeconds,
+        endSeconds,
+        text(body.odk) || null,
+        optionalNumber(body.down),
+        optionalNumber(body.distance),
+        text(body.yardLine) || null,
+        text(body.result) || null,
+        details,
+      ];
+      // A lost creation response may be retried, but it must never become an
+      // update that overwrites work saved after the original creation.
+      if (existing && body.create === true) {
+        const columns = [
+          'play_id',
+          'clip_number',
+          'start_seconds',
+          'end_seconds',
+          'odk',
+          'down',
+          'distance',
+          'yard_line',
+          'result',
+          'tags_json',
+        ] as const;
+        if (
+          !columns.every((column, index) => existing[column] === values[index])
+        )
+          throw new WorkspaceAccessError(
+            'This clip was already created and its saved details differ. Your draft is still open. Reload the film to review the saved clip before editing it.',
+            409,
+          );
+        return Response.json({
+          ...(await payload(database, assetId)),
+          savedClipId: clipId,
+        });
       }
-      return Response.json(await payload(database), { status: existing ? 200 : 201 });
+      if (existing) {
+        await requireFilmClipVersion({ ...existing }, body.version);
+        const saved = await database
+          .prepare(
+            `UPDATE film_clips SET play_id = ?, clip_number = ?, start_seconds = ?, end_seconds = ?, odk = ?, down = ?, distance = ?, yard_line = ?, result = ?, tags_json = ?
+           WHERE id = ? AND film_asset_id = ? AND EXISTS(SELECT 1 FROM film_assets a WHERE a.id = film_clips.film_asset_id AND a.team_id = ? AND a.status != 'deleting') AND ${clipColumns.map((column) => `${column} IS ?`).join(' AND ')} RETURNING id`,
+          )
+          .bind(
+            ...values,
+            clipId,
+            assetId,
+            database.teamId,
+            ...clipColumns.map(
+              (column) =>
+                (({ ...existing }) as Record<string, unknown>)[column],
+            ),
+          )
+          .first();
+        if (!saved)
+          throw new WorkspaceAccessError(
+            'This clip changed or the film is being deleted. Your draft is still open. Reload the saved film before retrying.',
+            409,
+          );
+      } else {
+        const saved = await database
+          .prepare(
+            `INSERT INTO film_clips (id, film_asset_id, play_id, clip_number, start_seconds, end_seconds, odk, down, distance, yard_line, result, tags_json)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS(SELECT 1 FROM film_assets a WHERE a.id = ? AND a.team_id = ? AND a.status != 'deleting') RETURNING id`,
+          )
+          .bind(clipId, assetId, ...values, assetId, database.teamId)
+          .first();
+        if (!saved)
+          throw new WorkspaceAccessError(
+            'This film is being deleted. Reload the library.',
+            409,
+          );
+      }
+      return Response.json(
+        { ...(await payload(database, assetId)), savedClipId: clipId },
+        {
+          status: existing ? 200 : 201,
+        },
+      );
     }
-    throw new Error('Choose a valid film action.');
+    throw new FilmInputError('Choose a valid film action.');
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : 'Unable to save film data.' }, { status: 400 });
+    return Response.json(
+      {
+        error:
+          error instanceof FilmInputError ||
+          error instanceof WorkspaceAccessError
+            ? error.message
+            : 'Unable to save film data.',
+      },
+      {
+        status:
+          error instanceof WorkspaceAccessError
+            ? error.status
+            : error instanceof FilmInputError
+              ? 400
+              : 500,
+      },
+    );
   }
 }
 
@@ -168,17 +513,99 @@ export async function DELETE(request: Request) {
     const params = new URL(request.url).searchParams;
     const clipId = params.get('clipId')?.trim() ?? '';
     const assetId = params.get('assetId')?.trim() ?? '';
-    if (!clipId && !assetId) throw new Error('Choose film or a clip to delete.');
+    if (!clipId && !assetId)
+      throw new FilmInputError('Choose film or a clip to delete.');
     const database = await getDatabase();
     if (clipId) {
-      await database.prepare(
-        `DELETE FROM film_clips WHERE id = ? AND film_asset_id IN (SELECT id FROM film_assets WHERE team_id = ?)`,
-      ).bind(clipId, TEAM_ID).run();
+      const clip = await database
+        .prepare(
+          'SELECT c.* FROM film_clips c JOIN film_assets a ON a.id = c.film_asset_id WHERE c.id = ? AND a.team_id = ?',
+        )
+        .bind(clipId, database.teamId)
+        .first<ClipRow>();
+      if (!clip) throw new WorkspaceAccessError('Clip record not found.', 404);
+      await requireFilmClipVersion(
+        { ...clip },
+        request.headers.get('x-chalktalk-clip-version'),
+      );
+      const removed = await database
+        .prepare(
+          `DELETE FROM film_clips WHERE id = ? AND film_asset_id = ? AND EXISTS(SELECT 1 FROM film_assets a WHERE a.id = film_clips.film_asset_id AND a.team_id = ? AND a.status != 'deleting') AND ${clipColumns.map((column) => `${column} IS ?`).join(' AND ')} RETURNING id`,
+        )
+        .bind(
+          clipId,
+          clip.film_asset_id,
+          database.teamId,
+          ...clipColumns.map(
+            (column) => (({ ...clip }) as Record<string, unknown>)[column],
+          ),
+        )
+        .first();
+      if (!removed)
+        throw new WorkspaceAccessError(
+          'This clip changed or the film is being deleted. Reload the saved film before removing it.',
+          409,
+        );
+      return Response.json(await payload(database, clip.film_asset_id));
     } else {
-      await database.prepare('DELETE FROM film_assets WHERE id = ? AND team_id = ?').bind(assetId, TEAM_ID).run();
+      const owned = await markFilmForDeletion(
+        database,
+        assetId,
+        request.headers.get('x-chalktalk-film-version'),
+      );
+      const storedKey =
+        typeof owned.storage_key === 'string' ? owned.storage_key : null;
+      if (storedKey && !safeMediaKey(storedKey))
+        throw new FilmInputError(
+          'The stored video key is invalid; this film could not be deleted safely.',
+        );
+      // Keep the record and clips as a retry marker until storage removal succeeds.
+      if (storedKey) {
+        const shared = await database
+          .prepare(
+            "SELECT id FROM film_assets WHERE team_id = ? AND storage_key = ? AND id != ? AND status != 'deleting' LIMIT 1",
+          )
+          .bind(database.teamId, storedKey, assetId)
+          .first();
+        if (!shared) {
+          const key = isPrototype()
+            ? storedKey
+            : `teams/${database.teamId}/${storedKey}`;
+          try {
+            await (env as unknown as { MEDIA: R2Bucket }).MEDIA.delete(key);
+          } catch {
+            throw new WorkspaceAccessError(
+              'Video deletion did not finish. The film and clips remain marked for deletion; retry Delete film to finish.',
+              503,
+            );
+          }
+        }
+      }
+      await database
+        .prepare(
+          "DELETE FROM film_assets WHERE id = ? AND team_id = ? AND status = 'deleting'",
+        )
+        .bind(assetId, database.teamId)
+        .run();
     }
     return Response.json(await payload(database));
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : 'Unable to delete the clip.' }, { status: 400 });
+    return Response.json(
+      {
+        error:
+          error instanceof FilmInputError ||
+          error instanceof WorkspaceAccessError
+            ? error.message
+            : 'Deletion did not finish. Reload the library and retry.',
+      },
+      {
+        status:
+          error instanceof WorkspaceAccessError
+            ? error.status
+            : error instanceof FilmInputError
+              ? 400
+              : 500,
+      },
+    );
   }
 }

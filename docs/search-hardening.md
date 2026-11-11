@@ -1,0 +1,11 @@
+# Saved-record search
+
+The top-bar search previously mapped a handful of sample keywords to sections, then announced results it had not searched. It now opens an accessible dialog on desktop and phone and searches the signed-in workspace's saved play names/formation/concept, athlete names/jersey/position/unit, and film titles.
+
+Results retain their record ID and type. Opening a result loads that play's viewer, selects that athlete's profile, or requests that film's exact asset ID. Duplicate titles do not collapse into one result. Normal section navigation clears the search destination. Missing/deleted records show an unavailable/error state rather than silently selecting the latest record. Opening a search result while another module has unsaved edits is refused with a save/cancel explanation.
+
+Each opening reloads the existing authenticated, team-scoped APIs without caching. Closing cancels pending reads; stale responses cannot update the next dialog. Each source is checked independently: failed, malformed or unauthorized reads are labeled incomplete and offer Retry. They are not represented as a successfully empty library. Search does not index private staff notes or contact details, and does not write records.
+
+Validation: 26 repository tests pass, including case-insensitive multi-term queries, duplicate names, exact IDs, jersey zero, removal of sample-keyword routing, incomplete/malformed reads, and genuinely empty reads. Existing API tests cover authentication and owner isolation. Local browser checks found the existing saved play, opened its actual diagram, showed an honest no-match state, and opened a second saved play from the 390 × 844 phone viewport. No prototype or hosted records were created or edited for those checks.
+
+Limits: this is record search for plays, athletes and film titles, not full-text search over messages, clip tags or every module. It currently reads the existing library responses; a metadata-only paginated search endpoint will be needed for large libraries. Physical phone keyboard behavior and hosted owner sign-in remain handoff gates. Athlete and film destination plumbing has type checks and uses the existing module loaders; populated browser checks of those two destinations remain outstanding.
