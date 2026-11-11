@@ -1,0 +1,61 @@
+name: Build and integration checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chalktalk-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build and verify ChalkTalk
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: '11.25.0'
+          cache: true
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check
+        run: pnpm typecheck
+
+      - name: Run regression tests
+        run: pnpm test
+
+      - name: Build the app
+        run: pnpm build
+
+      - name: Run isolated integration checks
+        id: integration
+        run: node scripts/check-local-pilot.mjs
+
+      - name: Retain integration report and logs
+        if: ${{ !cancelled() && (steps.integration.outcome == 'success' || steps.integration.outcome == 'failure') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            outputs/local-pilot-check-*/report.json
+            outputs/local-pilot-check-*/*/setup.log
+            outputs/local-pilot-check-*/*/worker.log
+          retention-days: 14
+          if-no-files-found: error

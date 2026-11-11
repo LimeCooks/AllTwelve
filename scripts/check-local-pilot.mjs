@@ -20,7 +20,12 @@ const root = await mkdtemp(
 const key = randomBytes(32).toString('hex');
 const running = new Map();
 const settings = {};
-const report = { root, startedAt: new Date().toISOString(), checks: [] };
+const report = {
+  root,
+  commit: process.env.GITHUB_SHA ?? null,
+  startedAt: new Date().toISOString(),
+  checks: [],
+};
 async function freePort() {
   const server = http.createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -92,6 +97,7 @@ async function readFile(env, cookie) {
 }
 try {
   const release = await captureRelease(root);
+  report.releaseId = release;
   for (const env of ['prod', 'nonprod']) {
     settings[env] = await prepareEnvironment(env, release, root, {
       label: 'Disposable ' + env,
@@ -159,9 +165,25 @@ try {
   for (const env of ['prod', 'nonprod']) {
     await file(env, owners[env], bytes[env]);
     assert.deepEqual(await readFile(env, owners[env]), bytes[env]);
+    const range = await fetch(
+      `http://127.0.0.1:${settings[env].port}/api/media?key=team-logo`,
+      {
+        headers: { cookie: owners[env], range: 'bytes=2-5' },
+        signal: AbortSignal.timeout(10000),
+      },
+    );
+    assert.equal(range.status, 206);
+    assert.equal(
+      range.headers.get('content-range'),
+      `bytes 2-5/${bytes[env].length}`,
+    );
+    assert.deepEqual(
+      Buffer.from(await range.arrayBuffer()),
+      bytes[env].subarray(2, 6),
+    );
   }
   report.checks.push(
-    'Separate blank onboarding, owner identities, team IDs, roster records, media bytes and foreign-team rejection',
+    'Separate blank onboarding, owner identities, team IDs, roster records, media bytes, partial downloads and foreign-team rejection',
   );
   await api(
     'prod',
