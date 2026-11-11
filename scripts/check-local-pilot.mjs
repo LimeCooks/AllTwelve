@@ -172,7 +172,7 @@ try {
         signal: AbortSignal.timeout(10000),
       },
     );
-    assert.equal(range.status, 200, 'Intentional CI failure rehearsal');
+    assert.equal(range.status, 206);
     assert.equal(
       range.headers.get('content-range'),
       `bytes 2-5/${bytes[env].length}`,
