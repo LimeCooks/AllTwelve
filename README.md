@@ -24,7 +24,10 @@ Manual team backup downloads and the offline recovery procedure are documented i
 pnpm typecheck
 pnpm test
 pnpm build
+node scripts/check-local-pilot.mjs
 ```
+
+GitHub Actions runs these checks on pull requests and pushes to main. The integration rehearsal uses two disposable local instances from the same build. Its report records the commit and release ID. GitHub retains the report and worker logs for 14 days.
 
 `pnpm lint` runs the project-wide linter. Some existing shared UI components have outstanding lint findings.
 
