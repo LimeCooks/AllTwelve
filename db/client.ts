@@ -300,7 +300,7 @@ async function initialize(database: D1Database) {
           email, phone, staff_note, created_at, updated_at
         ) SELECT id, team_id, number, first_name, last_name, position, unit, graduation_year,
           height, weight_lb, status, eligibility, attendance_percent, install_percent,
-          COALESCE(NULLIF(email, ''), lower(replace(first_name || '.' || last_name, ' ', '')) || '+' || id || '@local.chalktalk'),
+          COALESCE(NULLIF(email, ''), lower(replace(first_name || '.' || last_name, ' ', '')) || '+' || id || '@local.alltwelve'),
           phone, staff_note, created_at, updated_at FROM athletes_legacy`,
         )
         .run();

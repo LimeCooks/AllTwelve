@@ -14,7 +14,7 @@ test('scoping preserves upload requests and replaces a conflicting team hint wit
     method: 'POST',
     headers: {
       'content-type': 'video/mp4',
-      'x-chalktalk-team-id': 'other-team',
+      'x-alltwelve-team-id': 'other-team',
     },
     body: 'film bytes',
   });
@@ -27,7 +27,7 @@ test('scoping preserves upload requests and replaces a conflicting team hint wit
   assert.equal(input, request);
   assert.equal(request.method, 'POST');
   assert.equal(init.headers.get('content-type'), 'video/mp4');
-  assert.equal(init.headers.get('x-chalktalk-team-id'), 'team-a');
+  assert.equal(init.headers.get('x-alltwelve-team-id'), 'team-a');
   const options = {
     method: 'PUT',
     body: '{"title":"Saved"}',
@@ -42,7 +42,7 @@ test('scoping preserves upload requests and replaces a conflicting team hint wit
   assert.equal(url, '/api/gameplans');
   assert.equal(scoped.body, options.body);
   assert.equal(scoped.method, 'PUT');
-  assert.equal(scoped.headers.get('x-chalktalk-team-id'), 'team-b');
+  assert.equal(scoped.headers.get('x-alltwelve-team-id'), 'team-b');
   assert.deepEqual(options.headers, { 'content-type': 'application/json' });
 });
 test('workspace hints are not attached to external origins or ordinary page requests', () => {
@@ -69,7 +69,7 @@ test('independent browser documents retain independent bindings, including nativ
     b.bindWorkspaceScope('team-b');
     const seen = [];
     globalThis.fetch = async (input, init) => {
-      seen.push(init.headers.get('x-chalktalk-team-id'));
+      seen.push(init.headers.get('x-alltwelve-team-id'));
       return Response.json({});
     };
     await a.workspaceFetch('/api/athletes');

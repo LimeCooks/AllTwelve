@@ -1,6 +1,6 @@
 # Separate-destination cloud recovery
 
-Status: the separate owner-private recovery service has restored the disposable release-rehearsal backup in hosted D1/R2. Independent native database reads match every source row across all 19 domain tables and confirm one new owner grant. The normal ChalkTalk application now opens that recovered team under the signed-in owner, including its defensive play and linked install. No recovery endpoint or overwrite action has been added to the live pilot.
+Status: the separate owner-private recovery service has restored the disposable release-rehearsal backup in hosted D1/R2. Independent native database reads match every source row across all 19 domain tables and confirm one new owner grant. The normal AllTwelve application now opens that recovered team under the signed-in owner, including its defensive play and linked install. No recovery endpoint or overwrite action has been added to the live pilot.
 
 ## Local preparation
 
@@ -30,7 +30,7 @@ These preparation and import-plan tests use disposable local databases/files. Th
 
 ## Separate hosted transfer
 
-The recovery lab uses its own checkout, source repository, D1 database and R2 bucket. Its Site ID is `appgprj_6af0e63e1a58819189af8bda60658078`; its URL is https://chalktalk-recovery-lab.liamcooks.chatgpt.site. The owner completed real sign-in and confirmed its initially empty recovery screen. The pilot retains its original Site ID and storage. No audience was broadened.
+The recovery lab uses its own checkout, source repository, D1 database and R2 bucket. Its Site ID is `appgprj_6af0e63e1a58819189af8bda60658078`; its historical hosted URL is retired from this workflow. The owner completed real sign-in and confirmed its initially empty recovery screen. The pilot retains its original Site ID and storage. No audience was broadened.
 
 The transfer service accepts only trusted signed-in identity and same-origin writes. Preparation is immutable for a given destination. Every file upload verifies length and SHA-256 in R2; existing mismatched destination files are never replaced. Large files transfer as resumable 8 MiB chunks and are streamed into a final object whose complete SHA-256 must match the prepared backup before record restoration is enabled. Temporary chunks can be corrected with ETag-guarded replacement; complete restored objects remain immutable during recovery. Refresh can resume verified uploads, and an uncertain database confirmation is resolved by comparing exact saved rows and files rather than importing twice.
 

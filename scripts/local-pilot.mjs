@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { brandMarkSvg } from '../lib/brand-identity.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import {
   createHash,
@@ -22,10 +23,23 @@ export const workspace = fileURLToPath(new URL('../', import.meta.url));
 const localRoot = path.join(workspace, '.local-pilot');
 const wrangler = path.join(workspace, 'node_modules/wrangler/bin/wrangler.js');
 const profiles = {
-  owner: { name: 'Owner', email: 'owner@chalktalk.local' },
-  staff: { name: 'Staff coach', email: 'staff@chalktalk.local' },
-  player: { name: 'Player', email: 'player@chalktalk.local' },
+  owner: { name: 'Owner', email: 'owner@alltwelve.local' },
+  staff: { name: 'Staff coach', email: 'staff@alltwelve.local' },
+  player: { name: 'Player', email: 'player@alltwelve.local' },
 };
+// Existing installations may retain their account addresses during a rename.
+// IDs stay stable; this avoids invalidating outstanding local invitations.
+try {
+  const saved = JSON.parse(await readFile(path.join(localRoot, 'local-accounts.json'), 'utf8'));
+  for (const profile of Object.keys(profiles)) {
+    if (typeof saved[profile]?.email !== 'string' || !/^[^\s@]+@[^\s@]+$/.test(saved[profile].email)) {
+      throw new Error('Invalid saved local account address.');
+    }
+    profiles[profile].email = saved[profile].email;
+  }
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+}
 const environments = {
   prod: { label: 'Local Prod', port: 3101, workerPort: 15161 },
   nonprod: { label: 'Local Non-Prod', port: 3102, workerPort: 15162 },
@@ -43,7 +57,7 @@ const escape = (text) =>
       ],
   );
 const page = (title, body) =>
-  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title><style>body{margin:0;background:#0c1721;color:#e5e9ef;font:16px system-ui;padding:clamp(18px,5vw,64px)}main{max-width:780px;margin:auto}h1{font-size:34px}p{line-height:1.65;color:#b5c8d6}article{padding:22px;border:1px solid #405565;border-radius:12px;margin:18px 0;background:#142531}a,button{display:inline-block;border:1px solid #5a7b91;border-radius:8px;background:#29495d;color:white;padding:12px 18px;font:inherit;cursor:pointer;text-decoration:none}small{display:block;margin:12px 0;overflow-wrap:anywhere}code{color:#a8d9ef}.tag{color:#a8d9ef;font-weight:700}</style></head><body><main>${body}</main></body></html>`;
+  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AllTwelve · ${escape(title)}</title><style>body{margin:0;background:#121c24;color:#f5f4ef;font:16px system-ui;padding:clamp(18px,5vw,64px)}main{max-width:780px;margin:auto}h1{font-size:34px}p{line-height:1.65;color:#b5c8d6}article{padding:22px;border:1px solid #405565;border-radius:12px;margin:18px 0;background:#192933}a,button{display:inline-block;border:1px solid #5a7b91;border-radius:8px;background:#345a99;color:white;padding:12px 18px;font:inherit;cursor:pointer;text-decoration:none}small{display:block;margin:12px 0;overflow-wrap:anywhere}code{color:#5b8def}.tag{color:#5b8def;font-weight:700}.brand{display:flex;align-items:center;gap:16px;margin-bottom:32px;font-weight:800;letter-spacing:-.03em;color:#f5f4ef}.brand svg{width:54px;height:32px;color:#5b8def}.brand span{border-left:1px solid #3a4c58;padding-left:16px}button:focus-visible,a:focus-visible{outline:2px solid #5b8def;outline-offset:3px}</style></head><body><main><div class="brand" aria-label="AllTwelve">${brandMarkSvg}<span>ALLTWELVE</span></div>${body}</main></body></html>`;
 
 export function localCookie(environment, profile, secret) {
   const value = `${environment}:${profile}`;
@@ -132,8 +146,10 @@ export async function prepareEnvironment(
   const directory = path.join(root, environment);
   await mkdir(directory, { recursive: true });
   let previous;
+  let previousConfig;
   try {
     previous = await json(path.join(directory, 'environment.json'));
+    previousConfig = await json(path.join(directory, 'wrangler.json'));
   } catch {}
   const release = path.join(root, 'releases', releaseId);
   await readFile(path.join(release, 'complete.json'));
@@ -144,24 +160,26 @@ export async function prepareEnvironment(
     releaseId,
   };
   const config = {
-    name: `chalktalk-local-${environment}`,
+    name: `alltwelve-local-${environment}`,
     main: path.join(release, 'dist/server/index.js'),
     compatibility_date: '2026-05-15',
     compatibility_flags: ['nodejs_compat'],
     no_bundle: true,
     rules: [{ type: 'ESModule', globs: ['**/*.js', '**/*.mjs'] }],
     assets: { directory: path.join(release, 'dist/client') },
-    vars: { CHALKTALK_MODE: 'pilot' },
+    vars: { ...previousConfig?.vars, ALLTWELVE_MODE: 'pilot' },
     d1_databases: [
       {
         binding: 'DB',
-        database_name: `chalktalk-local-${environment}`,
+        database_name: previousConfig?.d1_databases?.[0]?.database_name ?? `alltwelve-local-${environment}`,
         database_id: settings.databaseId,
         migrations_dir: path.join(release, 'migrations'),
       },
     ],
     r2_buckets: [
-      { binding: 'MEDIA', bucket_name: `chalktalk-local-${environment}` },
+      // The bucket name is a persisted namespace, not a display name. Renaming
+      // an existing namespace would hide the team's uploaded files.
+      { binding: 'MEDIA', bucket_name: previousConfig?.r2_buckets?.[0]?.bucket_name ?? `alltwelve-local-${environment}` },
     ],
   };
   await save(path.join(directory, 'wrangler.json'), config);
@@ -196,7 +214,7 @@ async function migrate(environment, root = localRoot) {
       'd1',
       'migrations',
       'apply',
-      `chalktalk-local-${environment}`,
+      'DB',
       '--local',
       '--config',
       path.join(root, environment, 'wrangler.json'),
@@ -222,7 +240,7 @@ function hostAllowed(request, port) {
   );
 }
 export function accountProxy(environment, settings, key) {
-  const cookieName = `chalktalk_local_${environment}`;
+  const cookieName = `alltwelve_local_${environment}`;
   return http.createServer(async (request, response) => {
     try {
       if (!hostAllowed(request, settings.port)) {
@@ -492,7 +510,7 @@ async function serve() {
       });
       response.end(
         JSON.stringify({
-          product: 'ChalkTalk Local',
+          product: 'AllTwelve Local',
           pid: process.pid,
           environments: liveLocalSettings(running),
         }),
@@ -501,10 +519,10 @@ async function serve() {
     }
     if (
       request.method === 'POST' &&
-      request.headers['x-chalktalk-local-control'] === key
+      request.headers['x-alltwelve-local-control'] === key
     ) {
       if (url.pathname === '/__local/stop') {
-        response.end('Stopping local ChalkTalk.');
+        response.end('Stopping local AllTwelve.');
         setTimeout(shutdown, 100);
         return;
       }
@@ -551,8 +569,8 @@ async function serve() {
     });
     response.end(
       page(
-        'ChalkTalk local instances',
-        `<span class="tag">ChalkTalk · local on this machine</span><h1>Your two local sites</h1><p>Separate databases, separate uploaded files, and fixed build snapshots. Nothing here writes to the old hosted pilot or prototype.</p>${Object.entries(
+        'AllTwelve local instances',
+        `<span class="tag">AllTwelve · local on this machine</span><h1>Your two local sites</h1><p>Separate databases, separate uploaded files, and fixed build snapshots. Nothing here writes to the old hosted pilot or prototype.</p>${Object.entries(
           environments,
         )
           .map(
@@ -573,7 +591,7 @@ async function serve() {
       pid: process.pid,
       startedAt: new Date().toISOString(),
     });
-    console.log('Local ChalkTalk ready at http://127.0.0.1:3100');
+    console.log('Local AllTwelve ready at http://127.0.0.1:3100');
   } catch (error) {
     console.error(error);
     await shutdown();
@@ -587,7 +605,7 @@ async function status() {
       signal: AbortSignal.timeout(1000),
     });
     const value = await response.json();
-    if (value.product !== 'ChalkTalk Local') return null;
+    if (value.product !== 'AllTwelve Local') return null;
     const alive = await Promise.all(
       value.environments.map(async (entry) => {
         try {
@@ -616,7 +634,7 @@ async function control(action, environment) {
     `http://127.0.0.1:3100/__local/${action}${environment ? '?environment=' + environment : ''}`,
     {
       method: 'POST',
-      headers: { 'x-chalktalk-local-control': key },
+      headers: { 'x-alltwelve-local-control': key },
       signal: AbortSignal.timeout(120000),
     },
   );
@@ -707,8 +725,8 @@ async function main() {
           );
         await wait(100);
       }
-      console.log('Local ChalkTalk stopped.');
-    } else console.log('Local ChalkTalk is not running.');
+      console.log('Local AllTwelve stopped.');
+    } else console.log('Local AllTwelve is not running.');
     return;
   }
   if (action === 'status') {

@@ -1,10 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from '@/components/ui/native-select';
+import { WorkspaceSelect } from '@/components/ui/select';
 import { PracticePrintout } from '@/components/practice-printout';
 import {
   readPracticePrintPlans,
@@ -79,23 +76,22 @@ export function PracticePrintLibrary({
       ) : plans.length ? (
         <>
           <div className="practice-print-library-controls">
-            <label>
+            <label htmlFor="practice-print-selection">
               Practice
-              <NativeSelect
-                aria-label="Choose practice to print"
+              <WorkspaceSelect
+                id="practice-print-selection"
+                label="Choose practice to print"
                 disabled={busy}
                 value={selected}
-                onChange={(event) => setSelected(event.target.value)}
-              >
-                <NativeSelectOption value="">
-                  Choose a saved practice…
-                </NativeSelectOption>
-                {plans.map((record) => (
-                  <NativeSelectOption key={record.id} value={record.id}>
-                    {record.practiceDate} · {record.title}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
+                onChange={setSelected}
+                options={[
+                  { value: '', label: 'Choose a saved practice…' },
+                  ...plans.map((record) => ({
+                    value: record.id,
+                    label: `${record.practiceDate} · ${record.title}`,
+                  })),
+                ]}
+              />
             </label>
             <PracticePrintout
               plan={plan}

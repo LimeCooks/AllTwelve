@@ -13,9 +13,12 @@ import {
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import {
-  NativeSelect,
-  NativeSelectOption,
-} from '@/components/ui/native-select';
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   Dialog,
   DialogContent,
@@ -318,65 +321,74 @@ export function SidelineWorkspace({
     <section className="module-surface sideline-review">
       <div className="module-header">
         <div>
-          <p className="eyebrow">Film review</p>
           <h1>Sideline</h1>
-          <p>Review saved clips and keep your bench notes beside the film.</p>
+          {film.asset && <p>{film.asset.title}</p>}
         </div>
         <div className="module-actions">
           <Button variant="outline" onClick={onToggleFocus}>
             <Maximize2 />
             {focusMode ? 'Exit focus' : 'Focus mode'}
           </Button>
-          <Button variant="outline" onClick={() => onNavigate('Film Room')}>
-            <Film />
-            Film Room
-          </Button>
+          {film.asset && (
+            <Button variant="outline" onClick={() => onNavigate('Film Room')}>
+              <Film />
+              Film Room
+            </Button>
+          )}
         </div>
       </div>
       {notice && <output>{notice}</output>}
       {writeError && <p role="alert">{writeError}</p>}
       {notesError && <p role="alert">{notesError} Open Notebook to retry.</p>}
-      <details className="sideline-disclosure">
-        <summary>
-          Film & clips {film.asset ? `· ${film.asset.title}` : ''}
-        </summary>
-        {film.assets.length > 0 && (
-          <label>
-            Saved film
-            <NativeSelect
-              aria-label="Saved sideline film"
-              value={film.asset?.id ?? ''}
-              disabled={filmLoading || saving}
-              onChange={(event) => select({ filmId: event.target.value })}
-            >
-              {film.assets.map((asset) => (
-                <NativeSelectOption key={asset.id} value={asset.id}>
-                  {asset.title}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </label>
-        )}
-        <div className="sideline-review-clips">
-          {film.clips.map((item) => (
-            <Button
-              key={item.id}
-              variant={clipId === item.id ? 'secondary' : 'ghost'}
-              disabled={filmLoading || saving}
-              onClick={() => select({ clipId: item.id })}
-            >
-              {notebook.flaggedClipIds.includes(item.id) && <Pin />}#
-              {item.clipNumber} · {label(item)}
-            </Button>
-          ))}
-        </div>
-        {!filmLoading && !filmError && film.clips.length === 0 && (
-          <p>
-            No charted clips in this film. You can review the recording or chart
-            clips in Film Room.
-          </p>
-        )}
-      </details>
+      {(film.assets.length > 1 || film.clips.length > 0) && (
+        <details className="sideline-disclosure">
+          <summary>Film and clips</summary>
+          {film.assets.length > 1 && (
+            <label htmlFor="sideline-film">
+              Saved film
+              <Select
+                value={film.asset?.id ?? null}
+                disabled={filmLoading || saving}
+                onValueChange={(value) => {
+                  if (value) select({ filmId: value });
+                }}
+              >
+                <SelectTrigger id="sideline-film">
+                  <SelectValue>
+                    {film.asset?.title ?? 'Choose film'}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent align="start" alignItemWithTrigger={false}>
+                  {film.assets.map((asset) => (
+                    <SelectItem key={asset.id} value={asset.id}>
+                      {asset.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+          )}
+          <div className="sideline-review-clips">
+            {film.clips.map((item) => (
+              <Button
+                key={item.id}
+                variant={clipId === item.id ? 'secondary' : 'ghost'}
+                disabled={filmLoading || saving}
+                onClick={() => select({ clipId: item.id })}
+              >
+                {notebook.flaggedClipIds.includes(item.id) && <Pin />}#
+                {item.clipNumber} · {label(item)}
+              </Button>
+            ))}
+          </div>
+          {!filmLoading && !filmError && film.clips.length === 0 && (
+            <p>
+              No charted clips in this film. You can review the recording or
+              chart clips in Film Room.
+            </p>
+          )}
+        </details>
+      )}
       {filmLoading ? (
         <output>Loading saved film…</output>
       ) : filmError ? (
@@ -436,48 +448,50 @@ export function SidelineWorkspace({
           </Button>
         </div>
       )}
-      <div className="sideline-review-controls">
-        <Button
-          aria-label="Previous saved clip"
-          variant="outline"
-          disabled={filmLoading || saving || !film.clips.length}
-          onClick={() => move(-1)}
-        >
-          <SkipBack />
-        </Button>
-        <span>
-          {clip
-            ? `Clip ${clip.clipNumber} · ${label(clip)} · ${clip.startSeconds}s–${clip.endSeconds}s`
-            : film.asset
-              ? 'Full recording'
-              : 'No clip selected'}
-        </span>
-        <Button
-          aria-label="Next saved clip"
-          variant="outline"
-          disabled={filmLoading || saving || !film.clips.length}
-          onClick={() => move(1)}
-        >
-          <SkipForward />
-        </Button>
-        <Button
-          variant="outline"
-          disabled={
-            !clip ||
-            saving ||
-            filmLoading ||
-            Boolean(filmError) ||
-            notesLoading ||
-            Boolean(notesError)
-          }
-          onClick={() => void write('flag')}
-        >
-          <Pin />
-          {clip && notebook.flaggedClipIds.includes(clip.id)
-            ? 'Unflag clip'
-            : 'Flag clip'}
-        </Button>
-      </div>
+      {film.clips.length > 0 && (
+        <div className="sideline-review-controls">
+          <Button
+            aria-label="Previous saved clip"
+            variant="outline"
+            disabled={filmLoading || saving || !film.clips.length}
+            onClick={() => move(-1)}
+          >
+            <SkipBack />
+          </Button>
+          <span>
+            {clip
+              ? `Clip ${clip.clipNumber} · ${label(clip)} · ${clip.startSeconds}s–${clip.endSeconds}s`
+              : film.asset
+                ? 'Full recording'
+                : 'No clip selected'}
+          </span>
+          <Button
+            aria-label="Next saved clip"
+            variant="outline"
+            disabled={filmLoading || saving || !film.clips.length}
+            onClick={() => move(1)}
+          >
+            <SkipForward />
+          </Button>
+          <Button
+            variant="outline"
+            disabled={
+              !clip ||
+              saving ||
+              filmLoading ||
+              Boolean(filmError) ||
+              notesLoading ||
+              Boolean(notesError)
+            }
+            onClick={() => void write('flag')}
+          >
+            <Pin />
+            {clip && notebook.flaggedClipIds.includes(clip.id)
+              ? 'Unflag clip'
+              : 'Flag clip'}
+          </Button>
+        </div>
+      )}
       <details className="sideline-disclosure">
         <summary>
           Notebook ·{' '}
@@ -606,6 +620,7 @@ export function SidelineWorkspace({
               Keep editing
             </Button>
             <Button
+              variant="destructive"
               onClick={() => {
                 const target = pending;
                 setDraft('');

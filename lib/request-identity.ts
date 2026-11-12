@@ -7,7 +7,7 @@ import {
 
 export const isPrototype = () =>
   process.env.NODE_ENV === 'development' &&
-  (env as unknown as { CHALKTALK_MODE?: string }).CHALKTALK_MODE !== 'pilot';
+  (env as unknown as { ALLTWELVE_MODE?: string }).ALLTWELVE_MODE !== 'pilot';
 
 export async function requestIdentity() {
   if (isPrototype()) return { id: 'local-prototype', email: '', name: 'Coach' };
@@ -18,5 +18,5 @@ export async function requestIdentity() {
 }
 
 export async function requestWorkspaceId() {
-  return (await headers()).get('x-chalktalk-team-id')?.trim() ?? '';
+  return (await headers()).get('x-alltwelve-team-id')?.trim() ?? '';
 }

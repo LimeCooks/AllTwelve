@@ -17,6 +17,13 @@ import {
   NativeSelectOption,
 } from '@/components/ui/native-select';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -204,14 +211,19 @@ export function InstallWorkspace<T extends InstallPlay>({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ packageId: data.package?.id, ...body }),
       });
-      const next = (await response.json()) as Payload & { error?: string };
       if (!response.ok) {
         if (response.status === 409) setConflict(true);
-        throw new Error(next.error || 'Unable to save install.');
+        const problem = (await response.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(
+          problem?.error ??
+            'Could not confirm the install change. Reload the install before retrying.',
+        );
       }
       let checked: Payload;
       try {
-        checked = parseInstallPayload(next);
+        checked = parseInstallPayload(await response.json());
       } catch {
         setLoadFailed(true);
         setConflict(true);
@@ -221,9 +233,9 @@ export function InstallWorkspace<T extends InstallPlay>({
       }
       setData(checked);
       setSelectedId((current) =>
-        next.items.some((item) => item.id === current)
+        checked.items.some((item) => item.id === current)
           ? current
-          : (next.items[0]?.id ?? ''),
+          : (checked.items[0]?.id ?? ''),
       );
       setDialog((current) => (current === 'add' ? current : null));
       setFormDirty(false);
@@ -333,23 +345,27 @@ export function InstallWorkspace<T extends InstallPlay>({
           <div className="install-package-bar">
             <label htmlFor="install-package">
               Install
-              <NativeSelect
-                className="w-full"
+              <Select
                 disabled={busy}
-                id="install-package"
-                onChange={(event) => {
+                onValueChange={(value) => {
+                  if (!value) return;
                   setMessage('');
-                  void load(event.target.value);
+                  void load(value);
                 }}
                 value={data.package.id}
               >
-                {data.packages.map((pack) => (
-                  <NativeSelectOption key={pack.id} value={pack.id}>
-                    {pack.name}
-                    {pack.publishedAt ? ' · Published' : ' · Draft'}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
+                <SelectTrigger id="install-package" className="w-full">
+                  <SelectValue>{data.package.name}</SelectValue>
+                </SelectTrigger>
+                <SelectContent align="start" alignItemWithTrigger={false}>
+                  {data.packages.map((pack) => (
+                    <SelectItem key={pack.id} value={pack.id}>
+                      {pack.name}
+                      {pack.publishedAt ? ' · Published' : ' · Draft'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </label>
             <div>
               <span
@@ -369,6 +385,16 @@ export function InstallWorkspace<T extends InstallPlay>({
             <div className="install-package-actions">
               {!published ? (
                 <>
+                  <Button
+                    disabled={busy}
+                    onClick={() => {
+                      setQuery('');
+                      setDialog('add');
+                    }}
+                    variant="outline"
+                  >
+                    <Plus /> Add plays
+                  </Button>
                   <Button
                     disabled={busy}
                     onClick={() => setDialog('edit')}
@@ -401,70 +427,34 @@ export function InstallWorkspace<T extends InstallPlay>({
             </div>
           </div>
           <div className="install-core-layout">
-            <aside className="install-play-list">
-              <details className="install-list-disclosure">
-                <summary>
-                  {data.items.length}{' '}
-                  {data.items.length === 1 ? 'play' : 'plays'} — choose or add
-                </summary>
-                <div className="install-list-body">
-                  <div className="install-list-heading">
-                    <strong>
-                      {data.items.length}{' '}
-                      {data.items.length === 1 ? 'play' : 'plays'}
-                    </strong>
-                    {!published ? (
-                      <Button
-                        disabled={busy}
-                        onClick={() => {
-                          setQuery('');
-                          setDialog('add');
-                        }}
-                        size="sm"
-                        variant="outline"
+            {data.items.length > 1 && (
+              <aside className="install-play-list">
+                <details className="install-list-disclosure">
+                  <summary>{data.items.length} plays · choose a play</summary>
+                  <div className="install-list-body">
+                    {data.items.map((item) => (
+                      <button
+                        className={item.id === selected?.id ? 'active' : ''}
+                        key={item.id}
+                        onClick={() => setSelectedId(item.id)}
+                        type="button"
                       >
-                        <Plus /> Add plays
-                      </Button>
-                    ) : null}
+                        <BookOpen />
+                        <span>
+                          <strong>{item.title}</strong>
+                          <small>
+                            {item.group}
+                            {published
+                              ? ` · ${item.reviewCount ? `${item.complete}% complete` : 'No recipients'}`
+                              : ''}
+                          </small>
+                        </span>
+                      </button>
+                    ))}
                   </div>
-                  {data.items.map((item) => (
-                    <button
-                      className={item.id === selected?.id ? 'active' : ''}
-                      key={item.id}
-                      onClick={() => setSelectedId(item.id)}
-                      type="button"
-                    >
-                      <BookOpen />
-                      <span>
-                        <strong>{item.title}</strong>
-                        <small>
-                          {item.group}
-                          {published
-                            ? ` · ${item.reviewCount ? `${item.complete}% complete` : 'No recipients'}`
-                            : ''}
-                        </small>
-                      </span>
-                    </button>
-                  ))}
-                  {!data.items.length ? (
-                    <div className="install-honest-empty">
-                      <BookOpen />
-                      <p>Add saved plays to build this install.</p>
-                      <Button
-                        disabled={busy}
-                        onClick={() => {
-                          setQuery('');
-                          setDialog('add');
-                        }}
-                        variant="outline"
-                      >
-                        Choose plays
-                      </Button>
-                    </div>
-                  ) : null}
-                </div>
-              </details>
-            </aside>
+                </details>
+              </aside>
+            )}
             <main className="install-content">
               {selected ? (
                 <>
@@ -606,11 +596,8 @@ export function InstallWorkspace<T extends InstallPlay>({
               ) : (
                 <div className="install-honest-empty">
                   <ClipboardList />
-                  <h2>Build at your team’s pace</h2>
-                  <p>
-                    A practice, a week, a month, or an entire concept—each
-                    install is a separate package you name.
-                  </p>
+                  <h2>No plays in this install</h2>
+                  <p>Use Add plays to choose from your playbook.</p>
                 </div>
               )}
             </main>
@@ -650,45 +637,50 @@ export function InstallWorkspace<T extends InstallPlay>({
                 ? 'All plays will be assigned to matching roster athletes. A copy of each diagram, position assignment and coaching note is preserved as issued. Published installs and their source plays stay locked.'
                 : dialog === 'delete'
                   ? 'This deletes the draft package. The source plays stay in Playbook.'
-                  : 'Choose the content and timing that fit your team.'}
+                  : dialog === 'add'
+                    ? 'Choose plays from your saved playbooks.'
+                    : 'Name the install, choose a unit, and optionally set a due date.'}
             </DialogDescription>
           </DialogHeader>
           {error ? (
-            <p className="install-dialog-error" role="alert">
-              {error}
-            </p>
+            <div className="dialog-feedback">
+              <p role="alert">{error}</p>
+            </div>
           ) : null}
           {conflict ? (
-            <div className="install-feedback error">
-              <p>Your open draft is preserved. Reloading will discard it.</p>
-              <Button
-                onClick={() => {
-                  const fields = formRef.current
-                    ? Object.fromEntries(new FormData(formRef.current))
-                    : {};
-                  const blob = new Blob(
-                    [
-                      JSON.stringify(
-                        { packageId: data.package?.id, fields },
-                        null,
-                        2,
-                      ),
-                    ],
-                    { type: 'application/json' },
-                  );
-                  const url = URL.createObjectURL(blob);
-                  const link = document.createElement('a');
-                  link.href = url;
-                  link.download = 'install-draft.json';
-                  link.click();
-                  setTimeout(() => URL.revokeObjectURL(url), 1000);
-                }}
-              >
-                Download draft
-              </Button>
-              <Button onClick={() => setReloadOpen(true)}>
-                Reload latest install
-              </Button>
+            <div className="dialog-feedback">
+              <p>Download your draft to keep a copy before reloading.</p>
+              <div className="dialog-feedback-actions">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    const fields = formRef.current
+                      ? Object.fromEntries(new FormData(formRef.current))
+                      : {};
+                    const blob = new Blob(
+                      [
+                        JSON.stringify(
+                          { packageId: data.package?.id, fields },
+                          null,
+                          2,
+                        ),
+                      ],
+                      { type: 'application/json' },
+                    );
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = 'install-draft.json';
+                    link.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 1000);
+                  }}
+                >
+                  Download draft
+                </Button>
+                <Button onClick={() => setReloadOpen(true)} variant="outline">
+                  Reload latest install
+                </Button>
+              </div>
             </div>
           ) : null}
           {dialog === 'create' || dialog === 'edit' ? (
@@ -820,6 +812,7 @@ export function InstallWorkspace<T extends InstallPlay>({
               </Button>
               <Button
                 disabled={busy}
+                variant={dialog === 'delete' ? 'destructive' : 'default'}
                 onClick={() =>
                   void mutate(
                     dialog === 'publish' ? 'PATCH' : 'DELETE',
@@ -853,6 +846,7 @@ export function InstallWorkspace<T extends InstallPlay>({
               Keep editing
             </Button>
             <Button
+              variant="destructive"
               onClick={() => {
                 setFormDirty(false);
                 setDiscardOpen(false);
@@ -878,6 +872,7 @@ export function InstallWorkspace<T extends InstallPlay>({
               Keep draft
             </Button>
             <Button
+              variant="destructive"
               onClick={() => {
                 setReloadOpen(false);
                 setFormDirty(false);

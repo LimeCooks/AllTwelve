@@ -14,7 +14,7 @@ export function backupZip(
       if (error) throw error;
       queue.push(chunk);
     });
-    const manifest = new ZipPassThrough('chalktalk-backup.json');
+    const manifest = new ZipPassThrough('alltwelve-backup.json');
     zip.add(manifest);
     manifest.push(
       new TextEncoder().encode(

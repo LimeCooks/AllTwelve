@@ -131,7 +131,7 @@ export function fixture() {
   );
   sql.close();
   return {
-    format: 'chalktalk-team-backup',
+    format: 'alltwelve-team-backup',
     version: 1,
     id: 'recovery-backup',
     createdAt: '2026-11-08T12:00:00.000Z',

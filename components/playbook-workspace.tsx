@@ -521,20 +521,28 @@ export function PlaybookWorkspace({
                 ),
               )}
             </div>
-            <NativeSelect
+            <div
+              className="segmented-control"
+              role="group"
               aria-label="Formation owner"
-              value={scope}
-              onChange={(event) => {
-                setScope(event.target.value);
-                setOpponentFilter('');
-                setPackageFilter('');
-              }}
             >
-              <NativeSelectOption value="team">Our team</NativeSelectOption>
-              <NativeSelectOption value="scout">
-                Opponent / scout
-              </NativeSelectOption>
-            </NativeSelect>
+              {(['team', 'scout'] as const).map((owner) => (
+                <button
+                  key={owner}
+                  type="button"
+                  className={scope === owner ? 'active' : ''}
+                  aria-pressed={scope === owner}
+                  onClick={() => {
+                    if (scope === owner) return;
+                    setScope(owner);
+                    setOpponentFilter('');
+                    setPackageFilter('');
+                  }}
+                >
+                  {owner === 'team' ? 'Our team' : 'Opponent / scout'}
+                </button>
+              ))}
+            </div>
             <Input
               aria-label="Search formations"
               placeholder="Search formations…"
@@ -665,28 +673,26 @@ export function PlaybookWorkspace({
             <button
               className="pd-learning-pack"
               key={p.id}
-              onClick={() => onNavigate('Install')}
+              onClick={() => onOpenInstall(p.id)}
               type="button"
             >
               <BookOpen />
               <span>{p.name}</span>
-              <span>Open installs</span>
+              <span>Open package</span>
             </button>
           ))}
-          <div className="pd-empty">
-            <p>
-              {packs.length
-                ? 'Player review and completion require a linked player account.'
-                : 'No published learning packages yet. Build one in Install.'}
-            </p>
-            <Button
-              disabled={busy}
-              onClick={() => onNavigate('Install')}
-              variant="outline"
-            >
-              Open installs
-            </Button>
-          </div>
+          {!packs.length && (
+            <div className="pd-empty">
+              <p>No published learning packages yet.</p>
+              <Button
+                disabled={busy}
+                onClick={() => onNavigate('Install')}
+                variant="outline"
+              >
+                Open installs
+              </Button>
+            </div>
+          )}
         </>
       ) : view === 'Leaderboard' ? (
         <>
@@ -697,55 +703,57 @@ export function PlaybookWorkspace({
             </div>
           </header>
           {reviews.length ? (
-            <table className="pd-results">
-              <thead>
-                <tr>
-                  <th>Athlete</th>
-                  <th>Completed</th>
-                  <th>Assigned</th>
-                  <th>Completion</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.values(
-                  reviews.reduce<
-                    Record<
-                      string,
-                      {
-                        id: string;
-                        name: string;
-                        complete: number;
-                        total: number;
-                      }
-                    >
-                  >((group, r) => {
-                    const value = group[r.athleteId] ?? {
-                      id: r.athleteId,
-                      name: r.name,
-                      complete: 0,
-                      total: 0,
-                    };
-                    value.total++;
-                    value.complete += Number(r.acknowledged);
-                    group[r.athleteId] = value;
-                    return group;
-                  }, {}),
-                )
-                  .sort(
-                    (a, b) =>
-                      b.complete / b.total - a.complete / a.total ||
-                      a.name.localeCompare(b.name),
+            <div className="pd-results-wrap">
+              <table className="pd-results">
+                <thead>
+                  <tr>
+                    <th>Athlete</th>
+                    <th>Completed</th>
+                    <th>Assigned</th>
+                    <th>Completion</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.values(
+                    reviews.reduce<
+                      Record<
+                        string,
+                        {
+                          id: string;
+                          name: string;
+                          complete: number;
+                          total: number;
+                        }
+                      >
+                    >((group, r) => {
+                      const value = group[r.athleteId] ?? {
+                        id: r.athleteId,
+                        name: r.name,
+                        complete: 0,
+                        total: 0,
+                      };
+                      value.total++;
+                      value.complete += Number(r.acknowledged);
+                      group[r.athleteId] = value;
+                      return group;
+                    }, {}),
                   )
-                  .map((r) => (
-                    <tr key={r.id}>
-                      <td>{r.name}</td>
-                      <td>{r.complete}</td>
-                      <td>{r.total}</td>
-                      <td>{Math.round((r.complete / r.total) * 100)}%</td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
+                    .sort(
+                      (a, b) =>
+                        b.complete / b.total - a.complete / a.total ||
+                        a.name.localeCompare(b.name),
+                    )
+                    .map((r) => (
+                      <tr key={r.id}>
+                        <td>{r.name}</td>
+                        <td>{r.complete}</td>
+                        <td>{r.total}</td>
+                        <td>{Math.round((r.complete / r.total) * 100)}%</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
           ) : (
             <p className="pd-empty">
               No review results yet. Scores appear only after real assignments
@@ -1043,9 +1051,13 @@ export function PlaybookWorkspace({
             <DialogDescription>
               {dialog?.startsWith('delete')
                 ? 'This cannot be undone. Plays used in installs and formations used by plays are protected.'
-                : dialog === 'formation'
-                  ? `${scope === 'scout' ? 'Opponent / scout' : 'Our team'} · Name the alignment and optional personnel package in your own terms.`
-                  : 'Start from a saved alignment, then draw and save the teaching details.'}
+                : dialog === 'book-settings'
+                  ? 'Rename this playbook or move it to Archived playbooks.'
+                  : dialog === 'book'
+                    ? 'Name the playbook and choose its unit.'
+                    : dialog === 'formation'
+                      ? `${scope === 'scout' ? 'Opponent / scout' : 'Our team'} · Name the alignment and optional personnel package in your own terms.`
+                      : 'Start from a saved alignment, then draw and save the teaching details.'}
             </DialogDescription>
           </DialogHeader>
           {error ? (
@@ -1212,8 +1224,8 @@ export function PlaybookWorkspace({
                       name="archived"
                       type="checkbox"
                       defaultChecked={book?.archived}
-                    />{' '}
-                    Archived
+                    />
+                    <span>Archived</span>
                   </label>
                 ) : null}
               </div>
@@ -1238,7 +1250,7 @@ export function PlaybookWorkspace({
                     type="button"
                     variant="destructive"
                   >
-                    <Trash2 /> Delete
+                    <Trash2 /> Delete playbook
                   </Button>
                 ) : null}
                 <Button disabled={busy} type="submit">

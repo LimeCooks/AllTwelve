@@ -1,4 +1,5 @@
 'use client';
+import { Brand } from '@/components/brand';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -88,7 +89,7 @@ export function WorkspaceEntry({
   return (
     <main className="workspace-welcome">
       <section>
-        <span className="eyebrow">ChalkTalk · Private workspace</span>
+        <Brand />
         <h1>
           {showInvitations ? 'Team invitations' : 'Choose your workspace'}
         </h1>

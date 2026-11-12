@@ -10,7 +10,7 @@ The export contains all 19 team/domain tables plus uploaded image/video bytes an
 
 The protected workspace records now include connected team conversations and preserved teaching from new install publications. The real local production-build check downloaded a ZIP and restored both into an independent offline database (`outputs/local-pilot-check-Oz9b6J/report.json`). Existing ownership and member grants remain excluded; recovery does not grant former accounts access.
 
-Large libraries are split at file boundaries into parts containing up to 512 MiB of media plus the manifest. Each ZIP part contains the same `chalktalk-backup.json` and its own `media/` files. Copying and ZIP downloads use streaming backpressure, not whole-library buffering. The current limits remain 10,000 uploaded files, 16 MiB of structured records, and 512 MiB per file/ZIP media part; normal uploads remain limited to 250 MiB. Large-limit performance has not been load-tested.
+Large libraries are split at file boundaries into parts containing up to 512 MiB of media plus the manifest. Each ZIP part contains the same `alltwelve-backup.json` and its own `media/` files. Copying and ZIP downloads use streaming backpressure, not whole-library buffering. The current limits remain 10,000 uploaded files, 16 MiB of structured records, and 512 MiB per file/ZIP media part; normal uploads remain limited to 250 MiB. Large-limit performance has not been load-tested.
 
 ## Interruption, replacement and retention
 
@@ -18,14 +18,14 @@ A stored progress count makes copying resumable. A retry recognizes previously c
 
 The current prepared download links last 24 hours or until another backup is prepared. Completed preserved snapshots also appear in the collapsed Saved backup history panel; their recovery-copy downloads remain available after those quick links expire or are replaced. Settings shows expiry, hides expired links, and restores current preparation status across navigation and devices. Older pre-copy snapshots remain readable but are explicitly labelled as depending on original uploads; prepare a new backup to gain independent copies.
 
-Completed copy sets/manifests are retained and downloadable from Saved backup history. Preparation is intentionally manual, following the owner's November 8 preference. A separate owner-private cloud recovery rehearsal now restores a disposable backup and opens it in normal ChalkTalk; see [cloud-recovery.md](cloud-recovery.md). Automatic pruning/retention limits, full-size cloud testing and a simpler owner recovery handoff remain unfinished. Repeated preparation uses additional storage, and unfinished or replaced preparations can leave internal file copies until cleanup is implemented. Do not describe this as an unattended disaster-recovery service or imply that the UI can overwrite the live workspace from a retained snapshot. No hosted restore-over-live action exists.
+Completed copy sets/manifests are retained and downloadable from Saved backup history. Preparation is intentionally manual, following the owner's November 8 preference. A separate owner-private cloud recovery rehearsal now restores a disposable backup and opens it in normal AllTwelve; see [cloud-recovery.md](cloud-recovery.md). Automatic pruning/retention limits, full-size cloud testing and a simpler owner recovery handoff remain unfinished. Repeated preparation uses additional storage, and unfinished or replaced preparations can leave internal file copies until cleanup is implemented. Do not describe this as an unattended disaster-recovery service or imply that the UI can overwrite the live workspace from a retained snapshot. No hosted restore-over-live action exists.
 
 ## Offline recovery check
 
 Requires this checkout's dependencies and Node 22.13+. Use an entirely new output path:
 
 ```powershell
-node scripts/restore-backup.mjs --out outputs/recovery-check --owner-id recovery-check "C:\Downloads\chalktalk-part-1.zip"
+node scripts/restore-backup.mjs --out outputs/recovery-check --owner-id recovery-check "C:\Downloads\alltwelve-part-1.zip"
 ```
 
 Supply every part path for multipart backups; order does not matter. The tool never contacts the hosted pilot, never changes the prototype, and refuses an existing output directory. It creates `workspace.sqlite`, the original uploaded bytes under `media/`, and `recovery.json` with team/file metadata. The explicit owner ID binds the offline team; it is not a login credential and grants no hosted access.

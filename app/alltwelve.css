@@ -1,0 +1,243 @@
+/* AllTwelve visual foundation. Field geometry and semantic team colours are
+   deliberately independent of brand colours. */
+:root {
+  --brand-cobalt: #5b8def;
+  --brand-action: #345a99;
+  --brand-ink: #121c24;
+  --brand-slate: #24343f;
+  --brand-paper: #f5f4ef;
+  --control-height: 44px;
+  --surface-radius: 10px;
+  --primary: #345a99;
+  --primary-foreground: #fff;
+  --ring: #5b8def;
+  --accent: #e5edfc;
+  --accent-foreground: #24467e;
+}
+body:has(.app-shell.alltwelve.dark), .app-shell.alltwelve.dark, .dark,
+body:has(.pd-designer), body:has(.workspace-welcome), body:has(.player-learning-workspace) {
+  --background: #121c24;
+  --foreground: #f5f4ef;
+  --card: #192933;
+  --card-foreground: #f5f4ef;
+  --popover: #24343f;
+  --popover-foreground: #f5f4ef;
+  --primary: #345a99;
+  --primary-foreground: #fff;
+  --secondary: #24343f;
+  --secondary-foreground: #f5f4ef;
+  --muted: #20303b;
+  --muted-foreground: #b3bec7;
+  --accent: #243e66;
+  --accent-foreground: #fff;
+  --border: #3a4c58;
+  --input: #4b606f;
+  --ring: #5b8def;
+  --sidebar: #121c24;
+  --sidebar-foreground: #f5f4ef;
+  --sidebar-primary: #345a99;
+  --sidebar-accent: #243e66;
+  --sidebar-border: #3a4c58;
+  --destructive: #e7867b;
+  color-scheme: dark;
+}
+.alltwelve-brand { display: inline-flex; align-items: center; gap: 12px; flex-shrink: 0; color: var(--foreground); }
+.alltwelve-mark { width: 49px; height: 32px; color: var(--brand-cobalt); flex-shrink: 0; }
+.alltwelve-wordmark { border-left: 1px solid var(--border); padding-left: 12px; font-family: 'Arial Narrow', 'Roboto Condensed', sans-serif; font-stretch: condensed; font-size: 19px; letter-spacing: -.035em; font-weight: 800; line-height: 1.1; }
+.app-shell.alltwelve .sidebar { background: var(--brand-ink); color: var(--brand-paper); border-right: 1px solid #3a4c58; }
+.app-shell.alltwelve .brand-lockup { width: max-content; padding: 0; margin: 0 0 24px; background: none; border: 0; box-shadow: none; }
+.app-shell.alltwelve .brand-lockup:hover { opacity: .85; }
+.app-shell.alltwelve .topbar { background: var(--background); border-bottom: 1px solid var(--border); }
+.app-shell.alltwelve.dark .workspace { background: var(--background); color: var(--foreground); }
+.app-shell.alltwelve .nav-item { min-height: 44px; font-size: 15px; font-weight: 500; border-radius: 8px; }
+.app-shell.alltwelve .nav-item.active { background: var(--brand-action); color: white; }
+.app-shell.alltwelve .nav-item.active::before { background: var(--brand-cobalt); }
+.app-shell.alltwelve .nav-item:hover:not(.active) { background: #24343f; color: white; }
+.app-shell.alltwelve .team-switcher, .app-shell.alltwelve .season-card { background: #192933; border-color: #3a4c58; }
+.app-shell.alltwelve .team-switcher strong { font-size: 15px; }
+.app-shell.alltwelve .team-switcher small { font-size: 13px; color: #b3bec7; }
+.app-shell.alltwelve .roster-avatar { font-size: 12px; }
+.app-shell.alltwelve .install-cell b { font-size: 13px; }
+.app-shell.alltwelve .film-assets-list b { color: var(--brand-cobalt); font-size: 12px; letter-spacing: .025em; }
+.app-shell.alltwelve .notes-actions span,
+.app-shell.alltwelve .film-sheet-editor > strong { font-size: 13px; color: var(--muted-foreground); }
+.app-shell.alltwelve .mini-timeline button.active { outline-color: var(--brand-cobalt); }
+.app-shell.alltwelve .timeline-playhead,
+.app-shell.alltwelve .timeline-playhead::before { background: var(--brand-cobalt); }
+.app-shell.alltwelve .tag-strip button { color: var(--brand-cobalt); }
+.app-shell.alltwelve .settings-section-save > span { font-size: 14px; color: var(--muted-foreground); }
+.app-shell.alltwelve.dark .local-data-note { background: var(--background); color: var(--foreground); border: 1px solid var(--border); }
+.app-shell.alltwelve.dark .local-data-note :is(strong,button) { color: var(--foreground); }
+.app-shell.alltwelve.dark .local-data-note :is(p,small) { color: var(--muted-foreground); }
+.app-shell.alltwelve .settings-secondary-card { min-height: 0; align-self: start; }
+.app-shell.alltwelve.dark :is(.install-content,.install-play-list) { background: var(--card); border-color: var(--border); color: var(--foreground); }
+.app-shell.alltwelve .install-list-body > button.active { background: var(--accent); color: var(--foreground); }
+.app-shell.alltwelve .install-review-table :is(th,td) { font-size: 14px; }
+.player-learning-workspace { background: var(--brand-ink); color: var(--brand-paper); font-size: 16px; }
+.player-brand-row { padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.player-learning-workspace .player-brand-row button { display: inline-flex; border: 0; background: transparent; padding: 0; min-height: 44px; }
+.player-learning-workspace :is(p,small) { color: var(--muted-foreground); }
+.player-learning-workspace small { font-size: 14px; }
+.player-learning-workspace button { min-height: 44px; font-size: 15px; background: var(--card); border-color: var(--border); }
+.player-learning-workspace :is(input,textarea,select) { font-size: 16px; min-height: 44px; color: var(--foreground); background: var(--background); border-color: var(--input); }
+.player-learning-workspace [data-slot='button'][data-variant='default'] { background: var(--brand-action); color: #fff; }
+.player-learning-workspace details { border-color: var(--border); }
+.player-learning-workspace .player-learning-list button { background: var(--card); }
+.player-learning-workspace .player-learning-list button[aria-pressed='true'] { outline-color: var(--brand-cobalt); background: var(--accent); }
+.player-learning-header a { display: inline-flex; align-items: center; min-height: 44px; padding: 8px 14px; border: 1px solid var(--border); border-radius: 8px; }
+@media (max-width: 650px) {
+  .player-learning-header,.player-learning-toolbar { flex-wrap: wrap; }
+  .player-learning-toolbar > span { flex-basis: 100%; order: 3; }
+}
+.app-shell.alltwelve .content-grid.home-clean { max-width: none; }
+.app-shell.alltwelve.dark :is(.module-surface,.pd-workspace) { background: transparent; color: var(--foreground); border: 0; box-shadow: none; }
+.app-shell.alltwelve.dark :is(.game-card,.film-card,.play-card,.rail-card,.settings-card,.athlete-detail,.roster-table-wrap,.practice-builder,.gameplan-board,.install-detail,.film-workspace,.pd-play-card,.pd-book-card) { background: var(--card); border-color: var(--border); box-shadow: none; }
+.app-shell.alltwelve.dark :is(.analytics-card,.data-entry-card,.game-model-card,.insight-inbox,.gameplan-objectives,.call-sheet-builder,.week-calendar,.install-review-detail,.depth-grid,.roster-grid,.assignment-table,.practice-overview,.film-library-panel,.workflow-stepper) { background: var(--card); border-color: var(--border); box-shadow: none; }
+.app-shell.alltwelve.dark :is(.film-assets-list > button.active,.film-ledger-row.active,.film-sheet-row.active,.insight-inbox > button.included) { background: var(--accent); border-color: var(--brand-cobalt); }
+.app-shell.alltwelve.dark .call-buckets header { background: var(--background); }
+.app-shell.alltwelve .mini-timeline button { background-image: none; }
+.app-shell.alltwelve :is(.welcome-row h1,.module-header h1,.pd-library-header h1) { font-weight: 750; letter-spacing: -.035em; }
+.app-shell.alltwelve .welcome-row h1 { font-size: clamp(30px, 3vw, 44px); }
+.app-shell.alltwelve .welcome-row p { color: var(--muted-foreground); }
+.app-shell.alltwelve .section-heading button, .app-shell.alltwelve .content-type { color: var(--brand-cobalt); }
+.app-shell.alltwelve .content-type { background: var(--accent); }
+.app-shell.alltwelve .game-card { padding: 20px; }
+.app-shell.alltwelve .game-card .matchup { padding-block: 12px; }
+.app-shell.alltwelve .game-card .readiness { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; }
+.app-shell.alltwelve .game-card [data-slot='badge'] { background: var(--brand-action); color: white; }
+.app-shell.alltwelve .card-copy { padding: 16px; }
+.app-shell.alltwelve .card-copy strong { font-size: 16px; }
+.app-shell.alltwelve .card-copy p { font-size: 14px; line-height: 1.5; }
+.app-shell.alltwelve.dark :is(input:not([type='checkbox']):not([type='radio']):not([type='range']),textarea,select) { background-color: var(--background); color: var(--foreground); border-color: var(--input); }
+/* Portal content uses the same tokens even when it is outside the app shell. */
+[data-slot='dialog-content'], [data-slot='alert-dialog-content'], [data-slot='popover-content'], [data-slot='select-content'], [data-slot='select-popup'], [data-slot='dropdown-menu-content'], [data-slot='tooltip-content'] { background: var(--popover); color: var(--popover-foreground); border-color: var(--border); font-size: 15px; }
+[data-slot='dialog-content'] :is(label,p), [data-slot='alert-dialog-content'] p { font-size: 15px; line-height: 1.55; }
+[data-slot='dialog-title'], [data-slot='alert-dialog-title'] { font-size: 22px; line-height: 1.3; }
+:is(.app-shell.alltwelve,.pd-designer,[data-slot='dialog-content'],[data-slot='alert-dialog-content']) [data-slot='button'][data-variant='default'] { background: var(--brand-action); color: white; border-color: transparent; box-shadow: none; }
+:is(.app-shell.alltwelve,.pd-designer,[data-slot='dialog-content']) [data-slot='button'][data-variant='default']:hover { background: #406db5; }
+:is(button,a,input,textarea,select,summary):focus-visible { outline: 2px solid var(--brand-cobalt); outline-offset: 3px; }
+/* The designer remains a tool-first full-screen canvas. */
+.pd-designer { background: var(--brand-ink); color: var(--brand-paper); }
+.pd-designer .pd-header { background: #121c24; border-bottom: 1px solid #3a4c58; padding: 12px 18px; gap: 16px; flex: 0 0 auto; }
+.pd-designer .pd-header .alltwelve-brand { display: inline-flex; margin: 0 8px 0 0; }
+.pd-designer .pd-header .alltwelve-wordmark { margin: 0; color: var(--brand-paper); font-size: 19px; }
+.pd-designer .pd-header > div:first-of-type { flex: 1; min-width: 0; }
+.pd-designer :is(.pd-main-tools,.pd-tool-menu,.pd-field-controls,.pd-properties,.pd-camera-controls,.pd-details) { background: #24343f; color: #f5f4ef; border-color: #4b606f; box-shadow: 0 8px 24px #0002; }
+.pd-designer :is(.pd-main-tools,.pd-properties,.pd-details,.pd-field-controls) :is(label,p,summary) { font-size: 14px; }
+.pd-designer .pd-header strong { font-size: 20px; }
+.pd-designer .pd-header span:not(.alltwelve-brand):not(.alltwelve-wordmark) { color: #b3bec7; }
+.pd-designer .pd-bottom-hint { background: #192933; color: #b3bec7; border-color: #3a4c58; }
+.app-shell.alltwelve.sidebar-collapsed .alltwelve-wordmark { display: none; }
+@media (max-width: 700px) {
+  .pd-designer .pd-header { gap: 8px; padding: 8px; flex-wrap: wrap; }
+  .pd-designer .pd-header .alltwelve-wordmark { display: none; }
+  .pd-designer .pd-header .alltwelve-mark { width: 34px; height: 25px; }
+  .pd-designer .pd-header strong { font-size: 16px; }
+  .pd-designer .pd-header-actions { width: 100%; justify-content: flex-end; }
+  .pd-designer .pd-header-actions button { min-height: 40px; font-size: 14px; padding-inline: 12px; }
+  .mobile-brand .alltwelve-wordmark { font-size: 16px; }
+  .mobile-brand .alltwelve-mark { width: 36px; height: 26px; }
+}
+@media print { .alltwelve-mark { color: #24343f; } }
+@media (max-width: 1000px) {
+  .app-shell.alltwelve .mobile-brand { display: inline-flex; }
+  .app-shell.alltwelve .topbar { gap: 16px; }
+  .app-shell.alltwelve .profile-name { display: none; }
+  .app-shell.alltwelve .workspace-search-trigger { flex: 1; min-width: 0; overflow: hidden; }
+}
+
+/* Home follows the approved compact game strip / work / schedule composition. */
+.team-home { display: grid; gap: 28px; min-width: 0; width: 100%; }
+.team-home-heading h1 { margin: 4px 0; font-size: clamp(30px,3vw,44px); line-height: 1.2; letter-spacing: -.035em; font-weight: 750; }
+.team-home-heading > p:last-child { margin: 8px 0 0; color: var(--muted-foreground); font-size: 16px; }
+.team-home-game { display: flex; flex-wrap: wrap; align-items: center; gap: 20px; padding: 18px 22px; width: 100%; text-align: left; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--foreground); }
+.team-home-game:hover { border-color: var(--brand-cobalt); }
+.team-home-game > span { display: inline-flex; gap: 10px; align-items: center; }
+.team-home-game > svg:last-child { margin-left: auto; }
+.team-home-game svg { width: 20px; flex-shrink: 0; }
+.team-home-identity { padding-right: 18px; border-right: 1px solid var(--border); }
+.team-home-identity strong,.team-home-identity small { display: block; }
+.team-home-identity small { color: var(--muted-foreground); }
+.team-home-game-name { flex: 1; min-width: 170px; font-weight: 650; }
+.team-home-label { display: inline-block; background: var(--accent); color: var(--foreground); border-radius: 5px; padding: 3px 8px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .035em; }
+.team-home-work { display: grid; grid-template-columns: minmax(0,2.15fr) minmax(250px,1fr); gap: 24px; }
+.team-home h2 { margin: 0; font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted-foreground); font-weight: 700; }
+.team-home section > header { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.team-home-previews { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; }
+.team-home-previews article { overflow: hidden; border: 1px solid var(--border); background: var(--card); border-radius: 10px; }
+.team-home-previews article > div:last-child { padding: 16px; }
+.team-home-previews article > div:last-child > button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; margin-top: 8px; font-size: 16px; font-weight: 650; }
+.team-home-previews article > div:last-child > button svg { width: 16px; margin-left: auto; }
+.team-home-previews article p { color: var(--muted-foreground); margin: 8px 0 0; }
+.team-home-previews article > :first-child { width: 100%; height: 230px; min-height: 230px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: var(--background); }
+.team-home-previews .viewer-empty-state { padding: 20px; }
+.team-home-schedule { align-self: stretch; border: 1px solid var(--border); background: var(--card); border-radius: 10px; padding: 16px; }
+.team-home-schedule > button { width: 100%; display: flex; gap: 14px; align-items: center; text-align: left; border-top: 1px solid var(--border); padding: 16px 0; }
+.team-home-schedule time { display: grid; place-items: center; width: 64px; flex-shrink: 0; padding: 8px; border: 1px solid var(--input); border-radius: 8px; text-transform: uppercase; font-size: 12px; }
+.team-home-schedule > button > span { min-width: 0; }
+.team-home-schedule > button > span strong, .team-home-schedule small { display: block; overflow-wrap: anywhere; }
+.team-home-schedule small { margin-top: 5px; color: var(--muted-foreground); }
+.team-home-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding-top: 24px; }
+.team-home-empty > svg { color: var(--muted-foreground); }
+.team-home-empty p { margin: 0; color: var(--muted-foreground); }
+.team-home-installs > div { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 0 20px; }
+.team-home-installs > div > button { display: flex; gap: 16px; align-items: center; width: 100%; min-height: 64px; text-align: left; }
+.team-home-installs > div > button + button { border-top: 1px solid var(--border); }
+.team-home-installs > div > button > svg:last-child { margin-left: auto; }
+.team-home-installs > .team-home-install-empty { display: flex; gap: 16px; align-items: center; padding: 20px; }
+.team-home-install-empty p { flex: 1; margin: 0; color: var(--muted-foreground); }
+.team-home-installs > .team-home-install-empty > button { width: auto; min-height: 44px; }
+.app-shell.alltwelve .nav-item.active::before { box-shadow: none; }
+.app-shell.alltwelve .season-card { background-image: none; }
+.workspace-welcome { background: var(--brand-ink); color: var(--brand-paper); }
+.workspace-welcome > section { background: #192933; border-color: #3a4c58; border-radius: 10px; }
+.workspace-welcome p { color: #b3bec7; }
+.workspace-welcome [data-slot='button'][data-variant='default'] { background: var(--brand-action); color: white; min-height: 44px; }
+.workspace-welcome input { min-height: 44px; font-size: 16px; }
+.app-shell.alltwelve .mobile-dock { background: #192933; border-color: #3a4c58; }
+.app-shell.alltwelve .mobile-dock button.active { background: var(--brand-action); }
+.app-shell.alltwelve .sidebar-collapse-toggle { background: #192933; border-color: #3a4c58; box-shadow: none; color: #b3bec7; }
+.app-shell.alltwelve .media-upload-control > span { font-size: 15px; line-height: 1.4; font-weight: 600; }
+.app-shell.alltwelve .viewer-empty-state > span { font-size: 14px; line-height: 1.6; }
+.app-shell.alltwelve .local-data-status :is(strong,span) { font-size: 13px; }
+.app-shell.alltwelve .workflow-stepper button > span { font-size: 13px; min-width: 24px; min-height: 24px; }
+.app-shell.alltwelve .segmented-control button.active { background: var(--accent); color: var(--foreground); }
+.app-shell.alltwelve .segmented-control button.active::after { background: var(--brand-cobalt); }
+.app-shell.alltwelve .settings-section-actions > span { font-size: 14px; }
+.app-shell.alltwelve .practice-timeline > header span { font-size: 13px; }
+@media(max-width:1100px) { .team-home-work { grid-template-columns: 1fr; }.team-home-schedule { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 20px; }.team-home-schedule > header { grid-column: 1/-1; }.team-home-empty { grid-column: 1/-1; padding-top: 4px; }.team-home-previews article > :first-child { height: 200px; min-height: 200px; } }
+@media(max-width:650px) { .team-home { gap: 20px; }.team-home-game { padding: 16px; gap: 14px; }.team-home-game-name { flex-basis: 100%; }.team-home-previews,.team-home-schedule { grid-template-columns: 1fr; }.team-home-installs > .team-home-install-empty { flex-wrap: wrap; }.team-home-install-empty p { flex-basis: calc(100% - 50px); }.team-home-installs > .team-home-install-empty > button { width: 100%; } }
+
+/* Shared controls must not inherit the former navy component palette. */
+.app-shell.alltwelve .viewer-empty-state { background: var(--background); color: var(--muted-foreground); }
+.app-shell.alltwelve .viewer-empty-state.compact { background: transparent; }
+.app-shell.alltwelve :is(.viewer-empty-state,.real-media-empty) :is(strong,span,svg) { color: inherit; }
+.app-shell.alltwelve :is(.viewer-empty-state,.real-media-empty) strong { color: var(--foreground); }
+.app-shell.alltwelve .segmented-control { background: var(--background); border: 1px solid var(--border); box-shadow: none; }
+.app-shell.alltwelve .segmented-control button { color: var(--muted-foreground); background: transparent; box-shadow: none; }
+.app-shell.alltwelve .segmented-control button:hover { background: var(--secondary); color: var(--foreground); }
+.app-shell.alltwelve .segmented-control button.active { background: var(--brand-action); color: white; box-shadow: none; }
+.app-shell.alltwelve .segmented-control button.active::after { display: none; }
+.app-shell.alltwelve .local-data-status { background: var(--card); border-color: var(--border); color: var(--foreground); }
+.app-shell.alltwelve .local-data-status small { color: var(--muted-foreground); }
+.app-shell.alltwelve .sync-dot:not(.error) { background: var(--brand-cobalt); box-shadow: none; }
+.app-shell.alltwelve :is(.toolbar-search,.team-message-search) { background: var(--background); border-color: var(--input); color: var(--muted-foreground); }
+.app-shell.alltwelve :is(.toolbar-search,.team-message-search) input { background: transparent; color: var(--foreground); box-shadow: none; }
+.app-shell.alltwelve input::placeholder,.app-shell.alltwelve textarea::placeholder { color: var(--muted-foreground); opacity: 1; }
+.app-shell.alltwelve .week-calendar { background: var(--card); border-color: var(--border); }
+.app-shell.alltwelve .week-calendar .week-head { background: var(--secondary); border-color: var(--border); }
+.app-shell.alltwelve .week-head > div,.app-shell.alltwelve .calendar-grid-lines i { border-color: var(--border); }
+.app-shell.alltwelve .week-body { background: var(--background); }
+.app-shell.alltwelve :is(.week-head > span,.week-head small,.time-labels span) { color: var(--muted-foreground); }
+.app-shell.alltwelve .week-head strong { color: var(--foreground); }
+.app-shell.alltwelve .week-head .today strong { background: var(--brand-action); color: white; box-shadow: none; }
+/* Collapsed navigation has three distinct rows: identity, toggle, then team. */
+.app-shell.alltwelve.sidebar-collapsed .brand-lockup { width: 100%; justify-content: center; margin-bottom: 52px; }
+.app-shell.alltwelve.sidebar-collapsed .alltwelve-brand { gap: 0; }
+.app-shell.alltwelve.sidebar-collapsed .alltwelve-mark { width: 44px; }
+.app-shell.alltwelve.sidebar-collapsed .sidebar-collapse-toggle { top: 62px; right: 23px; }
+.app-shell.alltwelve.sidebar-collapsed .pd-nav-section > summary { justify-content: center; min-height: 44px; padding: 0; gap: 0; }
+.app-shell.alltwelve.sidebar-collapsed .pd-nav-section > summary > span,
+.app-shell.alltwelve.sidebar-collapsed .pd-nav-section > summary > svg:last-child { display: none; }
+.app-shell.alltwelve.sidebar-collapsed .pd-nav-section > summary > svg:first-child { display: block; width: 20px; height: 20px; flex-shrink: 0; }
+.app-shell.alltwelve.sidebar-collapsed .pd-nav-section .nav-item { padding: 0; width: 100%; }

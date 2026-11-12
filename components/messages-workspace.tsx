@@ -481,6 +481,7 @@ export function MessagesWorkspace({
               Keep editing
             </Button>
             <Button
+              variant="destructive"
               onClick={() => {
                 setNameDraft('');
                 setDiscardOpen(false);

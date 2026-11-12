@@ -56,7 +56,7 @@ export type BackupMedia = {
 };
 export type TeamBackup = {
   copiedFiles?: number;
-  format: 'chalktalk-team-backup';
+  format: 'alltwelve-team-backup';
   version: 1;
   id: string;
   createdAt: string;
@@ -260,7 +260,7 @@ export async function createTeamBackup(
       'A saved film file is missing. A complete backup cannot be created until it is recovered or the stale film record is removed.',
     );
   const snapshot: TeamBackup = {
-    format: 'chalktalk-team-backup',
+    format: 'alltwelve-team-backup',
     version: 1,
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),

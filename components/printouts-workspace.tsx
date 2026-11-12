@@ -42,21 +42,32 @@ export function PrintoutsWorkspace({
     [onEditingChange],
   );
   return (
-    <div>
-      <label className="printouts-material">
-        Print material
-        <NativeSelect
-          aria-label="Print material"
-          value={material}
-          disabled={busy}
-          onChange={(event) => setMaterial(event.target.value)}
-        >
-          <NativeSelectOption value="plays">Saved plays</NativeSelectOption>
-          <NativeSelectOption value="practice">
-            Practice scripts
-          </NativeSelectOption>
-        </NativeSelect>
-      </label>
+    <div className="printouts-workspace">
+      <div
+        className="printouts-material"
+        role="group"
+        aria-label="Print material"
+      >
+        <div className="segmented-control">
+          {(
+            [
+              ['plays', 'Saved plays'],
+              ['practice', 'Practice scripts'],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={material === value ? 'active' : ''}
+              aria-pressed={material === value}
+              disabled={busy}
+              onClick={() => setMaterial(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
       {material === 'practice' ? (
         <PracticePrintLibrary
           teamName={teamName}
@@ -221,7 +232,7 @@ function SavedPlayPrintouts({
       setDownloadUrl(url);
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = 'chalktalk-teaching-sheet.pdf';
+      anchor.download = 'alltwelve-teaching-sheet.pdf';
       anchor.click();
     } catch (failure) {
       setError(
@@ -296,7 +307,7 @@ function SavedPlayPrintouts({
           PDF prepared.{' '}
           <a
             href={downloadUrl}
-            download="chalktalk-teaching-sheet.pdf"
+            download="alltwelve-teaching-sheet.pdf"
             target="_blank"
             rel="noopener"
           >

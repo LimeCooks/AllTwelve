@@ -22,7 +22,7 @@ export function scopeWorkspaceRequest(
   const headers = new Headers(
     init?.headers ?? (input instanceof Request ? input.headers : undefined),
   );
-  headers.set('x-chalktalk-team-id', teamId);
+  headers.set('x-alltwelve-team-id', teamId);
   return [input, { ...init, headers }];
 }
 export const workspaceFetch: typeof globalThis.fetch = (input, init) => {

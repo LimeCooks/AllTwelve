@@ -1,15 +1,32 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
+import {
+  ArrowLeft,
+  Hash,
+  Lock,
+  MessageSquare,
+  Plus,
+  Search,
+  Send,
+} from 'lucide-react';
 import { workspaceFetch as fetch } from '@/lib/workspace-fetch';
 import { useWorkspaceSession } from '@/components/workspace-gate';
-import { MessagesWorkspace } from '@/components/messages-workspace';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import {
-  NativeSelect,
-  NativeSelectOption,
-} from '@/components/ui/native-select';
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   Dialog,
   DialogContent,
@@ -58,54 +75,52 @@ export function TeamMessagesWorkspace({
   onEditingChange: (editing: boolean) => void;
 }) {
   const session = useWorkspaceSession();
-  const [tab, setTab] = useState<'team' | 'private'>('team'),
-    [editing, setEditing] = useState(false);
-  const changed = useCallback(
-    (dirty: boolean) => {
-      setEditing(dirty);
-      onEditingChange(dirty);
-    },
-    [onEditingChange],
-  );
-  if (session.mode === 'prototype')
-    return <MessagesWorkspace onEditingChange={onEditingChange} />;
+  if (session.mode === 'prototype') {
+    return (
+      <section className="module-surface team-messages-workspace">
+        <h1>Messages</h1>
+        <p>
+          Open a connected team workspace to use channels and direct messages.
+        </p>
+      </section>
+    );
+  }
   return (
     <section className="module-surface team-messages-workspace">
-      <header className="module-header">
-        <div>
-          <span className="eyebrow">Team communication</span>
-          <h1>Messages</h1>
-          <p>
-            Team channels and private conversations between connected members.
-          </p>
-        </div>
-      </header>
-      {session.team?.role === 'owner' ? (
-        <div className="team-message-tabs">
-          <Button
-            variant={tab === 'team' ? 'default' : 'outline'}
-            disabled={editing && tab !== 'team'}
-            onClick={() => setTab('team')}
-          >
-            Team conversations
-          </Button>
-          <Button
-            variant={tab === 'private' ? 'default' : 'outline'}
-            disabled={editing && tab !== 'private'}
-            onClick={() => setTab('private')}
-          >
-            Personal saved notes
-          </Button>
-        </div>
-      ) : null}
-      {tab === 'private' ? (
-        <MessagesWorkspace onEditingChange={changed} />
-      ) : (
-        <ConnectedMessages onEditingChange={changed} />
-      )}
+      <ConnectedMessages onEditingChange={onEditingChange} />
     </section>
   );
 }
+function mergeHistory(
+  previous: TeamMessagePayload | null,
+  next: TeamMessagePayload,
+  earlier = false,
+): TeamMessagePayload {
+  if (!next.selected || previous?.selected?.id !== next.selected.id)
+    return next;
+  const earlierPage = earlier ? next : previous;
+  const laterPage = earlier ? previous : next;
+  if (
+    !earlier &&
+    !previous.messages.some((message) =>
+      next.messages.some((latest) => latest.id === message.id),
+    )
+  )
+    return next;
+  return {
+    ...next,
+    before: earlierPage.before,
+    messages: [
+      ...new Map(
+        [...earlierPage.messages, ...laterPage.messages].map((message) => [
+          message.id,
+          message,
+        ]),
+      ).values(),
+    ],
+  };
+}
+
 function ConnectedMessages({
   onEditingChange,
 }: {
@@ -121,6 +136,8 @@ function ConnectedMessages({
     [failed, setFailed] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({}),
     [creating, setCreating] = useState(false);
+  const [query, setQuery] = useState('');
+  const [showList, setShowList] = useState(true);
   const [kind, setKind] = useState<'channel' | 'direct'>(
       session.team?.role === 'player' ? 'direct' : 'channel',
     ),
@@ -129,7 +146,10 @@ function ConnectedMessages({
   const requestIds = useRef(new Map<string, string>()),
     createId = useRef(''),
     lock = useRef(false),
-    serial = useRef(0);
+    serial = useRef(0),
+    reading = useRef(false);
+  const log = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
   const selected = data?.selected ?? null,
     draft = selected ? (drafts[selected.id] ?? '') : '';
   const dirty =
@@ -152,12 +172,14 @@ function ConnectedMessages({
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty, busy]);
-  async function load(id = '', earlier = false) {
-    if (lock.current) return;
+  async function load(id = '', earlier = false, background = false) {
+    if (lock.current || (background && reading.current)) return;
     const sequence = ++serial.current;
-    setLoading(true);
-    setError('');
-    setNotice('');
+    reading.current = true;
+    if (!background) {
+      setLoading(true);
+      setError('');
+    }
     try {
       const params = new URLSearchParams();
       if (id) params.set('conversationId', id);
@@ -166,30 +188,26 @@ function ConnectedMessages({
         cache: 'no-store',
         signal: AbortSignal.timeout(20000),
       });
-      const raw = (await response.json()) as { error?: string };
+      const raw = (await response.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+      if (sequence !== serial.current) return;
       if (!response.ok) {
-        if (response.status === 401 || response.status === 403) setData(null);
-        throw new Error(raw.error || 'Conversations could not be loaded.');
+        if (
+          response.status === 401 ||
+          response.status === 403 ||
+          response.status === 404
+        )
+          setData(null);
+        throw new Error(raw?.error || 'Conversations could not be loaded.');
       }
       const next = payload(raw, userId);
       if (sequence !== serial.current) return;
       if (id && next.selected?.id !== id)
         throw new Error('The selected conversation could not be verified.');
-      setData((previous) =>
-        earlier && previous?.selected?.id === id
-          ? {
-              ...next,
-              messages: [
-                ...new Map(
-                  [...next.messages, ...previous.messages].map((message) => [
-                    message.id,
-                    message,
-                  ]),
-                ).values(),
-              ],
-            }
-          : next,
-      );
+      setData((previous) => mergeHistory(previous, next, earlier));
+      if (!background) setShowList(!next.selected);
+      setError('');
       setFailed(false);
     } catch (cause) {
       if (sequence === serial.current) {
@@ -201,15 +219,34 @@ function ConnectedMessages({
         );
       }
     } finally {
-      if (sequence === serial.current) setLoading(false);
+      if (sequence === serial.current) {
+        reading.current = false;
+        setLoading(false);
+      }
     }
   }
+  const sync = useEffectEvent(() => {
+    if (!creating && document.visibilityState === 'visible')
+      void load(selected?.id ?? '', false, true);
+  });
   useEffect(() => {
     void load();
+    const timer = window.setInterval(() => sync(), 3000);
+    const refresh = () => sync();
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
     return () => {
       serial.current++;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
     };
   }, []);
+  const lastMessageId = data?.messages.at(-1)?.id;
+  useLayoutEffect(() => {
+    if (log.current && followLatest.current)
+      log.current.scrollTop = log.current.scrollHeight;
+  }, [selected?.id, lastMessageId, showList]);
   function title(thread: TeamConversation) {
     return thread.kind === 'channel'
       ? thread.name
@@ -256,7 +293,8 @@ function ConnectedMessages({
         throw new Error(
           'The saved message could not be confirmed. Refresh before retrying.',
         );
-      setData(next);
+      followLatest.current = true;
+      setData((previous) => mergeHistory(previous, next));
       setDrafts((current) => ({ ...current, [target]: '' }));
       requestIds.current.delete(target);
       setNotice('Message saved in this conversation.');
@@ -270,6 +308,7 @@ function ConnectedMessages({
       );
     } finally {
       lock.current = false;
+      reading.current = false;
       setBusy(false);
       setLoading(false);
     }
@@ -303,7 +342,9 @@ function ConnectedMessages({
         throw new Error(
           'The new conversation could not be confirmed. Refresh before retrying.',
         );
+      followLatest.current = true;
       setData(next);
+      setShowList(false);
       setCreating(false);
       setName('');
       setRecipient('');
@@ -318,6 +359,7 @@ function ConnectedMessages({
       );
     } finally {
       lock.current = false;
+      reading.current = false;
       setBusy(false);
       setLoading(false);
     }
@@ -328,95 +370,171 @@ function ConnectedMessages({
       (person) =>
         person.id === selected.participants.find((id) => id !== userId),
     );
+  const filtered =
+    data?.conversations.filter((thread) =>
+      title(thread).toLowerCase().includes(query.trim().toLowerCase()),
+    ) ?? [];
+  function openConversation(id: string) {
+    followLatest.current = true;
+    if (selected?.id === id) setShowList(false);
+    else void load(id);
+  }
+  function newConversation(type: 'channel' | 'direct') {
+    setKind(type);
+    setCreating(true);
+  }
   return (
     <>
-      <div className="team-message-actions">
-        <Button
-          disabled={busy || loading || !data}
-          onClick={() => setCreating(true)}
-        >
-          New conversation
-        </Button>
-        <Button
-          variant="outline"
-          disabled={busy || loading}
-          onClick={() => void load(selected?.id ?? '')}
-        >
-          {loading ? 'Loading…' : 'Refresh messages'}
-        </Button>
-      </div>
-      {error ? <p role="alert">{error}</p> : null}
-      {notice ? <p role="status">{notice}</p> : null}
-      {data ? (
-        <div className="team-message-layout">
-          <details
-            key={selected?.id ?? 'none'}
-            open={!selected}
-            className="team-message-list"
+      {error && (
+        <div className="team-message-error">
+          <p role="alert">{error}</p>
+          <Button
+            variant="outline"
+            disabled={busy || loading}
+            onClick={() => void load(selected?.id ?? '')}
           >
-            <summary>Conversations ({data.conversations.length})</summary>
-            <aside aria-label="Your team conversations">
-              {!data.conversations.length ? (
-                <p>
-                  No conversations yet. A coach can create a team channel, or
-                  start a direct conversation with a connected member.
-                </p>
-              ) : (
-                data.conversations.map((thread) => (
+            Retry connection
+          </Button>
+        </div>
+      )}
+      <div className={`team-message-layout${showList ? ' showing-list' : ''}`}>
+        <nav className="team-message-list" aria-label="Conversations">
+          <header>
+            <h1>Messages</h1>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="New conversation"
+              disabled={busy || !data}
+              onClick={() =>
+                newConversation(
+                  session.team?.role === 'player' ? 'direct' : 'channel',
+                )
+              }
+            >
+              <Plus />
+            </Button>
+          </header>
+          <label className="team-message-search">
+            <Search size={16} aria-hidden="true" />
+            <Input
+              aria-label="Find a conversation"
+              placeholder="Find a conversation"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          {(['channel', 'direct'] as const).map((category) => {
+            const threads = filtered.filter(
+              (thread) => thread.kind === category,
+            );
+            return (
+              <section className="team-message-group" key={category}>
+                <header>
+                  <h2>
+                    {category === 'channel' ? 'Channels' : 'Direct messages'}
+                  </h2>
+                  {(category === 'direct' ||
+                    session.team?.role !== 'player') && (
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      aria-label={
+                        category === 'channel'
+                          ? 'New channel'
+                          : 'New direct message'
+                      }
+                      disabled={busy || !data}
+                      onClick={() => newConversation(category)}
+                    >
+                      <Plus />
+                    </Button>
+                  )}
+                </header>
+                {threads.map((thread) => (
                   <button
                     type="button"
+                    key={thread.id}
                     disabled={busy || loading}
                     aria-current={
                       selected?.id === thread.id ? 'page' : undefined
                     }
-                    key={thread.id}
-                    onClick={() => void load(thread.id)}
+                    onClick={() => openConversation(thread.id)}
                   >
-                    <strong>
-                      {thread.kind === 'channel' ? '# ' : ''}
-                      {title(thread)}
-                    </strong>
-                    <small>
-                      {thread.kind === 'channel'
-                        ? 'Visible to active team members'
-                        : 'Direct conversation'}
-                      {drafts[thread.id]?.trim() ? ' · draft' : ''}
-                    </small>
+                    {category === 'channel' ? (
+                      <Hash size={16} aria-hidden="true" />
+                    ) : (
+                      <span className="team-message-avatar" aria-hidden="true">
+                        {title(thread).slice(0, 1).toUpperCase()}
+                      </span>
+                    )}
+                    <span>{title(thread)}</span>
+                    {drafts[thread.id]?.trim() && <small>Draft</small>}
                   </button>
-                ))
-              )}
-            </aside>
-          </details>
-          <div className="team-message-thread">
-            {selected ? (
-              <>
-                <header>
-                  <h2>
-                    {selected.kind === 'channel' ? '# ' : ''}
-                    {title(selected)}
-                  </h2>
+                ))}
+                {!threads.length && data && (
                   <p>
-                    {selected.kind === 'channel'
-                      ? 'All currently connected members of this team can read and reply.'
-                      : 'Only the participants can open this conversation in Messages.'}
+                    {query.trim()
+                      ? 'No matches'
+                      : category === 'channel'
+                        ? 'No channels yet'
+                        : 'No direct messages yet'}
                   </p>
-                </header>
-                {data.before ? (
-                  <Button
-                    variant="outline"
-                    disabled={busy || loading}
-                    onClick={() => void load(selected.id, true)}
-                  >
-                    Load earlier messages
-                  </Button>
-                ) : null}
-                <div
-                  role="log"
-                  aria-label="Conversation messages"
-                  aria-live="polite"
+                )}
+              </section>
+            );
+          })}
+          {loading && !data && <p role="status">Loading conversations…</p>}
+        </nav>
+        <div className="team-message-thread">
+          {selected ? (
+            <header className="team-message-thread-header">
+              <Button
+                className="team-message-back"
+                variant="ghost"
+                size="icon"
+                aria-label="Back to conversations"
+                onClick={() => setShowList(true)}
+              >
+                <ArrowLeft />
+              </Button>
+              {selected.kind === 'channel' ? (
+                <Hash aria-hidden="true" />
+              ) : (
+                <Lock aria-hidden="true" />
+              )}
+              <h2>{title(selected)}</h2>
+            </header>
+          ) : null}
+          {selected && data ? (
+            <>
+              {data.before && (
+                <Button
+                  className="team-message-earlier"
+                  variant="ghost"
+                  disabled={busy || loading}
+                  onClick={() => void load(selected.id, true)}
                 >
-                  {data.messages.map((message) => (
-                    <article key={message.id}>
+                  Load earlier messages
+                </Button>
+              )}
+              <div
+                ref={log}
+                role="log"
+                aria-label="Conversation messages"
+                aria-live="polite"
+                onScroll={(event) => {
+                  const area = event.currentTarget;
+                  followLatest.current =
+                    area.scrollHeight - area.scrollTop - area.clientHeight < 48;
+                }}
+              >
+                {data.messages.map((message) => (
+                  <article key={message.id}>
+                    <span className="team-message-avatar" aria-hidden="true">
+                      {message.authorName.slice(0, 1).toUpperCase()}
+                    </span>
+                    <div>
                       <header>
                         <strong>{message.authorName}</strong>
                         <time dateTime={message.createdAt}>
@@ -427,61 +545,96 @@ function ConnectedMessages({
                         </time>
                       </header>
                       <p>{message.text}</p>
-                    </article>
-                  ))}
-                  {!data.messages.length ? (
-                    <p>No messages in this conversation yet.</p>
-                  ) : null}
-                </div>
-                {!peerActive ? (
-                  <p>
-                    This member no longer has active team access. Earlier
-                    messages remain available; new messages cannot be sent.
+                    </div>
+                  </article>
+                ))}
+                {!data.messages.length && (
+                  <p className="team-message-empty-thread">
+                    Start the conversation with a message.
                   </p>
-                ) : null}
-                <form onSubmit={send}>
-                  <label htmlFor="team-message-draft">Message</label>
-                  <Textarea
-                    id="team-message-draft"
-                    maxLength={4000}
-                    disabled={busy || !peerActive}
-                    value={draft}
-                    onChange={(event) => {
-                      setDrafts((current) => ({
-                        ...current,
-                        [selected.id]: event.target.value,
-                      }));
-                      requestIds.current.delete(selected.id);
-                    }}
-                  />
-                  <footer>
-                    <small>
-                      {draft.length}/4,000 · Refresh to check for new replies.
-                      No email or push notifications.
-                    </small>
-                    <Button
-                      type="submit"
-                      disabled={
-                        busy ||
-                        loading ||
-                        failed ||
-                        !peerActive ||
-                        !draft.trim()
-                      }
-                    >
-                      {busy ? 'Saving…' : 'Send message'}
-                    </Button>
-                  </footer>
-                </form>
-              </>
-            ) : (
-              <p>Choose a conversation to open its messages.</p>
-            )}
-          </div>
+                )}
+              </div>
+              {!peerActive && (
+                <p className="team-message-empty-thread">
+                  This member no longer has team access. Earlier messages are
+                  available.
+                </p>
+              )}
+              <form className="team-message-composer" onSubmit={send}>
+                <Textarea
+                  aria-label="Message"
+                  placeholder={`Message ${selected.kind === 'channel' ? '#' : ''}${title(selected)}`}
+                  maxLength={4000}
+                  disabled={busy || !peerActive}
+                  value={draft}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key !== 'Enter' ||
+                      event.shiftKey ||
+                      event.nativeEvent.isComposing
+                    )
+                      return;
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }}
+                  onChange={(event) => {
+                    setDrafts((current) => ({
+                      ...current,
+                      [selected.id]: event.target.value,
+                    }));
+                    requestIds.current.delete(selected.id);
+                  }}
+                />
+                <footer>
+                  <small>
+                    {draft.length
+                      ? `${draft.length}/4,000`
+                      : 'Shift + Enter for a new line'}
+                  </small>
+                  <Button
+                    type="submit"
+                    disabled={
+                      busy || loading || failed || !peerActive || !draft.trim()
+                    }
+                  >
+                    <Send /> {busy ? 'Sending…' : 'Send'}
+                  </Button>
+                </footer>
+              </form>
+            </>
+          ) : (
+            <div className="team-message-welcome">
+              <MessageSquare size={32} aria-hidden="true" />
+              <h2>
+                {data?.conversations.length
+                  ? 'Open a conversation'
+                  : 'Start a conversation'}
+              </h2>
+              <p>
+                {data?.conversations.length
+                  ? 'Choose a channel or direct message.'
+                  : 'Create a channel for your team or message a team member directly.'}
+              </p>
+              {!data?.conversations.length && data && (
+                <Button
+                  onClick={() =>
+                    newConversation(
+                      session.team?.role === 'player' ? 'direct' : 'channel',
+                    )
+                  }
+                >
+                  <Plus /> New conversation
+                </Button>
+              )}
+            </div>
+          )}
+          {notice && (
+            <p className="sr-only" role="status">
+              {notice}
+            </p>
+          )}
         </div>
-      ) : loading ? (
-        <p>Loading conversations…</p>
-      ) : null}
+      </div>
       <Dialog
         open={creating}
         onOpenChange={(open) => {
@@ -507,24 +660,29 @@ function ConnectedMessages({
             {error ? <p role="alert">{error}</p> : null}
             <label htmlFor="team-conversation-kind">
               Conversation type
-              <NativeSelect
-                id="team-conversation-kind"
+              <Select
                 disabled={busy}
                 value={kind}
-                onChange={(event) => {
-                  setKind(event.target.value as 'channel' | 'direct');
+                onValueChange={(value) => {
+                  if (value !== 'channel' && value !== 'direct') return;
+                  setKind(value);
                   createId.current = '';
                 }}
               >
-                {session.team?.role !== 'player' ? (
-                  <NativeSelectOption value="channel">
-                    Team channel
-                  </NativeSelectOption>
-                ) : null}
-                <NativeSelectOption value="direct">
-                  Direct conversation
-                </NativeSelectOption>
-              </NativeSelect>
+                <SelectTrigger id="team-conversation-kind">
+                  <SelectValue>
+                    {kind === 'channel'
+                      ? 'Team channel'
+                      : 'Direct conversation'}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent align="start" alignItemWithTrigger={false}>
+                  {session.team?.role !== 'player' && (
+                    <SelectItem value="channel">Team channel</SelectItem>
+                  )}
+                  <SelectItem value="direct">Direct conversation</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
             {kind === 'channel' ? (
               <label htmlFor="team-conversation-name">
@@ -544,27 +702,33 @@ function ConnectedMessages({
             ) : (
               <label htmlFor="team-conversation-recipient">
                 Team member
-                <NativeSelect
-                  id="team-conversation-recipient"
+                <Select
                   required
                   disabled={busy}
-                  value={recipient}
-                  onChange={(event) => {
-                    setRecipient(event.target.value);
+                  value={recipient || null}
+                  onValueChange={(value) => {
+                    setRecipient(value ?? '');
                     createId.current = '';
                   }}
                 >
-                  <NativeSelectOption value="">
-                    Choose a connected member
-                  </NativeSelectOption>
-                  {data?.people
-                    .filter((person) => person.id !== userId)
-                    .map((person) => (
-                      <NativeSelectOption key={person.id} value={person.id}>
-                        {person.name} · {person.role}
-                      </NativeSelectOption>
-                    ))}
-                </NativeSelect>
+                  <SelectTrigger id="team-conversation-recipient">
+                    <SelectValue placeholder="Choose a connected member">
+                      {
+                        data?.people.find((person) => person.id === recipient)
+                          ?.name
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent align="start" alignItemWithTrigger={false}>
+                    {data?.people
+                      .filter((person) => person.id !== userId)
+                      .map((person) => (
+                        <SelectItem key={person.id} value={person.id}>
+                          {person.name} · {person.role}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
               </label>
             )}
             <DialogFooter>

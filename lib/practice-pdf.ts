@@ -1,3 +1,4 @@
+import { drawPrintBrand } from '@/lib/brand-print';
 import {
   layoutPracticePrint,
   type PracticePlanRecord,
@@ -27,8 +28,8 @@ export async function createPracticePdf(
   const { PDFDocument } = await import('pdf-lib');
   const pdf = await PDFDocument.create();
   pdf.setTitle(plan.title);
-  pdf.setCreator('ChalkTalk');
-  pdf.setProducer('ChalkTalk');
+  pdf.setCreator('AllTwelve');
+  pdf.setProducer('AllTwelve');
   for (const [index, page] of layout.pages.entries()) {
     const canvas = document.createElement('canvas');
     try {
@@ -55,9 +56,10 @@ export async function createPracticePdf(
       }
       context.font = '9px Arial, sans-serif';
       context.fillStyle = '#526373';
+      drawPrintBrand(context, 36, layout.height - 35);
       context.fillText(
-        `ChalkTalk  |  Saved practice  |  Page ${index + 1} of ${layout.pages.length}`,
-        36,
+        `AllTwelve  |  Saved practice  |  Page ${index + 1} of ${layout.pages.length}`,
+        76,
         layout.height - 21,
       );
       const image = await pdf.embedJpg(canvas.toDataURL('image/jpeg', 0.95));

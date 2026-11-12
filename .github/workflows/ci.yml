@@ -12,12 +12,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: chalktalk-ci-${{ github.ref }}
+  group: alltwelve-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify:
-    name: Build and verify ChalkTalk
+    name: Build and verify AllTwelve
     if: github.event_name != 'release' || !github.event.release.prerelease
     runs-on: windows-2025
     timeout-minutes: 15

@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Brand } from '@/components/brand';
 import { PlayField } from '@/components/play-field';
 import { TeamMessagesWorkspace } from '@/components/team-messages-workspace';
 import { workspaceFetch as fetch } from '@/lib/workspace-fetch';
@@ -142,6 +143,7 @@ export function PlayerWorkspace({ session }: { session: WorkspaceSession }) {
   if (screen === 'messages')
     return (
       <main className="player-learning-workspace">
+        <div className="player-brand-row"><button type="button" aria-label="AllTwelve player home" onClick={() => { if (!messageEditing) setScreen('learning'); }} disabled={messageEditing}><Brand /></button></div>
         <header className="player-learning-header">
           <div>
             <span className="eyebrow">{session.team?.name}</span>
@@ -160,6 +162,7 @@ export function PlayerWorkspace({ session }: { session: WorkspaceSession }) {
     );
   return (
     <main className="player-learning-workspace">
+      <div className="player-brand-row"><button type="button" aria-label="AllTwelve player home" onClick={() => setSelectedId('')}><Brand /></button></div>
       <header className="player-learning-header">
         <div>
           <span className="eyebrow">{session.team?.name}</span>

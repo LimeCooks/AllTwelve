@@ -99,7 +99,7 @@ export function BackupHistory() {
                 <a
                   key={index}
                   href={`/api/backups?archiveId=${encodeURIComponent(backup.id)}&part=${index + 1}`}
-                  download={`chalktalk-${backup.createdAt.slice(0, 10)}-${backup.id.slice(0, 8)}-part-${index + 1}.zip`}
+                  download={`alltwelve-${backup.createdAt.slice(0, 10)}-${backup.id.slice(0, 8)}-part-${index + 1}.zip`}
                 >
                   {backup.parts === 1
                     ? 'Download recovery copy (.zip)'

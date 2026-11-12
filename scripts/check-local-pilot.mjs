@@ -79,7 +79,7 @@ async function file(env, cookie, bytes) {
       cookie,
       origin,
       'content-type': 'image/png',
-      'x-chalktalk-upload-size': String(bytes.length),
+      'x-alltwelve-upload-size': String(bytes.length),
     },
     body: bytes,
     signal: AbortSignal.timeout(10000),
@@ -156,7 +156,7 @@ try {
     0,
   );
   await api('nonprod', owners.nonprod, '/api/athletes', undefined, 403, 'GET', {
-    'x-chalktalk-team-id': teams.prod,
+    'x-alltwelve-team-id': teams.prod,
   });
   const bytes = {
     prod: Buffer.from('prod-private-image'),
@@ -189,7 +189,7 @@ try {
     'prod',
     owners.prod,
     '/api/team-access',
-    { id: randomUUID(), email: 'staff@chalktalk.local', role: 'staff' },
+    { id: randomUUID(), email: 'staff@alltwelve.local', role: 'staff' },
     201,
   );
   const staff = await login('prod', 'staff');
@@ -268,7 +268,7 @@ try {
     undefined,
     409,
     'DELETE',
-    { 'x-chalktalk-calendar-version': firstEvent.version },
+    { 'x-alltwelve-calendar-version': firstEvent.version },
   );
   const depth = await api('prod', owners.prod, '/api/depth-charts');
   const removedBody = {
@@ -286,7 +286,7 @@ try {
     undefined,
     200,
     'DELETE',
-    { 'x-chalktalk-calendar-version': removedEvent.version },
+    { 'x-alltwelve-calendar-version': removedEvent.version },
   );
   await api('prod', owners.prod, '/api/calendar-events', removedBody, 409);
   const layouts = {
@@ -384,7 +384,7 @@ try {
     '/api/team-access',
     {
       id: randomUUID(),
-      email: 'player@chalktalk.local',
+      email: 'player@alltwelve.local',
       role: 'player',
       athleteId: athlete.id,
     },
@@ -644,6 +644,16 @@ try {
   );
   report.status = 'passed';
   console.log('Passed dual local instance integration checks.');
+  if (process.argv.includes('--review')) {
+    await writeFile(path.join(root, 'report.json'), JSON.stringify(report, null, 2));
+    console.log(`Disposable populated review: http://127.0.0.1:${settings.prod.port}/`);
+    console.log(`Disposable empty review: http://127.0.0.1:${settings.nonprod.port}/`);
+    console.log('Review servers remain available until Ctrl+C. User stores are untouched.');
+    await new Promise((resolve) => {
+      process.once('SIGINT', resolve);
+      process.once('SIGTERM', resolve);
+    });
+  }
 } catch (error) {
   report.status = 'failed';
   report.error = error.message;

@@ -1,4 +1,5 @@
 import { wrapPrintText } from '@/lib/print-layout';
+import { drawPrintBrand } from '@/lib/brand-print';
 import type { DesignerPlay } from '@/lib/play-designer';
 
 export type TeachingPdfOptions = {
@@ -59,9 +60,9 @@ export async function createTeachingPdf(
     throw new Error('Choose between 1 and 25 plays per PDF.');
   const { PDFDocument } = await import('pdf-lib');
   const pdf = await PDFDocument.create();
-  pdf.setTitle('ChalkTalk teaching sheet');
-  pdf.setCreator('ChalkTalk');
-  pdf.setProducer('ChalkTalk');
+  pdf.setTitle('AllTwelve teaching sheet');
+  pdf.setCreator('AllTwelve');
+  pdf.setProducer('AllTwelve');
   const size = options.paper === 'a4' ? [595.28, 841.89] : [612, 792];
   const [width, height] = options.landscape ? [size[1], size[0]] : size;
   const margin = 36,
@@ -84,7 +85,7 @@ export async function createTeachingPdf(
     context.fillRect(0, 0, width, height);
     context.fillStyle = '#617385';
     context.font = '10px Arial, sans-serif';
-    context.fillText('CHALKTALK  /  SAVED PLAY', margin, 30);
+    context.fillText('ALLTWELVE  /  SAVED PLAY', margin, 30);
     context.fillText(
       `Play ${playNumber} of ${sheets.length}`,
       width - margin - 80,
@@ -114,9 +115,10 @@ export async function createTeachingPdf(
       );
     context.fillStyle = '#708090';
     context.font = '9px Arial, sans-serif';
+    drawPrintBrand(context, margin, height - 34);
     context.fillText(
-      `ChalkTalk  |  Page ${pdf.getPageCount() + 1}`,
-      margin,
+      `AllTwelve  |  Page ${pdf.getPageCount() + 1}`,
+      margin + 40,
       height - 20,
     );
     const image = await pdf.embedJpg(canvas.toDataURL('image/jpeg', 0.95));

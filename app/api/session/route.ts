@@ -19,7 +19,7 @@ export async function GET(request?: Request) {
     const grants = await workspaceGrants(database, user);
     const hint = request
       ? (new URL(request.url).searchParams.get('team') ??
-        request.headers.get('x-chalktalk-team-id') ??
+        request.headers.get('x-alltwelve-team-id') ??
         '')
       : '';
     const grant = hint

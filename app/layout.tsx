@@ -1,8 +1,10 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import './workspace-design.css';
+import './alltwelve.css';
 
 export const metadata: Metadata = {
-  title: 'ChalkTalk — Canadian Football Operations',
+  title: 'AllTwelve — Canadian Football Operations',
   description:
     'Film, playbooks, sideline replay, messaging, and team operations in one Canadian football workspace.',
 };

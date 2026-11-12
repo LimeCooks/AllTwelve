@@ -29,6 +29,18 @@ import {
   fixture,
   rowCounts,
 } from './helpers/recovery-fixture.mjs';
+
+test('recovery accepts previous product prefixes without weakening schema validation', async () => {
+  const { sql, database } = destination();
+  try {
+    const snapshot = fixture();
+    snapshot.format = 'previous-product-team-backup';
+    const plan = await planRecovery(database, snapshot, 'trusted-new-owner');
+    assert.equal(plan.records, 5);
+    snapshot.version = 999;
+    await assert.rejects(planRecovery(database, snapshot, 'trusted-new-owner'), /supported recovery format/);
+  } finally { sql.close(); }
+});
 test('recovery restores every exact schema table, related rows and only a newly chosen ownership grant', async () => {
   const { sql, database } = destination(),
     snapshot = fixture();

@@ -1,4 +1,4 @@
-# ChalkTalk
+# AllTwelve
 
 Football coaching workspace for film review, playbooks, depth charts, athletes, gameplanning, practice plans, and installs.
 
@@ -36,6 +36,8 @@ The drawing workflow, field measurements, formation packages, opponent looks, an
 
 ## Repository
 
-https://github.com/LimeCooks/ChalkTalk
+The existing Git origin remains the canonical repository; use `git remote -v`
+for its current address. Renaming the product does not change the remote or
+its branch protection rules.
 
 Source and dependency versions are tracked in Git. Dependencies, generated builds, local caches, environment files, database state, and uploaded media are ignored. Keep credentials in local environment files; do not commit them.

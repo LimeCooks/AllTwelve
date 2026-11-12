@@ -183,7 +183,7 @@ export async function prepareCloudRecovery({ directory, output }) {
     )
       throw new Error('The recovered file totals are inconsistent.');
     const manifest = {
-      format: 'chalktalk-team-backup',
+      format: 'alltwelve-team-backup',
       version: 1,
       id: metadata.backupId,
       createdAt: metadata.backupCreatedAt,

@@ -299,7 +299,7 @@ export async function DELETE(request: Request) {
       .first<CalendarEventRow>();
     if (!existing)
       return Response.json({ error: 'Event not found.' }, { status: 404 });
-    const expected = request.headers.get('x-chalktalk-calendar-version');
+    const expected = request.headers.get('x-alltwelve-calendar-version');
     if (!expected || !/^[a-f0-9]{64}$/.test(expected))
       throw new CalendarInputError(
         'Reload the saved event before removing it.',

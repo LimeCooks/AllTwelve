@@ -1057,7 +1057,7 @@ test('calendar preserves real instants, rejects invalid input, and isolates save
   assert.equal(
     (
       await calendarEvents.DELETE(
-        new Request(`https://pilot.test/api/calendar-events?id=${saved.id}`,{headers:{'x-chalktalk-calendar-version':corrected.version}}),
+        new Request(`https://pilot.test/api/calendar-events?id=${saved.id}`,{headers:{'x-alltwelve-calendar-version':corrected.version}}),
       )
     ).status,
     200,
@@ -1320,8 +1320,8 @@ test('raw file uploads stream above 1 MB, enforce declared sizes, and preserve p
       method: 'POST',
       headers: {
         'content-type': type,
-        'x-chalktalk-upload-size': String(declared),
-        'x-chalktalk-filename': encodeURIComponent('Practice vidéo.mp4'),
+        'x-alltwelve-upload-size': String(declared),
+        'x-alltwelve-filename': encodeURIComponent('Practice vidéo.mp4'),
       },
       body,
     });
@@ -1446,7 +1446,7 @@ test('blank teams can register multiple films, select independent clips, and can
   const removed = await films.DELETE(
     new Request(`https://pilot.test/api/film?clipId=${firstId}`, {
       method: 'DELETE',
-      headers: { 'x-chalktalk-clip-version': firstData.clips[0].version },
+      headers: { 'x-alltwelve-clip-version': firstData.clips[0].version },
     }),
   );
   assert.equal((await removed.json()).asset.id, one.id);
@@ -1558,7 +1558,7 @@ test('blank teams can register multiple films, select independent clips, and can
         await films.DELETE(
           new Request(`https://pilot.test/api/film?assetId=${id}`, {
             headers: {
-              'x-chalktalk-film-version': (
+              'x-alltwelve-film-version': (
                 await (await get(id)).json()
               ).asset.version,
             },
@@ -1574,7 +1574,7 @@ test('blank teams can register multiple films, select independent clips, and can
   await films.DELETE(
     new Request(`https://pilot.test/api/film?assetId=${bAsset.id}`, {
       headers: {
-        'x-chalktalk-film-version': (await (await get(bAsset.id)).json()).asset
+        'x-alltwelve-film-version': (await (await get(bAsset.id)).json()).asset
           .version,
       },
       method: 'DELETE',
@@ -1707,7 +1707,7 @@ test('complete backup restores all team tables and file bytes offline without to
   const bytes = new Uint8Array(await response.arrayBuffer()),
     files = unzipSync(bytes);
   const snapshot = JSON.parse(
-    new TextDecoder().decode(files['chalktalk-backup.json']),
+    new TextDecoder().decode(files['alltwelve-backup.json']),
   );
   assert.equal(snapshot.tables.teams.length, 1);
   assert.equal(snapshot.tables.teams[0].id, scoped.teamId);
@@ -1725,7 +1725,7 @@ test('complete backup restores all team tables and file bytes offline without to
   );
   assert.equal(files['media/private-film'], undefined);
   const directory = await mkdtemp(
-    path.join(tmpdir(), 'chalktalk-backup-test-'),
+    path.join(tmpdir(), 'alltwelve-backup-test-'),
   );
   const archive = path.join(directory, 'backup.zip');
   await writeFile(archive, bytes);
@@ -2692,7 +2692,7 @@ test('film deletion rejects stale confirmations, removes owned bytes and clips, 
     films.DELETE(
       new Request('https://pilot.test/api/film?assetId=' + id, {
         method: 'DELETE',
-        headers: { 'x-chalktalk-film-version': version },
+        headers: { 'x-alltwelve-film-version': version },
       }),
     );
   assert.equal(
@@ -2836,7 +2836,7 @@ test('film delete transaction catches late clip edits and keeps shared uploaded 
         await films.DELETE(
           new Request('https://pilot.test/api/film?assetId=' + id, {
             method: 'DELETE',
-            headers: { 'x-chalktalk-film-version': charted.asset.version },
+            headers: { 'x-alltwelve-film-version': charted.asset.version },
           }),
         )
       ).status,
@@ -2866,7 +2866,7 @@ test('film delete transaction catches late clip edits and keeps shared uploaded 
     return films.DELETE(
       new Request('https://pilot.test/api/film?assetId=' + target, {
         method: 'DELETE',
-        headers: { 'x-chalktalk-film-version': current.asset.version },
+        headers: { 'x-alltwelve-film-version': current.asset.version },
       }),
     );
   };
@@ -2904,7 +2904,7 @@ test('film removal can finish after bytes were removed but the final database de
     films.DELETE(
       new Request('https://pilot.test/api/film?assetId=' + made.asset.id, {
         method: 'DELETE',
-        headers: { 'x-chalktalk-film-version': made.asset.version },
+        headers: { 'x-alltwelve-film-version': made.asset.version },
       }),
     );
   const originalPrepare = database.prepare;
@@ -2971,7 +2971,7 @@ test('two confirmed pending removals do not retain orphaned shared bytes', async
     films.DELETE(
       new Request('https://pilot.test/api/film?assetId=' + id, {
         method: 'DELETE',
-        headers: { 'x-chalktalk-film-version': made.asset.version },
+        headers: { 'x-alltwelve-film-version': made.asset.version },
       }),
     );
   assert.equal((await remove(made.asset.id)).status, 200);
@@ -3082,7 +3082,7 @@ test('film client validates real responses and saves/retries the exact clip ID e
   const remove = await films.DELETE(
     new Request('https://pilot.test/api/film?assetId=' + made.asset.id, {
       method: 'DELETE',
-      headers: { 'x-chalktalk-film-version': retried.asset.version },
+      headers: { 'x-alltwelve-film-version': retried.asset.version },
     }),
   );
   assert.equal(remove.status, 200);
@@ -3149,7 +3149,7 @@ test('film clip revisions reject stale and late edits or removals without blocki
     films.DELETE(
       new Request('https://pilot.test/api/film?clipId=' + clip.id, {
         method: 'DELETE',
-        headers: { 'x-chalktalk-clip-version': clip.version },
+        headers: { 'x-alltwelve-clip-version': clip.version },
       }),
     );
   const saved = await edit(first, 'Newer note');
@@ -3232,7 +3232,7 @@ test('film clip revisions reject stale and late edits or removals without blocki
       await films.DELETE(
         new Request('https://pilot.test/api/film?assetId=' + assetId, {
           method: 'DELETE',
-          headers: { 'x-chalktalk-film-version': final.asset.version },
+          headers: { 'x-alltwelve-film-version': final.asset.version },
         }),
       )
     ).status,
@@ -4536,7 +4536,7 @@ test('raw media cannot replace or delete saved film and simultaneous uploads pre
   const db=await getDatabase();
   const key='film-immutable-'+crypto.randomUUID(), raceKey='film-race-'+crypto.randomUUID();
   const url=(key)=>'https://pilot.test/api/media?key='+key;
-  const upload=(key,bytes,type='video/mp4')=>new Request(url(key),{method:'POST',headers:{'content-type':type,'x-chalktalk-upload-size':String(bytes.byteLength)},body:bytes});
+  const upload=(key,bytes,type='video/mp4')=>new Request(url(key),{method:'POST',headers:{'content-type':type,'x-alltwelve-upload-size':String(bytes.byteLength)},body:bytes});
   const first=new Uint8Array([1,2,3,4,5]);
   const bucket=globalThis.privateTestBucket, originalPut=bucket.put;
   try {
@@ -4551,7 +4551,7 @@ test('raw media cannot replace or delete saved film and simultaneous uploads pre
     assert.equal((await media.DELETE(new Request(url(key),{method:'DELETE'}))).status,409);
     assert.deepEqual(new Uint8Array(await (await media.GET(new Request(url(key)))).arrayBuffer()),first);
     assert.equal((await (await films.GET(new Request('https://pilot.test/api/film?assetId='+saved.asset.id))).json()).clips.length,1);
-    assert.equal((await films.DELETE(new Request('https://pilot.test/api/film?assetId='+saved.asset.id,{method:'DELETE',headers:{'x-chalktalk-film-version':saved.asset.version}}))).status,200);
+    assert.equal((await films.DELETE(new Request('https://pilot.test/api/film?assetId='+saved.asset.id,{method:'DELETE',headers:{'x-alltwelve-film-version':saved.asset.version}}))).status,200);
     assert.equal((await media.GET(new Request(url(key)))).status,404);
     let injected=false;
     bucket.put=async function(target,body,options) {
@@ -4565,7 +4565,7 @@ test('raw media cannot replace or delete saved film and simultaneous uploads pre
       controller.enqueue(new Uint8Array([6,6]));
       controller.close();
     },cancel(){incomingCancelled=true;}});
-    const raceRequest=new Request(url(raceKey),{method:'POST',headers:{'content-type':'video/mp4','x-chalktalk-upload-size':'6'},body:incoming,duplex:'half'});
+    const raceRequest=new Request(url(raceKey),{method:'POST',headers:{'content-type':'video/mp4','x-alltwelve-upload-size':'6'},body:incoming,duplex:'half'});
     assert.equal((await media.POST(raceRequest)).status,409);
     assert.equal(incomingCancelled,false,'a rejected competing upload must drain rather than reset the HTTP input');
     assert.equal((await raceRequest.body.getReader().read()).done,true);
@@ -4673,7 +4673,7 @@ test('calendar retries do not duplicate events and stale or late changes cannot 
   const previous=globalThis.privateTestIdentity,previousTeam=globalThis.privateTestWorkspaceId;
   const read=async(response,status=200)=>{assert.equal(response.status,status,JSON.stringify(await response.clone().json()));return response.json();};
   const get=id=>calendarEvents.GET(new Request('https://pilot.test/api/calendar-events?id='+id));
-  const remove=event=>calendarEvents.DELETE(new Request('https://pilot.test/api/calendar-events?id='+event.id,{headers:{'x-chalktalk-calendar-version':event.version}}));
+  const remove=event=>calendarEvents.DELETE(new Request('https://pilot.test/api/calendar-events?id='+event.id,{headers:{'x-alltwelve-calendar-version':event.version}}));
   try {
     globalThis.privateTestIdentity={id:'calendar-version-owner',email:'calendar-version@example.test',name:'Schedule owner'};globalThis.privateTestWorkspaceId='';
     await read(await onboarding.POST(request({name:'Versioned schedule',season:'2026'})),201);
