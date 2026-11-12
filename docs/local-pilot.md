@@ -86,3 +86,15 @@ node scripts/check-local-pilot.mjs
 ```
 
 It verifies independent blank onboarding, roster and file isolation, local staff access, bound-player preserved teaching and acknowledgements, scoped messages, versioned Calendar changes, depth assignments, and a saved gameplan feeding a generated practice. It downloads a manual backup and restores the records into a separate offline database, then restarts both disposable instances to check persistence. The Windows host may require loopback permission for these tests. Current evidence: `outputs/local-pilot-check-Mrrjst/report.json` and 121 passing tests.
+
+## Renamed existing installations
+
+The local controller can read `.local-pilot/local-accounts.json` to preserve the
+three existing test-account email addresses during a product rename. Fresh
+installations use the new defaults. Account IDs and saved storage namespaces stay
+unchanged. Do not delete this file or rename storage namespaces to change branding.
+
+The application release and the controller are separate: updating the controller
+and launchers does not promote Non-Prod to Prod. After moving an installation,
+repair linked Git worktrees and update absolute paths in each runtime Wrangler
+configuration before restarting. Preserve each environment's release ID and DB ID.

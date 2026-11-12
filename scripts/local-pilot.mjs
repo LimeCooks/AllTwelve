@@ -27,6 +27,19 @@ const profiles = {
   staff: { name: 'Staff coach', email: 'staff@alltwelve.local' },
   player: { name: 'Player', email: 'player@alltwelve.local' },
 };
+// Existing installations may retain their account addresses during a rename.
+// IDs stay stable; this avoids invalidating outstanding local invitations.
+try {
+  const saved = JSON.parse(await readFile(path.join(localRoot, 'local-accounts.json'), 'utf8'));
+  for (const profile of Object.keys(profiles)) {
+    if (typeof saved[profile]?.email !== 'string' || !/^[^\s@]+@[^\s@]+$/.test(saved[profile].email)) {
+      throw new Error('Invalid saved local account address.');
+    }
+    profiles[profile].email = saved[profile].email;
+  }
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+}
 const environments = {
   prod: { label: 'Local Prod', port: 3101, workerPort: 15161 },
   nonprod: { label: 'Local Non-Prod', port: 3102, workerPort: 15162 },
