@@ -171,7 +171,7 @@ async function uploadMedia(request: Request) {
       );
     try {
       name = decodeURIComponent(
-        request.headers.get('x-chalktalk-filename') ?? 'upload',
+        request.headers.get('x-alltwelve-filename') ?? 'upload',
       );
     } catch {
       return Response.json(
@@ -183,7 +183,7 @@ async function uploadMedia(request: Request) {
       .split(';')[0]
       .trim();
     size = Number(
-      request.headers.get('x-chalktalk-upload-size') ??
+      request.headers.get('x-alltwelve-upload-size') ??
         request.headers.get('content-length'),
     );
     stream = request.body;

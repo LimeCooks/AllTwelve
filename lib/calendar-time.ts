@@ -83,11 +83,11 @@ export function calendarExport(
   return [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//ChalkTalk//Team Calendar//EN',
+    'PRODID:-//AllTwelve//Team Calendar//EN',
     'CALSCALE:GREGORIAN',
     ...events.flatMap((event) => [
       'BEGIN:VEVENT',
-      `UID:${escape(event.id)}@chalktalk`,
+      `UID:${escape(event.id)}@alltwelve`,
       `DTSTAMP:${utc(now.toISOString())}`,
       `DTSTART:${utc(event.startsAt)}`,
       `DTEND:${utc(event.endsAt)}`,

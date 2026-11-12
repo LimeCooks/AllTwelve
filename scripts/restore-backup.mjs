@@ -30,6 +30,8 @@ const crc32 = (bytes) => {
   return (crc ^ 0xffffffff) >>> 0;
 };
 
+// Product prefixes may change; the ZIP schema and checksums remain authoritative.
+const isManifest = (name) => /^[a-z][a-z0-9-]{0,40}-backup\.json$/.test(name);
 function readPart(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let end = bytes.length - 22;
@@ -53,7 +55,7 @@ function readPart(bytes) {
       view.getUint16(offset + 10, true) !== 0
     )
       throw new Error(
-        'Only the uncompressed ChalkTalk backup format is supported.',
+        'Only the uncompressed AllTwelve backup format is supported.',
       );
     const length = view.getUint32(offset + 24, true),
       nameLength = view.getUint16(offset + 28, true);
@@ -63,11 +65,11 @@ function readPart(bytes) {
     if (expected.has(name))
       throw new Error('Duplicate file in backup archive.');
     if (
-      name !== 'chalktalk-backup.json' &&
+      !isManifest(name) &&
       (!name.startsWith('media/') || !validKey(name.slice(6)))
     )
       throw new Error('Unsafe or unexpected backup filename.');
-    if (length > (name === 'chalktalk-backup.json' ? MAX_MANIFEST : MAX_PART))
+    if (length > (isManifest(name) ? MAX_MANIFEST : MAX_PART))
       throw new Error('Backup entry exceeds its supported size.');
     total += length;
     if (total > MAX_PART + MAX_MANIFEST)
@@ -91,7 +93,7 @@ function readPart(bytes) {
       crc32(files[name]) !== info.crc
     )
       throw new Error(`Backup integrity check failed: ${name}`);
-  if (!files['chalktalk-backup.json'])
+  if (Object.keys(files).filter(isManifest).length !== 1)
     throw new Error('Backup manifest is missing.');
   return files;
 }
@@ -135,11 +137,11 @@ export async function restoreBackup({ archives, output, ownerId }) {
         throw new Error('Archive exceeds the supported part size.');
       const files = readPart(await readFile(archive));
       const manifest = JSON.parse(
-        new TextDecoder().decode(files['chalktalk-backup.json']),
+        new TextDecoder().decode(files[Object.keys(files).find(isManifest)]),
       );
       const { archivePart, ...metadata } = manifest;
       if (
-        metadata.format !== 'chalktalk-team-backup' ||
+        (typeof metadata.format !== 'string' || !/^[a-z][a-z0-9-]{0,40}-team-backup$/.test(metadata.format)) ||
         metadata.version !== 1 ||
         !Number.isInteger(metadata.parts) ||
         metadata.parts < 1 ||
@@ -166,7 +168,7 @@ export async function restoreBackup({ archives, output, ownerId }) {
           .map((m) => [m.key, m]),
       );
       for (const [name, bytes] of Object.entries(files)) {
-        if (name === 'chalktalk-backup.json') continue;
+        if (isManifest(name)) continue;
         const key = name.slice(6),
           info = expectedFiles.get(key);
         if (

@@ -23,7 +23,10 @@ export async function planRecovery(
     throw new RecoveryError('A trusted recovery owner is required.');
   if (
     !snapshot ||
-    snapshot.format !== 'chalktalk-team-backup' ||
+    // Version and schema establish compatibility; the historical product prefix
+    // is not part of the data model. This keeps pre-rebrand exports recoverable.
+    typeof snapshot.format !== 'string' ||
+    !/^[a-z][a-z0-9-]{0,40}-team-backup$/.test(snapshot.format) ||
     snapshot.version !== 1 ||
     !identifiers(snapshot.teamId) ||
     !identifiers(snapshot.id) ||

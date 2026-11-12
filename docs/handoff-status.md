@@ -1,6 +1,6 @@
-# ChalkTalk handoff status — 10 November 2026
+# AllTwelve handoff status — 10 November 2026
 
-The user chose local Prod and Non-Prod while arranging independent hosting and email sign-in. The older internet pilot and original prototype remain separate. Quizzes stay WIP. This is a local working milestone; the hosted, physical-device handoff remains open.
+The user chose to finish the handoff with local Prod and Non-Prod and revisit independent hosting later. Quizzes stay WIP.
 
 | Local instance | Address | Purpose |
 | --- | --- | --- |
@@ -8,7 +8,7 @@ The user chose local Prod and Non-Prod while arranging independent hosting and e
 | Prod | http://127.0.0.1:3101/ | Stable workspace with its own saved records and files |
 | Non-Prod | http://127.0.0.1:3102/ | Current changes and disposable testing |
 
-See [local-pilot.md](local-pilot.md) for starting, account switching, storage and deliberate build promotion. Both addresses work only on this PC. Prod retains its earlier build; moving a verified build never copies Non-Prod data into Prod.
+Both sites now run the verified release `651cb5c71882`, each with its own database and file storage. The owner session on each site offers blank team onboarding. Both addresses work on this PC. Starting, account switching and promotion instructions are in [local-pilot.md](local-pilot.md).
 
 | Requirement | Evidence and remaining boundary |
 | --- | --- |

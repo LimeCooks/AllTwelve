@@ -220,7 +220,7 @@ export function BackupControls() {
               <a
                 key={i}
                 href={`/api/backups?id=${encodeURIComponent(backup.id)}&part=${i + 1}`}
-                download={`chalktalk-${backup.createdAt.slice(0, 10)}-part-${i + 1}-of-${backup.parts}.zip`}
+                download={`alltwelve-${backup.createdAt.slice(0, 10)}-part-${i + 1}-of-${backup.parts}.zip`}
               >
                 {backup.parts === 1
                   ? 'Download backup (.zip)'

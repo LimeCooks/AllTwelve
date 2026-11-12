@@ -76,7 +76,7 @@ export function PlayField({
         {p.symbol === 'triangle' ? (
           <path
             d="M0 -10 L10 8 L-10 8 Z"
-            fill={printMode ? '#ffffff' : '#18242e'}
+            fill={printMode ? '#ffffff' : '#192933'}
             stroke={colour}
             strokeWidth="1.6"
           />
@@ -87,14 +87,14 @@ export function PlayField({
             width="16"
             height="16"
             rx="1"
-            fill={printMode ? '#ffffff' : '#18242e'}
+            fill={printMode ? '#ffffff' : '#192933'}
             stroke={colour}
             strokeWidth="1.6"
           />
         ) : (
           <circle
             r="8.5"
-            fill={printMode ? '#ffffff' : '#18242e'}
+            fill={printMode ? '#ffffff' : '#192933'}
             stroke={colour}
             strokeWidth="1.6"
           />
@@ -154,21 +154,21 @@ export function PlayField({
         y="-1500"
         width="720"
         height="4500"
-        fill={printMode ? '#ffffff' : '#202b34'}
+        fill={printMode ? '#ffffff' : '#121c24'}
       />
       <rect
         x="35"
         y="-100"
         width="650"
         height="200"
-        fill={printMode ? '#f0f3f5' : '#283540'}
+        fill={printMode ? '#f0f3f5' : '#24343f'}
       />
       <rect
         x="35"
         y="1200"
         width="650"
         height="200"
-        fill={printMode ? '#f0f3f5' : '#283540'}
+        fill={printMode ? '#f0f3f5' : '#24343f'}
       />
       {[-100, 1400].map((y) => (
         <line

@@ -211,7 +211,7 @@ export function layoutPracticePrint(
     page = { lines: [], rules: [] };
     pages.push(page);
     y = 32;
-    headerText(teamName || 'ChalkTalk', 10, true, true);
+    headerText(teamName || 'AllTwelve', 10, true, true);
     y += 5;
     headerText(
       plan.title + (continued ? ' (continued)' : ''),

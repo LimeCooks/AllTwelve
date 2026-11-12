@@ -23,7 +23,7 @@ const hosting = JSON.parse(
 );
 const audit = JSON.parse(await readFile(path.resolve(root, auditPath), 'utf8'));
 if (
-  marker.kind !== 'chalktalk-isolated-recovery-lab' ||
+  marker.kind !== 'alltwelve-isolated-recovery-lab' ||
   !hosting.project_id ||
   hosting.project_id === pilot.project_id ||
   audit.project_id !== hosting.project_id ||

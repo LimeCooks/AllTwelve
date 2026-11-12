@@ -90,7 +90,7 @@ export function PracticePrintout({
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [busy]);
-  const filename = `chalktalk-practice-${plan?.practiceDate ?? 'script'}.pdf`;
+  const filename = `alltwelve-practice-${plan?.practiceDate ?? 'script'}.pdf`;
   const prepare = async () => {
     if (!plan || disabled || lock.current) return;
     lock.current = true;

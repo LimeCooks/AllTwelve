@@ -76,7 +76,7 @@ test('local account signatures cannot be forged or reused across environments', 
 });
 
 test('local environment updates preserve independent database identities, storage and stable builds', async () => {
-  const root = await mkdtemp(path.join(tmpdir(), 'chalktalk-local-settings-'));
+  const root = await mkdtemp(path.join(tmpdir(), 'alltwelve-local-settings-'));
   for (const id of ['a'.repeat(64), 'b'.repeat(64)]) {
     await mkdir(path.join(root, 'releases', id), { recursive: true });
     await writeFile(path.join(root, 'releases', id, 'complete.json'), '{}');
@@ -90,9 +90,17 @@ test('local environment updates preserve independent database identities, storag
     path.join(root, 'prod', 'wrangler.json'),
     'utf8',
   );
+  const configFile = path.join(root, 'nonprod', 'wrangler.json');
+  const originalConfig = JSON.parse(await readFile(configFile, 'utf8'));
+  originalConfig.r2_buckets[0].bucket_name = 'existing-team-media';
+  originalConfig.d1_databases[0].database_name = 'existing-team-records';
+  await writeFile(configFile, JSON.stringify(originalConfig));
   await mkdir(path.join(root, 'prod', 'storage'), { recursive: true });
   await writeFile(path.join(root, 'prod', 'storage', 'kept'), 'prod data');
   const updated = await prepareEnvironment('nonprod', 'b'.repeat(64), root);
+  const updatedConfig = JSON.parse(await readFile(configFile, 'utf8'));
+  assert.equal(updatedConfig.r2_buckets[0].bucket_name, 'existing-team-media');
+  assert.equal(updatedConfig.d1_databases[0].database_name, 'existing-team-records');
   assert.equal(updated.databaseId, nonprod.databaseId);
   assert.equal(
     await readFile(path.join(root, 'prod', 'wrangler.json'), 'utf8'),
@@ -105,12 +113,10 @@ test('local environment updates preserve independent database identities, storag
   const config = JSON.parse(
     await readFile(path.join(root, 'nonprod', 'wrangler.json'), 'utf8'),
   );
-  assert.equal(config.vars.CHALKTALK_MODE, 'pilot');
+  assert.equal(config.vars.ALLTWELVE_MODE, 'pilot');
   assert.ok(config.main.includes('b'.repeat(64)));
   assert.equal(config.d1_databases[0].database_id, nonprod.databaseId);
-  assert.ok(
-    config.r2_buckets.every((bucket) => bucket.bucket_name.endsWith('nonprod')),
-  );
+  assert.equal(config.r2_buckets[0].bucket_name, 'existing-team-media');
 });
 
 test('loopback account proxy requires its cookie, strips forged identities and rejects foreign origins', async () => {
@@ -165,7 +171,7 @@ test('loopback account proxy requires its cookie, strips forged identities and r
     assert.equal(r.status, 200);
     assert.deepEqual(await r.json(), {
       id: 'local-prod-staff',
-      email: 'staff@chalktalk.local',
+      email: 'staff@alltwelve.local',
       range: 'bytes=2-5',
     });
     assert.equal(received.cookie, undefined);
@@ -178,7 +184,7 @@ test('loopback account proxy requires its cookie, strips forged identities and r
     await r.text();
     r = await fetch(origin + '/api/session', {
       headers: {
-        cookie: `chalktalk_local_prod=${localCookie('nonprod', 'owner', key)}`,
+        cookie: `alltwelve_local_prod=${localCookie('nonprod', 'owner', key)}`,
       },
       redirect: 'manual',
     });

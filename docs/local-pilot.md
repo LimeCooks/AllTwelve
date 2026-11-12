@@ -14,7 +14,7 @@ On a fresh checkout with dependencies installed, prepare the initial build once 
 
 ## Starting and stopping
 
-Double-click **Start Local ChalkTalk.cmd** in the project folder. It starts the two background services and opens the dashboard. **Stop Local ChalkTalk.cmd** stops them without removing saved records or files. Restarting the computer stops the services; use Start again afterward. Keep this project folder and `.local-pilot` together.
+Double-click **Start Local AllTwelve.cmd** in the project folder. It starts the two background services and opens the dashboard. **Stop Local AllTwelve.cmd** stops them without removing saved records or files. Restarting the computer stops the services; use Start again afterward. Keep this project folder and `.local-pilot` together.
 
 Equivalent commands:
 
@@ -30,9 +30,9 @@ They are intentionally accessible only on this computer. A phone, tablet or offi
 
 The account chooser at `/__local` simulates authenticated identities for local testing. It does not create internet accounts, send email or require ChatGPT.
 
-- Owner: `owner@chalktalk.local`
-- Staff coach: `staff@chalktalk.local`
-- Player: `player@chalktalk.local`
+- Owner: `owner@alltwelve.local`
+- Staff coach: `staff@alltwelve.local`
+- Player: `player@alltwelve.local`
 
 Each environment has separate identities and signed browser cookies. Choosing an account does not grant it a team role. Create the team as Owner first. In Settings → Staff & permissions, invite the staff email, or invite the player email with an explicit roster profile. Switch to that local account, review the invitation and join. Player learning appears after the owner publishes an install assigned to that roster profile. Sign out or use the dashboard's Switch test account link to return to Owner.
 

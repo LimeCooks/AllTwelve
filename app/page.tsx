@@ -1,4 +1,6 @@
 'use client';
+import { TeamHome } from '@/components/team-home';
+import { Brand } from '@/components/brand';
 import { workspaceFetch as fetch } from '@/lib/workspace-fetch';
 import { workspaceMediaUrl } from '@/lib/workspace-fetch';
 import {
@@ -18,6 +20,7 @@ import {
   type NamedGameplan,
 } from '@/lib/named-gameplans';
 import { CalendarAvailability } from '@/components/calendar-availability';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { PrintoutsWorkspace } from '@/components/printouts-workspace';
 import { TeamMessagesWorkspace } from '@/components/team-messages-workspace';
 import { BackupControls } from '@/components/backup-controls';
@@ -61,7 +64,6 @@ import {
   useRef,
   useState,
   type ChangeEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type SyntheticEvent,
 } from 'react';
@@ -80,14 +82,12 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  CircleDot,
   Clock3,
   CloudOff,
   ClipboardList,
   Download,
   Eye,
   Film,
-  GripVertical,
   Hash,
   LayoutDashboard,
   ListFilter,
@@ -151,6 +151,14 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from '@/components/ui/native-select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  WorkspaceSelect,
+} from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
 import { Toaster, toast } from '@/components/ui/toast';
@@ -285,8 +293,8 @@ async function uploadMedia(key: string, file: File) {
     method: 'POST',
     headers: {
       'content-type': file.type || 'application/octet-stream',
-      'x-chalktalk-upload-size': String(file.size),
-      'x-chalktalk-filename': encodeURIComponent(file.name),
+      'x-alltwelve-upload-size': String(file.size),
+      'x-alltwelve-filename': encodeURIComponent(file.name),
     },
     body: file,
   });
@@ -496,7 +504,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
 
   useEffect(() => {
     const storedTheme =
-      window.localStorage.getItem('chalktalk-theme') !== 'light';
+      window.localStorage.getItem('alltwelve-theme') !== 'light';
     const frame = window.requestAnimationFrame(() => setIsDark(storedTheme));
     return () => window.cancelAnimationFrame(frame);
   }, []);
@@ -614,7 +622,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
   const toggleTheme = () => {
     setIsDark((current) => {
       window.localStorage.setItem(
-        'chalktalk-theme',
+        'alltwelve-theme',
         current ? 'light' : 'dark',
       );
       return !current;
@@ -734,7 +742,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
     return (
       <main className="workspace-welcome">
         <section aria-busy={settingsLoad === 'loading'}>
-          <span className="eyebrow">ChalkTalk · Your workspace</span>
+          <span className="eyebrow">AllTwelve · Your workspace</span>
           <h1>
             {settingsLoad === 'error'
               ? 'Unable to load your team settings.'
@@ -764,7 +772,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
 
   return (
     <main
-      className={`${isDark ? 'app-shell dark' : 'app-shell'}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${toolFocus && focusableTools.has(activeView) ? ' tool-focus' : ''}`}
+      className={`${isDark ? 'app-shell alltwelve dark' : 'app-shell alltwelve'}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${toolFocus && focusableTools.has(activeView) ? ' tool-focus' : ''}`}
       data-team-colour={teamSettings.colour}
     >
       <aside className="sidebar">
@@ -779,17 +787,14 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
         >
           {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
         </button>
-        <div className="brand-lockup">
-          <span className="brand-mark brand-mark-v2">
-            <span>CT</span>
-          </span>
-          <span className="brand-name">
-            <strong>
-              chalk<span>talk</span>
-            </strong>
-            <small>FOOTBALL OS</small>
-          </span>
-        </div>
+        <button
+          className="brand-lockup"
+          type="button"
+          aria-label="AllTwelve home"
+          onClick={() => setActiveView('Home')}
+        >
+          <Brand />
+        </button>
 
         <div className="team-menu-wrap" ref={teamMenuRef}>
           <button
@@ -909,7 +914,8 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
               </button>
             ))}
           <details className="pd-nav-section">
-            <summary>
+            <summary aria-label="Playbook navigation" title="Playbook">
+              <BookOpen size={17} aria-hidden="true" />
               <span>Playbook</span>
               <ChevronDown size={14} />
             </summary>
@@ -925,6 +931,8 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
               .map((view) => (
                 <button
                   key={view}
+                  aria-label={view}
+                  title={view}
                   className={
                     activeView === view ? 'nav-item active' : 'nav-item'
                   }
@@ -1015,14 +1023,14 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
 
       <section className="workspace">
         <header className="topbar">
-          <div className="mobile-brand">
-            <span className="brand-mark brand-mark-v2">
-              <span>CT</span>
-            </span>
-            <strong>
-              chalk<span>talk</span>
-            </strong>
-          </div>
+          <button
+            className="mobile-brand"
+            type="button"
+            aria-label="AllTwelve home"
+            onClick={() => setActiveView('Home')}
+          >
+            <Brand />
+          </button>
           {userRole === 'Coach' && (
             <WorkspaceSearch onOpenRecord={openSearchRecord} />
           )}
@@ -1233,431 +1241,12 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
                 )}
               </section>
             ) : userRole === 'Coach' ? (
-              <>
-                <div className="main-column">
-                  <section className="welcome-row">
-                    <div>
-                      <p className="eyebrow">Team overview</p>
-                      <h1>{coachGreeting}</h1>
-                      <p>
-                        Everything your team needs for the next kickoff, in one
-                        place.
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        className="h-10 rounded-xl bg-[#101d2e] px-4 text-white hover:bg-[#20344f]"
-                        onClick={() => setActiveView('Film Room')}
-                      >
-                        <Play data-icon="inline-start" fill="currentColor" />{' '}
-                        Start film session
-                      </Button>
-                    </div>
-                  </section>
-
-                  <section className="game-card">
-                    <div className="game-card-top">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <Badge className="bg-[#e4472e] text-white">
-                            NEXT GAME
-                          </Badge>
-                          <span className="text-xs font-medium text-slate-500">
-                            Saved schedule
-                          </span>
-                        </div>
-                        <p className="game-kicker">
-                          {nextGameEvent
-                            ? `${new Date(nextGameEvent.startsAt).toLocaleDateString([], { weekday: 'long' })} · ${new Date(nextGameEvent.startsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · ${nextGameEvent.location}`
-                            : 'Add the next game in Calendar'}
-                        </p>
-                      </div>
-                      <Button
-                        aria-label="Game options"
-                        onClick={() => setActiveView('Gameplanning')}
-                        size="icon"
-                        variant="ghost"
-                      >
-                        <MoreHorizontal />
-                      </Button>
-                    </div>
-
-                    <div className="matchup">
-                      <div className="team-panel">
-                        <MediaAvatar
-                          assetKey="team-logo"
-                          className="large-crest home-crest"
-                          fallback={teamInitials}
-                          label={`${teamSettings.teamName} logo`}
-                          revision={assetRevision}
-                        />
-                        <div>
-                          <strong>{teamShortName}</strong>
-                          <small>
-                            {programLabel} · {teamSettings.season}
-                          </small>
-                        </div>
-                      </div>
-                      <div className="versus">
-                        <span>VS</span>
-                        <small>{nextGameEvent ? 'Scheduled' : 'Open'}</small>
-                      </div>
-                      <div className="team-panel away">
-                        <div>
-                          <strong>
-                            {nextGameEvent
-                              ? nextGameEvent.title.split(' at ')[0]
-                              : 'Opponent not scheduled'}
-                          </strong>
-                          <small>
-                            {nextGameEvent
-                              ? 'Scheduled game'
-                              : 'Open Calendar to add one'}
-                          </small>
-                        </div>
-                        <MediaAvatar
-                          assetKey="opponent-logo"
-                          className="large-crest away-crest"
-                          fallback="OP"
-                          label="Opponent logo"
-                          revision={assetRevision}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="readiness">
-                      <div className="readiness-heading">
-                        <strong>Game-day readiness</strong>
-                        <span>{installReadiness}%</span>
-                      </div>
-                      <div className="readiness-track">
-                        <span style={{ width: `${installReadiness}%` }} />
-                      </div>
-                      <div className="readiness-items">
-                        <span>
-                          <i className={dashboardEvents.length ? 'done' : ''} />{' '}
-                          {dashboardEvents.length} calendar{' '}
-                          {dashboardEvents.length === 1 ? 'event' : 'events'}{' '}
-                          scheduled
-                        </span>
-                        <span>
-                          <i
-                            className={
-                              dashboardInstall.items.length ? 'done' : ''
-                            }
-                          />{' '}
-                          {dashboardInstall.items.length} install{' '}
-                          {dashboardInstall.items.length === 1
-                            ? 'item'
-                            : 'items'}
-                        </span>
-                        <span>
-                          <i /> Install at {installReadiness}%
-                        </span>
-                        <span>
-                          <i />{' '}
-                          {dashboardInstall.reviews.length -
-                            completedInstallReviews}{' '}
-                          athlete reviews open
-                        </span>
-                      </div>
-                    </div>
-                  </section>
-
-                  <div className="section-heading">
-                    <div>
-                      <p className="eyebrow">Pick up where you left off</p>
-                      <h2>Recent work</h2>
-                    </div>
-                    <button
-                      onClick={() => setActiveView('Reports')}
-                      type="button"
-                    >
-                      View all
-                    </button>
-                  </div>
-
-                  <section className="recent-grid">
-                    <article className="film-card">
-                      <HomeFilmPreview
-                        onOpen={() => setActiveView('Film Room')}
-                        revision={assetRevision}
-                      />
-                      <div className="card-copy">
-                        <div>
-                          <span className="content-type">FILM</span>
-                          <strong>Team film library</strong>
-                        </div>
-                        <p>
-                          Uploaded footage appears here—no sample film is
-                          substituted.
-                        </p>
-                      </div>
-                    </article>
-
-                    <article className="play-card">
-                      <HomePlayPreview
-                        onOpen={() => setActiveView('Playbook')}
-                      />
-                      <div className="card-copy">
-                        <div>
-                          <span className="content-type playbook-type">
-                            PLAYBOOK
-                          </span>
-                          <strong>Team play library</strong>
-                        </div>
-                        <p>
-                          Saved diagrams appear here—no sample plays are
-                          substituted.
-                        </p>
-                      </div>
-                    </article>
-                  </section>
-
-                  <div className="section-heading week-heading">
-                    <div>
-                      <p className="eyebrow">Stay ahead</p>
-                      <h2>Game week command board</h2>
-                    </div>
-                    <Badge className="live-plan-badge">
-                      <span /> Live plan
-                    </Badge>
-                  </div>
-
-                  <section className="command-board">
-                    <article className="command-card agenda-card">
-                      <div className="command-card-head">
-                        <span className="command-icon blue">
-                          <CalendarDays />
-                        </span>
-                        <div>
-                          <strong>Upcoming agenda</strong>
-                          <small>
-                            {agendaEvents.length} saved{' '}
-                            {agendaEvents.length === 1 ? 'event' : 'events'}
-                          </small>
-                        </div>
-                        <ChevronRight />
-                      </div>
-                      <div className="agenda-list">
-                        {agendaEvents.map((event, index) => (
-                          <div key={event.id}>
-                            <b>
-                              {new Date(event.startsAt).toLocaleTimeString([], {
-                                hour: 'numeric',
-                                minute: '2-digit',
-                              })}
-                            </b>
-                            <span>
-                              <strong>{event.title}</strong>
-                              <small>
-                                {event.location || 'Location not set'}
-                              </small>
-                            </span>
-                            <i
-                              className={
-                                index === 0
-                                  ? 'blue'
-                                  : index === 1
-                                    ? 'teal'
-                                    : 'violet'
-                              }
-                            />
-                          </div>
-                        ))}
-                        {agendaEvents.length === 0 ? (
-                          <div className="dashboard-empty-row">
-                            <CalendarDays />
-                            <span>
-                              <strong>No upcoming events</strong>
-                              <small>Add one in Calendar.</small>
-                            </span>
-                          </div>
-                        ) : null}
-                      </div>
-                    </article>
-
-                    <article className="command-card install-pulse-card">
-                      <div className="command-card-head">
-                        <span className="command-icon teal">
-                          <ClipboardList />
-                        </span>
-                        <div>
-                          <strong>Install pulse</strong>
-                          <small>
-                            {completedInstallReviews} of{' '}
-                            {dashboardInstall.reviews.length} reviews complete
-                          </small>
-                        </div>
-                        <button
-                          onClick={() => setActiveView('Install')}
-                          type="button"
-                        >
-                          Open
-                        </button>
-                      </div>
-                      <div className="pulse-number">
-                        <strong>{installReadiness}%</strong>
-                        <span>Team completion</span>
-                      </div>
-                      <div className="readiness-track pulse">
-                        <span style={{ width: `${installReadiness}%` }} />
-                      </div>
-                      <div className="unit-progress">
-                        <span>
-                          Assignments <b>{dashboardInstall.items.length}</b>
-                        </span>
-                        <span>
-                          Complete <b>{completedInstallReviews}</b>
-                        </span>
-                        <span>
-                          Open{' '}
-                          <b>
-                            {dashboardInstall.reviews.length -
-                              completedInstallReviews}
-                          </b>
-                        </span>
-                      </div>
-                    </article>
-
-                    <article className="command-card staff-focus-card">
-                      <div className="command-card-head">
-                        <span className="command-icon violet">
-                          <Zap />
-                        </span>
-                        <div>
-                          <strong>Next actions</strong>
-                          <small>Based on saved workspace data</small>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => setActiveView('Install')}
-                        type="button"
-                      >
-                        <span className="focus-status urgent">
-                          {dashboardInstall.reviews.length -
-                            completedInstallReviews}
-                        </span>
-                        <div>
-                          <strong>Open athlete reviews</strong>
-                          <small>Install · incomplete acknowledgements</small>
-                        </div>
-                        <ChevronRight />
-                      </button>
-                      <button
-                        onClick={() => setActiveView('Calendar')}
-                        type="button"
-                      >
-                        <span className="focus-status">
-                          {agendaEvents.length}
-                        </span>
-                        <div>
-                          <strong>Upcoming calendar</strong>
-                          <small>
-                            {agendaEvents.length
-                              ? agendaEvents[0].title
-                              : 'Add the first team event'}
-                          </small>
-                        </div>
-                        <ChevronRight />
-                      </button>
-                    </article>
-                  </section>
-                </div>
-
-                <aside className="right-rail">
-                  <section className="rail-card chat-card">
-                    <div className="rail-heading">
-                      <div>
-                        <p className="eyebrow">Team chat</p>
-                        <h3>Messages</h3>
-                      </div>
-                    </div>
-                    <div className="rail-empty-state">
-                      <MessageSquareText />
-                      <strong>No recent messages</strong>
-                      <span>New team conversations will appear here.</span>
-                    </div>
-                    <Button
-                      className="mt-2 h-9 w-full rounded-xl"
-                      onClick={() => setActiveView('Messages')}
-                      variant="outline"
-                    >
-                      <MessageSquareText /> Open team chat
-                    </Button>
-                  </section>
-
-                  <section className="rail-card">
-                    <div className="rail-heading">
-                      <div>
-                        <p className="eyebrow">Updates</p>
-                        <h3>Team activity</h3>
-                      </div>
-                    </div>
-                    <div className="rail-empty-state">
-                      <Clock3 />
-                      <strong>No recorded activity yet</strong>
-                      <span>
-                        Saved changes and completed reviews will populate this
-                        feed once activity logging is connected.
-                      </span>
-                    </div>
-                  </section>
-
-                  <section className="rail-card quick-card">
-                    <div className="rail-heading">
-                      <div>
-                        <p className="eyebrow">Quick access</p>
-                        <h3>Build your week</h3>
-                      </div>
-                    </div>
-                    <div className="quick-grid">
-                      <button
-                        onClick={() => setActiveView('Playbook')}
-                        type="button"
-                      >
-                        <BookOpen />
-                        <span>
-                          <strong>New play</strong>
-                          <small>Draw & install</small>
-                        </span>
-                      </button>
-                      <button
-                        onClick={() => setActiveView('Film Room')}
-                        type="button"
-                      >
-                        <Film />
-                        <span>
-                          <strong>Upload film</strong>
-                          <small>Add game tape</small>
-                        </span>
-                      </button>
-                      <button
-                        onClick={() => setActiveView('Depth Charts')}
-                        type="button"
-                      >
-                        <Shield />
-                        <span>
-                          <strong>Depth chart</strong>
-                          <small>Set starters</small>
-                        </span>
-                      </button>
-                      {ownerAccess ? (
-                        <button
-                          onClick={() => setActiveView('Sideline')}
-                          type="button"
-                        >
-                          <Radio />
-                          <span>
-                            <strong>Sideline</strong>
-                            <small>Start replay</small>
-                          </span>
-                        </button>
-                      ) : null}
-                    </div>
-                  </section>
-                </aside>
-              </>
+              <TeamHome greeting={coachGreeting} team={teamShortName} season={String(teamSettings.season)}
+                crest={<MediaAvatar assetKey="team-logo" className="team-crest" fallback={teamInitials} label={teamShortName + ' logo'} revision={assetRevision} />}
+                nextGame={nextGameEvent} events={dashboardEvents} items={dashboardInstall.items}
+                film={<HomeFilmPreview onOpen={() => setActiveView('Film Room')} revision={assetRevision} />}
+                play={<HomePlayPreview onOpen={() => setActiveView('Playbook')} />}
+                onNavigate={setActiveView} />
             ) : (
               <PlayerDashboard
                 assetRevision={assetRevision}
@@ -1684,6 +1273,7 @@ function WorkspaceHome({ session }: { session: WorkspaceSession }) {
                 setActiveView('Install');
               }}
               onOpenDataset={openDataset}
+              onOpenRecord={openSearchRecord}
               key={searchTarget?.revision ?? 'workspace'}
               searchTarget={searchTarget}
               onPlayEditingChange={onPlayEditingChange}
@@ -2041,6 +1631,7 @@ type ModuleProps = {
     destination: 'Film Room' | 'Reports' | 'Gameplanning',
   ) => void;
   searchTarget: SearchResult | null;
+  onOpenRecord: (record: SearchResult) => boolean;
   onPlayEditingChange: (editing: boolean) => void;
   view: string;
   userRole: 'Coach' | 'Player';
@@ -2062,6 +1653,7 @@ function ModuleView({
   initialInstallId,
   onOpenInstall,
   onOpenDataset,
+  onOpenRecord,
   searchTarget,
   view,
   userRole,
@@ -2163,6 +1755,7 @@ function ModuleView({
     return (
       <GameplanningView
         initialPlanId={initialGameplanId}
+        onOpenRecord={onOpenRecord}
         onBuildPractice={onBuildPractice}
         onEditingChange={onPlayEditingChange}
         onNavigate={onNavigate}
@@ -2210,7 +1803,7 @@ function ModuleHeader({
   description,
   children,
 }: {
-  eyebrow: string;
+  eyebrow?: string;
   title: string;
   description: string;
   children?: ReactNode;
@@ -2218,7 +1811,7 @@ function ModuleHeader({
   return (
     <div className="module-header">
       <div>
-        <p className="eyebrow">{eyebrow}</p>
+        {eyebrow && <p className="eyebrow">{eyebrow}</p>}
         <h1>{title}</h1>
         <p>{description}</p>
       </div>
@@ -2608,7 +2201,7 @@ function FilmRoomView({
         `/api/film?clipId=${encodeURIComponent(activeClip.id)}`,
         {
           method: 'DELETE',
-          headers: { 'x-chalktalk-clip-version': activeClip.version },
+          headers: { 'x-alltwelve-clip-version': activeClip.version },
         },
       );
       const data = (await response.json()) as FilmPayload;
@@ -2722,7 +2315,7 @@ function FilmRoomView({
         {
           method: 'DELETE',
           headers: {
-            'x-chalktalk-film-version': deleteFilmTarget.current?.version ?? '',
+            'x-alltwelve-film-version': deleteFilmTarget.current?.version ?? '',
           },
         },
       );
@@ -2779,33 +2372,33 @@ function FilmRoomView({
   return (
     <section className="module-surface film-room-surface film-review-tool">
       <ModuleHeader
-        eyebrow={
-          filmAsset
-            ? `${filmAsset.opponent || 'Team film'} · ${filmClips.length} saved ${filmClips.length === 1 ? 'clip' : 'clips'}`
-            : 'Team film library'
-        }
-        title={filmAsset?.title ?? 'Film Room'}
-        description="Review film, chart every snap, and keep teaching notes beside the video."
+        eyebrow={filmAsset?.opponent || undefined}
+        title="Film Room"
+        description={filmAsset?.title ?? 'Review and chart game film.'}
       >
-        <FocusModeButton focused={focusMode} onToggle={onToggleFocus} />
-        <MediaUploadControl
-          accept="video/*"
-          assetKey={() => `film-${crypto.randomUUID()}`}
-          label="Upload film"
-          disabled={
-            clipDirty ||
-            filmLoading ||
-            filmSaving ||
-            Boolean(filmLoadError && !filmAsset)
-          }
-          onNotify={onNotify}
-          onUploaded={registerFilm}
-          onUploadingChange={(uploading) => {
-            if (uploading) videoRef.current?.pause();
-            filmMutationLock.current = uploading;
-            setFilmSaving(uploading);
-          }}
-        />
+        {filmAsset || focusMode ? (
+          <FocusModeButton focused={focusMode} onToggle={onToggleFocus} />
+        ) : null}
+        {filmAsset ? (
+          <MediaUploadControl
+            accept="video/*"
+            assetKey={() => `film-${crypto.randomUUID()}`}
+            label="Upload film"
+            disabled={
+              clipDirty ||
+              filmLoading ||
+              filmSaving ||
+              Boolean(filmLoadError && !filmAsset)
+            }
+            onNotify={onNotify}
+            onUploaded={registerFilm}
+            onUploadingChange={(uploading) => {
+              if (uploading) videoRef.current?.pause();
+              filmMutationLock.current = uploading;
+              setFilmSaving(uploading);
+            }}
+          />
+        ) : null}
         {filmAsset ? (
           <Button
             variant="outline"
@@ -2820,18 +2413,20 @@ function FilmRoomView({
               : 'Delete film'}
           </Button>
         ) : null}
-        <Button
-          className="module-primary"
-          disabled={
-            !filmAsset ||
-            filmLoading ||
-            filmSaving ||
-            Boolean(filmLoadError && !filmAsset)
-          }
-          onClick={() => chooseClip(0)}
-        >
-          <Plus /> New clip
-        </Button>
+        {filmAsset ? (
+          <Button
+            className="module-primary"
+            disabled={
+              !filmAsset ||
+              filmLoading ||
+              filmSaving ||
+              Boolean(filmLoadError && !filmAsset)
+            }
+            onClick={() => chooseClip(0)}
+          >
+            <Plus /> New clip
+          </Button>
+        ) : null}
       </ModuleHeader>
       {filmAsset?.status === 'deleting' ? (
         <p role="alert">
@@ -2901,14 +2496,14 @@ function FilmRoomView({
               setFilmDraftUrl(url);
               const link = document.createElement('a');
               link.href = url;
-              link.download = 'chalktalk-clip-draft.json';
+              link.download = 'alltwelve-clip-draft.json';
               link.click();
             }}
           >
             Download draft
           </Button>
           {filmDraftUrl ? (
-            <a href={filmDraftUrl} download="chalktalk-clip-draft.json">
+            <a href={filmDraftUrl} download="alltwelve-clip-draft.json">
               Open draft download
             </a>
           ) : null}
@@ -2922,49 +2517,36 @@ function FilmRoomView({
         </div>
       ) : null}
 
-      <div
-        className={
-          filmAsset ? 'local-data-status' : 'local-data-status status-warning'
-        }
-      >
-        <span className="sync-dot" />
-        <strong>
-          {filmLoading
-            ? 'Loading film library…'
-            : filmAsset
-              ? 'Film saved'
-              : 'No film uploaded'}
-        </strong>
-        <small>
-          {filmClips.length} charted {filmClips.length === 1 ? 'clip' : 'clips'}
-        </small>
-      </div>
-
-      <div className="toolbar-row">
-        <div className="toolbar-search">
-          <Search />
-          <Input
-            aria-label="Search charted clips"
-            onChange={(event) => setFilmSearch(event.target.value)}
-            placeholder="Search clips, concepts, units or tags…"
-            value={filmSearch}
-          />
+      {filmLoading ? (
+        <div className="local-data-status" role="status">
+          <span className="sync-dot" />
+          <strong>Loading film library…</strong>
         </div>
+      ) : null}
 
-        <Button onClick={() => onNavigate('Reports')} variant="outline">
-          <SlidersHorizontal /> Reports
-        </Button>
-      </div>
+      {filmAsset ? (
+        <div className="toolbar-row film-review-toolbar">
+          <div className="toolbar-search">
+            <Search />
+            <Input
+              aria-label="Search charted clips"
+              onChange={(event) => setFilmSearch(event.target.value)}
+              placeholder="Search clips…"
+              value={filmSearch}
+            />
+          </div>
+
+          <Button onClick={() => onNavigate('Reports')} variant="outline">
+            <SlidersHorizontal /> Reports
+          </Button>
+        </div>
+      ) : null}
 
       <div
         inert={
           filmSaving || filmLoading || Boolean(filmLoadError && !filmAsset)
         }
-        className={
-          libraryCollapsed
-            ? 'film-workspace library-collapsed'
-            : 'film-workspace'
-        }
+        className={`film-workspace${libraryCollapsed ? ' library-collapsed' : ''}${filmAsset ? '' : ' is-empty'}`}
       >
         <aside
           className={
@@ -3259,97 +2841,109 @@ function FilmRoomView({
             ) : null}
           </div>
 
-          <div className="film-lower">
-            <div className="timeline-card">
-              <div className="timeline-head">
-                <div>
-                  <Badge variant="outline">
-                    {activeClip?.quarter || 'Unscheduled'}
-                    {activeClip?.clock ? ` · ${activeClip.clock}` : ''}
-                  </Badge>
-                  <strong>
-                    {activeClip ? clipLabel(activeClip) : 'No clip selected'}
-                  </strong>
+          <details className="film-clip-details">
+            <summary>
+              <ChevronDown aria-hidden="true" />
+              Teaching notes{filmClips.length > 0 ? ' and clip timeline' : ''}
+            </summary>
+            <div className="film-lower">
+              {filmClips.length > 0 && (
+                <div className="timeline-card">
+                  <div className="timeline-head">
+                    <div>
+                      <Badge variant="outline">
+                        {activeClip?.quarter || 'Unscheduled'}
+                        {activeClip?.clock ? ` · ${activeClip.clock}` : ''}
+                      </Badge>
+                      <strong>
+                        {activeClip
+                          ? clipLabel(activeClip)
+                          : 'No clip selected'}
+                      </strong>
+                    </div>
+                    <div className="timeline-tools">
+                      <Button
+                        disabled={!activeClip}
+                        onClick={() =>
+                          document.getElementById('film-tags')?.focus()
+                        }
+                        size="sm"
+                        variant="ghost"
+                      >
+                        <Tag /> Edit tags
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="mini-timeline">
+                    <span className="timeline-playhead" />
+                    {filmClips.map((clip) => (
+                      <button
+                        aria-label={`Clip ${clip.clipNumber}`}
+                        className={
+                          selectedClip === clip.clipNumber ? 'active' : ''
+                        }
+                        key={clip.id}
+                        onClick={() => chooseClip(clip.clipNumber)}
+                        type="button"
+                      />
+                    ))}
+                  </div>
+                  <div className="tag-strip">
+                    <span>
+                      <b>Unit</b> {activeClip?.odk || '—'}
+                    </span>
+                    <span>
+                      <b>Down</b> {activeClip?.down ?? '—'}
+                    </span>
+                    <span>
+                      <b>Concept</b> {activeClip?.concept || '—'}
+                    </span>
+                    <span>
+                      <b>Result</b> {activeClip?.result || '—'}
+                    </span>
+                    <button
+                      onClick={() =>
+                        document.getElementById('film-tags')?.focus()
+                      }
+                      type="button"
+                    >
+                      <Plus /> Add tag
+                    </button>
+                  </div>
                 </div>
-                <div className="timeline-tools">
+              )}
+              <aside className="notes-card">
+                <div className="panel-title">
+                  <div>
+                    <strong>Teaching notes</strong>
+                  </div>
+                </div>
+                <Textarea
+                  aria-label="Teaching note"
+                  id="film-note"
+                  maxLength={280}
+                  onChange={(event) => setNote(event.target.value)}
+                  placeholder="Add a coaching point for this clip…"
+                  value={note}
+                />
+                <div className="notes-actions">
+                  <span>{note.length}/280</span>
                   <Button
-                    disabled={!activeClip}
-                    onClick={() =>
-                      document.getElementById('film-tags')?.focus()
+                    disabled={
+                      !filmAsset ||
+                      filmLoading ||
+                      filmSaving ||
+                      Boolean(filmLoadError && !filmAsset)
                     }
+                    onClick={() => void saveBreakdown(false)}
                     size="sm"
-                    variant="ghost"
                   >
-                    <Tag /> Edit tags
+                    {filmSaving ? 'Saving…' : 'Save with clip'}
                   </Button>
                 </div>
-              </div>
-              <div className="mini-timeline">
-                <span className="timeline-playhead" />
-                {filmClips.map((clip) => (
-                  <button
-                    aria-label={`Clip ${clip.clipNumber}`}
-                    className={selectedClip === clip.clipNumber ? 'active' : ''}
-                    key={clip.id}
-                    onClick={() => chooseClip(clip.clipNumber)}
-                    type="button"
-                  />
-                ))}
-              </div>
-              <div className="tag-strip">
-                <span>
-                  <b>Unit</b> {activeClip?.odk || '—'}
-                </span>
-                <span>
-                  <b>Down</b> {activeClip?.down ?? '—'}
-                </span>
-                <span>
-                  <b>Concept</b> {activeClip?.concept || '—'}
-                </span>
-                <span>
-                  <b>Result</b> {activeClip?.result || '—'}
-                </span>
-                <button
-                  onClick={() => document.getElementById('film-tags')?.focus()}
-                  type="button"
-                >
-                  <Plus /> Add tag
-                </button>
-              </div>
+              </aside>
             </div>
-            <aside className="notes-card">
-              <div className="panel-title">
-                <div>
-                  <strong>Teaching notes</strong>
-                  <span>Saved with this clip</span>
-                </div>
-                <Eye />
-              </div>
-              <Textarea
-                aria-label="Teaching note"
-                id="film-note"
-                maxLength={280}
-                onChange={(event) => setNote(event.target.value)}
-                placeholder="Add a coaching point for this clip…"
-                value={note}
-              />
-              <div className="notes-actions">
-                <span>{note.length}/280</span>
-                <Button
-                  disabled={
-                    !filmAsset ||
-                    filmLoading ||
-                    filmSaving ||
-                    Boolean(filmLoadError && !filmAsset)
-                  }
-                  onClick={() => void saveBreakdown(false)}
-                  size="sm"
-                >
-                  {filmSaving ? 'Saving…' : 'Save with clip'}
-                </Button>
-              </div>
-            </aside>
-          </div>
+          </details>
 
           <section className="film-stat-sheet" aria-label="Film stat entry">
             <header className="film-sheet-toolbar">
@@ -3361,10 +2955,7 @@ function FilmRoomView({
                     : `Chart clip ${nextClipNumber}`}
                 </h3>
               </div>
-              <span>
-                {filmClips.length} saved · spreadsheet entry stays beside the
-                video
-              </span>
+              <span>{filmClips.length} saved</span>
             </header>
             <div className="film-sheet-scroll">
               <div className="film-sheet-grid film-sheet-head">
@@ -4728,14 +4319,14 @@ function AthletesView({
                       setNoteDownload(url);
                       const link = document.createElement('a');
                       link.href = url;
-                      link.download = 'chalktalk-note-draft.json';
+                      link.download = 'alltwelve-note-draft.json';
                       link.click();
                     }}
                   >
                     Download note draft
                   </Button>
                   {noteDownload ? (
-                    <a href={noteDownload} download="chalktalk-note-draft.json">
+                    <a href={noteDownload} download="alltwelve-note-draft.json">
                       Open note draft download
                     </a>
                   ) : null}
@@ -4798,14 +4389,17 @@ function AthletesView({
           ) : null}
           {removalError ? <p role="alert">{removalError}</p> : null}
           {!removal?.blocked && removal?.version && !removalError ? (
-            <label>
+            <label className="form-checkbox roster-removal-confirmation">
               <input
                 type="checkbox"
                 checked={removalConfirmed}
                 disabled={saving}
                 onChange={(event) => setRemovalConfirmed(event.target.checked)}
-              />{' '}
-              I understand this permanently removes this roster entry and note.
+              />
+              <span>
+                I understand that this removes the roster entry and staff note
+                permanently.
+              </span>
             </label>
           ) : null}
           <DialogFooter>
@@ -4837,6 +4431,7 @@ function AthletesView({
                   !removalConfirmed
                 }
                 onClick={() => void removeRosterEntry()}
+                variant="destructive"
               >
                 Remove roster entry permanently
               </Button>
@@ -4943,6 +4538,7 @@ function AthletesView({
               Keep editing
             </Button>
             <Button
+              variant="destructive"
               onClick={() => {
                 setProfileLeaveOpen(false);
                 setProfileFormDirty(false);
@@ -4974,6 +4570,7 @@ function AthletesView({
               Keep editing
             </Button>
             <Button
+              variant="destructive"
               onClick={() => {
                 if (!pendingAthlete) return;
                 setSelected(pendingAthlete);
@@ -5010,7 +4607,6 @@ function AthletesView({
             inert={saving}
             onSubmit={createAthlete}
           >
-            {rosterSaveError ? <p role="alert">{rosterSaveError}</p> : null}
             <DialogHeader>
               <DialogTitle>
                 {profileEditor ? 'Edit athlete profile' : 'Add athlete'}
@@ -5167,6 +4763,11 @@ function AthletesView({
                 </label>
               ) : null}
             </div>
+            {rosterSaveError ? (
+              <div className="dialog-feedback">
+                <p role="alert">{rosterSaveError}</p>
+              </div>
+            ) : null}
             <DialogFooter>
               <Button disabled={saving} type="submit">
                 {saving
@@ -5223,37 +4824,79 @@ function DepthChartsView({
   const [positionName, setPositionName] = useState('');
   const [positionCloseConfirm, setPositionCloseConfirm] = useState(false);
   const writeLock = useRef(false);
-  const dragRef = useRef<{
-    pointerId: number;
-    slotId: string;
-    x: number;
-    y: number;
-    clientX: number;
-    clientY: number;
-    offsetX: number;
-    offsetY: number;
-  } | null>(null);
   const [roster, setRoster] = useState<DepthChartPayload['athletes']>([]);
   const [depthSaving, setDepthSaving] = useState(false);
   const [depthMessage, setDepthMessage] = useState('Loading saved layout…');
   const [positionDialogOpen, setPositionDialogOpen] = useState(false);
-  const [draggingId, setDraggingId] = useState('');
-  const depthBoardRef = useRef<HTMLDivElement>(null);
+  const depthDetails = useRef<HTMLElement>(null);
   const lineup = layouts[group];
   const selected = lineup.find((slot) => slot.id === selectedId) ?? null;
+  const byPosition = new Map<string, DepthPlayerSlot[]>();
+  for (const slot of lineup) {
+    const key = slot.pos.trim().toLowerCase();
+    const slots = byPosition.get(key) ?? [];
+    slots.push(slot);
+    byPosition.set(key, slots);
+  }
+  const positions = [...byPosition.values()];
+  const depth = Math.max(3, ...positions.map((slots) => slots.length));
+  const selectedSlots = selected
+    ? (byPosition.get(selected.pos.trim().toLowerCase()) ?? [])
+    : [];
+  const selectedRank = selectedSlots.findIndex(
+    (slot) => slot.id === selectedId,
+  );
+  useEffect(() => {
+    if (selectedId && window.matchMedia('(max-width: 760px)').matches) {
+      depthDetails.current?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [selectedId]);
+  const depthLabel = (index: number) =>
+    ['Starter', '2nd', '3rd'][index] ?? 'Depth ' + (index + 1);
+  const renamePosition = (pos: string) => {
+    const ids = new Set(selectedSlots.map((slot) => slot.id));
+    setLayouts((current) => ({
+      ...current,
+      [group]: current[group].map((slot) =>
+        ids.has(slot.id) ? { ...slot, pos } : slot,
+      ),
+    }));
+  };
+  const addBackup = (position: DepthPlayerSlot) => {
+    const slot = {
+      ...position,
+      id: crypto.randomUUID(),
+      athleteId: '',
+      notes: '',
+    };
+    setLayouts((current) => ({
+      ...current,
+      [group]: [...current[group], slot],
+    }));
+    setSelectedId(slot.id);
+  };
+  const moveRank = (direction: number) => {
+    const other = selectedSlots[selectedRank + direction];
+    if (!selected || !other) return;
+    setLayouts((current) => ({
+      ...current,
+      [group]: current[group].map((slot) =>
+        slot.id === selected.id
+          ? other
+          : slot.id === other.id
+            ? selected
+            : slot,
+      ),
+    }));
+  };
   const assignedCount = lineup.filter((slot) =>
     roster.some((athlete) => athlete.id === slot.athleteId),
   ).length;
   const dirty = JSON.stringify(layouts) !== JSON.stringify(savedLayouts);
   useEffect(() => {
-    onEditingChange(
-      dirty ||
-        depthSaving ||
-        Boolean(draggingId) ||
-        Boolean(positionName.trim()),
-    );
+    onEditingChange(dirty || depthSaving || Boolean(positionName.trim()));
     return () => onEditingChange(false);
-  }, [dirty, depthSaving, draggingId, positionName, onEditingChange]);
+  }, [dirty, depthSaving, positionName, onEditingChange]);
   useEffect(() => {
     if (!dirty && !depthSaving && !positionName.trim()) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
@@ -5360,45 +5003,6 @@ function DepthChartsView({
       ),
     }));
   };
-  const movePositionCard = (
-    event: ReactPointerEvent<HTMLButtonElement>,
-    slot: DepthPlayerSlot,
-  ) => {
-    const drag = dragRef.current,
-      bounds = depthBoardRef.current?.getBoundingClientRect();
-    if (
-      !drag ||
-      !bounds ||
-      drag.pointerId !== event.pointerId ||
-      drag.slotId !== slot.id ||
-      Math.hypot(event.clientX - drag.clientX, event.clientY - drag.clientY) < 3
-    )
-      return;
-    updateSlot(slot.id, {
-      x: Math.min(
-        94,
-        Math.max(
-          6,
-          ((event.clientX - drag.offsetX - bounds.left) / bounds.width) * 100,
-        ),
-      ),
-      y: Math.min(
-        92,
-        Math.max(
-          8,
-          ((event.clientY - drag.offsetY - bounds.top) / bounds.height) * 100,
-        ),
-      ),
-    });
-  };
-  const cancelDrag = (pointerId: number) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== pointerId) return;
-    updateSlot(drag.slotId, { x: drag.x, y: drag.y });
-    dragRef.current = null;
-    setDraggingId('');
-  };
-
   const addPosition = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
@@ -5433,7 +5037,7 @@ function DepthChartsView({
           description="Your team-defined roles and assignments."
         />
         {depthLoad === 'loading' ? (
-          <output>Loading saved alignment…</output>
+          <output>Loading saved depth chart…</output>
         ) : (
           <>
             <p role="alert">{depthMessage}</p>
@@ -5448,7 +5052,7 @@ function DepthChartsView({
       <ModuleHeader
         eyebrow="Personnel"
         title="Depth Charts"
-        description="Build each unit with the position names and alignment your team actually uses."
+        description="Set starters and backups for each position."
       >
         <Button
           className="module-secondary"
@@ -5459,14 +5063,14 @@ function DepthChartsView({
         </Button>
         <Button
           variant="outline"
-          disabled={depthSaving || Boolean(draggingId)}
+          disabled={depthSaving}
           onClick={() => (dirty ? setReloadConfirm(true) : reloadSaved())}
         >
           Reload saved
         </Button>
         <Button
           className="module-primary"
-          disabled={!dirty || depthSaving || Boolean(draggingId)}
+          disabled={!dirty || depthSaving}
           onClick={() => void persistLayouts(layouts)}
         >
           <Check />
@@ -5475,15 +5079,20 @@ function DepthChartsView({
       </ModuleHeader>
 
       <div className="depth-toolbar">
-        <div className="segmented-control large">
+        <div
+          className="segmented-control large"
+          role="group"
+          aria-label="Depth chart unit"
+        >
           {depthUnits.map((item) => (
             <button
               className={group === item ? 'active' : ''}
+              aria-pressed={group === item}
               key={item}
-              disabled={depthSaving || Boolean(draggingId)}
+              disabled={depthSaving}
               onClick={() => {
                 setGroup(item);
-                setSelectedId(layouts[item][0]?.id ?? '');
+                setSelectedId('');
               }}
               type="button"
             >
@@ -5491,16 +5100,20 @@ function DepthChartsView({
             </button>
           ))}
         </div>
-        <Button
-          disabled={depthSaving}
-          onClick={() => setPositionDialogOpen(true)}
-          variant="outline"
-        >
-          <Plus /> Add position
-        </Button>
-        <Badge variant="secondary">
-          <Users /> {assignedCount} assigned
-        </Badge>
+        <div className="depth-toolbar-actions">
+          <span>
+            {assignedCount} of {lineup.length} assigned
+          </span>
+          {lineup.length > 0 && (
+            <Button
+              disabled={depthSaving}
+              onClick={() => setPositionDialogOpen(true)}
+              variant="outline"
+            >
+              <Plus /> Add position
+            </Button>
+          )}
+        </div>
       </div>
       <div className="local-data-status depth-data-status">
         <span
@@ -5514,258 +5127,207 @@ function DepthChartsView({
               : depthMessage}
         </strong>
         <small>
-          {lineup.length} team-defined{' '}
-          {lineup.length === 1 ? 'position' : 'positions'} · {roster.length}{' '}
-          roster athletes
+          {positions.length} {positions.length === 1 ? 'position' : 'positions'}{' '}
+          · {roster.length} roster athletes
         </small>
       </div>
       {saveError && <p role="alert">{saveError}</p>}
-      <div className="depth-grid">
-        <div className="depth-field">
-          <div className="depth-field-header">
-            <span>{group} alignment</span>
-            <small>
-              Drag a position card to move it, or use the precise controls
-            </small>
-          </div>
-          <div
-            className="depth-field-inner depth-custom-board"
-            ref={depthBoardRef}
-          >
-            {!lineup.length ? (
-              <div className="viewer-empty-state">
-                <Shirt />
-                <strong>No positions in this unit</strong>
-                <span>Create only the roles and alignment your team uses.</span>
-                <Button
-                  disabled={depthSaving}
-                  onClick={() => setPositionDialogOpen(true)}
-                >
-                  <Plus /> Add first position
-                </Button>
-              </div>
-            ) : null}
-            {lineup.map((slot) => {
-              const athlete = roster.find((item) => item.id === slot.athleteId);
-              return (
-                <button
-                  aria-label={`${slot.pos}, ${athlete?.name ?? (slot.athleteId ? 'athlete unavailable' : 'unassigned')}. Drag to reposition.`}
-                  disabled={depthSaving}
-                  className={`${selectedId === slot.id ? 'depth-player selected' : 'depth-player'}${draggingId === slot.id ? ' dragging' : ''}`}
-                  key={slot.id}
-                  onClick={() => setSelectedId(slot.id)}
-                  onPointerCancel={(event) => cancelDrag(event.pointerId)}
-                  onLostPointerCapture={(event) => cancelDrag(event.pointerId)}
-                  onPointerDown={(event) => {
-                    if (
-                      depthSaving ||
-                      event.button !== 0 ||
-                      !event.isPrimary ||
-                      dragRef.current
-                    )
-                      return;
-                    const bounds =
-                      depthBoardRef.current?.getBoundingClientRect();
-                    if (!bounds) return;
-                    event.preventDefault();
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    setSelectedId(slot.id);
-                    setDraggingId(slot.id);
-                    dragRef.current = {
-                      pointerId: event.pointerId,
-                      slotId: slot.id,
-                      x: slot.x,
-                      y: slot.y,
-                      clientX: event.clientX,
-                      clientY: event.clientY,
-                      offsetX:
-                        event.clientX -
-                        bounds.left -
-                        (bounds.width * slot.x) / 100,
-                      offsetY:
-                        event.clientY -
-                        bounds.top -
-                        (bounds.height * slot.y) / 100,
-                    };
-                  }}
-                  onPointerMove={(event) => {
-                    if (draggingId === slot.id) movePositionCard(event, slot);
-                  }}
-                  onPointerUp={(event) => {
-                    if (
-                      dragRef.current?.slotId !== slot.id ||
-                      dragRef.current.pointerId !== event.pointerId
-                    )
-                      return;
-                    movePositionCard(event, slot);
-                    dragRef.current = null;
-                    setDraggingId('');
-                    if (event.currentTarget.hasPointerCapture(event.pointerId))
-                      event.currentTarget.releasePointerCapture(
-                        event.pointerId,
-                      );
-                  }}
-                  style={{
-                    left: `${slot.x}%`,
-                    top: `${slot.y}%`,
-                    touchAction: 'none',
-                  }}
-                  type="button"
-                >
-                  <GripVertical aria-hidden="true" />
-                  <span>{slot.pos}</span>
-                  <strong>
-                    {athlete?.name ??
-                      (slot.athleteId ? 'Athlete unavailable' : 'Unassigned')}
-                  </strong>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <aside className="depth-detail">
-          {selected ? (
-            <>
-              <div className="properties-heading">
-                <strong>{selected.pos}</strong>
-                <Badge>{group}</Badge>
-              </div>
-              <label
-                className="depth-position-name"
-                htmlFor="depth-position-name"
-              >
-                Position name
-                <Input
-                  disabled={depthSaving}
-                  maxLength={100}
-                  id="depth-position-name"
-                  onChange={(event) =>
-                    updateSlot(selected.id, { pos: event.target.value })
-                  }
-                  value={selected.pos}
-                />
-              </label>
-              <div className="depth-rank starter">
-                <span>1</span>
-                <span className="roster-avatar">
-                  {selectedAthlete?.name
-                    .split(' ')
-                    .map((part) => part[0])
-                    .join('') || '—'}
-                </span>
-                <div>
-                  <strong>
-                    {selectedAthlete?.name ??
-                      (selected.athleteId
-                        ? 'Athlete unavailable'
-                        : 'Unassigned')}
-                  </strong>
-                  <small>
-                    {selectedAthlete
-                      ? `${selectedAthlete.position || 'No roster position'} · ${selectedAthlete.status}`
-                      : 'Choose a real roster athlete'}
-                  </small>
-                </div>
-                <Badge>Starter</Badge>
-              </div>
-              <NativeSelect
-                aria-label={`Choose ${selected.pos} starter`}
-                className="depth-athlete-select"
-                disabled={depthSaving}
-                onChange={(event) =>
-                  updateSlot(selected.id, { athleteId: event.target.value })
-                }
-                value={selected.athleteId}
-              >
-                <NativeSelectOption value="">Unassigned</NativeSelectOption>
-                {selected.athleteId && !selectedAthlete && (
-                  <NativeSelectOption value={selected.athleteId}>
-                    Athlete unavailable · choose another
-                  </NativeSelectOption>
-                )}
-                {roster.map((athlete) => (
-                  <NativeSelectOption key={athlete.id} value={athlete.id}>
-                    {athlete.no === null ? '—' : `#${athlete.no}`} ·{' '}
-                    {athlete.name}
-                    {athlete.position ? ` · ${athlete.position}` : ''}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-              <div className="depth-coordinate-controls">
-                <label htmlFor="depth-x">
-                  Horizontal position
-                  <input
-                    disabled={depthSaving}
-                    id="depth-x"
-                    max="94"
-                    min="6"
-                    onChange={(event) =>
-                      updateSlot(selected.id, { x: Number(event.target.value) })
-                    }
-                    type="range"
-                    value={selected.x}
-                  />
-                </label>
-                <label htmlFor="depth-y">
-                  Vertical position
-                  <input
-                    disabled={depthSaving}
-                    id="depth-y"
-                    max="92"
-                    min="8"
-                    onChange={(event) =>
-                      updateSlot(selected.id, { y: Number(event.target.value) })
-                    }
-                    type="range"
-                    value={selected.y}
-                  />
-                </label>
-              </div>
-              <div className="property-divider" />
-              <div className="detail-section compact">
-                <div className="property-title">
-                  <strong>Role notes</strong>
-                  <Lock />
-                </div>
-                <Textarea
-                  aria-label="Role notes"
-                  maxLength={10000}
-                  disabled={depthSaving}
-                  value={selected.notes}
-                  onChange={(event) =>
-                    updateSlot(selected.id, { notes: event.target.value })
-                  }
-                  placeholder="Add a real game or role note…"
-                />
-              </div>
-              <Button
-                className="w-full"
-                disabled={depthSaving}
-                onClick={() => {
-                  const next = {
-                    ...layouts,
-                    [group]: lineup.filter((slot) => slot.id !== selected.id),
-                  };
-                  setSelectedId('');
-                  setLayouts(next);
-                }}
-                variant="outline"
-              >
-                <Trash2 /> Remove position
-              </Button>
-            </>
+      <div className="depth-chart-layout">
+        <section
+          className="depth-chart-sheet"
+          aria-label={group + ' depth chart'}
+        >
+          {positions.length ? (
+            <div
+              className="depth-chart-scroll"
+              tabIndex={0}
+              aria-label="Depth chart table"
+            >
+              <table className="depth-chart-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Position</th>
+                    {Array.from({ length: depth }, (_, index) => (
+                      <th scope="col" key={index}>
+                        {depthLabel(index)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {positions.map((slots) => (
+                    <tr key={slots[0].id}>
+                      <th scope="row">
+                        <strong>{slots[0].pos || 'Unnamed position'}</strong>
+                        <button
+                          type="button"
+                          disabled={depthSaving}
+                          onClick={() => addBackup(slots[0])}
+                          aria-label={'Add backup for ' + slots[0].pos}
+                        >
+                          <Plus size={14} /> Backup
+                        </button>
+                      </th>
+                      {Array.from({ length: depth }, (_, index) => {
+                        const slot = slots[index];
+                        const athlete =
+                          slot &&
+                          roster.find((person) => person.id === slot.athleteId);
+                        return (
+                          <td key={index}>
+                            {slot ? (
+                              <button
+                                type="button"
+                                disabled={depthSaving}
+                                aria-pressed={selectedId === slot.id}
+                                onClick={() => setSelectedId(slot.id)}
+                                aria-label={
+                                  slot.pos +
+                                  ' ' +
+                                  depthLabel(index) +
+                                  ': ' +
+                                  (athlete?.name ?? 'Unassigned')
+                                }
+                              >
+                                <strong>
+                                  {athlete?.name ??
+                                    (slot.athleteId
+                                      ? 'Athlete unavailable'
+                                      : 'Unassigned')}
+                                </strong>
+                                {athlete?.no != null && (
+                                  <small>#{athlete.no}</small>
+                                )}
+                              </button>
+                            ) : (
+                              <span className="depth-chart-empty-cell">—</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : (
-            <div className="viewer-empty-state compact">
-              <CircleDot />
-              <strong>Select a position</strong>
-              <span>
-                Add or select a position card to edit its name, athlete, and
-                placement.
-              </span>
+            <div className="depth-chart-empty">
+              <Shirt size={24} aria-hidden="true" />
+              <h2>No {group.toLowerCase()} positions yet</h2>
+              <p>
+                Add a position, assign a starter, then add backups as needed.
+              </p>
+              <Button
+                disabled={depthSaving}
+                onClick={() => setPositionDialogOpen(true)}
+              >
+                <Plus /> Add first position
+              </Button>
             </div>
           )}
-        </aside>
+        </section>
+        {selected && (
+          <aside
+            className="depth-detail"
+            aria-label="Position details"
+            ref={depthDetails}
+          >
+            <div className="properties-heading">
+              <strong>{selected.pos}</strong>
+              <Badge>{depthLabel(selectedRank)}</Badge>
+            </div>
+            <label
+              className="depth-position-name"
+              htmlFor="depth-position-name"
+            >
+              Position name
+              <Input
+                disabled={depthSaving}
+                maxLength={100}
+                id="depth-position-name"
+                onChange={(event) => renamePosition(event.target.value)}
+                value={selected.pos}
+              />
+            </label>
+            <NativeSelect
+              aria-label={
+                'Choose ' +
+                selected.pos +
+                ' ' +
+                depthLabel(selectedRank).toLowerCase()
+              }
+              className="depth-athlete-select"
+              disabled={depthSaving}
+              onChange={(event) =>
+                updateSlot(selected.id, { athleteId: event.target.value })
+              }
+              value={selected.athleteId}
+            >
+              <NativeSelectOption value="">Unassigned</NativeSelectOption>
+              {selected.athleteId && !selectedAthlete && (
+                <NativeSelectOption value={selected.athleteId}>
+                  Athlete unavailable · choose another
+                </NativeSelectOption>
+              )}
+              {roster.map((athlete) => (
+                <NativeSelectOption key={athlete.id} value={athlete.id}>
+                  {athlete.no === null ? '—' : `#${athlete.no}`} ·{' '}
+                  {athlete.name}
+                  {athlete.position ? ` · ${athlete.position}` : ''}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+            <div className="depth-rank-actions">
+              <Button
+                variant="outline"
+                disabled={depthSaving || selectedRank < 1}
+                onClick={() => moveRank(-1)}
+              >
+                Move up
+              </Button>
+              <Button
+                variant="outline"
+                disabled={
+                  depthSaving || selectedRank >= selectedSlots.length - 1
+                }
+                onClick={() => moveRank(1)}
+              >
+                Move down
+              </Button>
+            </div>
+            <div className="detail-section compact">
+              <div className="property-title">
+                <strong>Role notes</strong>
+                <Lock />
+              </div>
+              <Textarea
+                aria-label="Role notes"
+                maxLength={10000}
+                disabled={depthSaving}
+                value={selected.notes}
+                onChange={(event) =>
+                  updateSlot(selected.id, { notes: event.target.value })
+                }
+                placeholder="Add a real game or role note…"
+              />
+            </div>
+            <Button
+              className="w-full"
+              disabled={depthSaving}
+              onClick={() => {
+                const next = {
+                  ...layouts,
+                  [group]: lineup.filter((slot) => slot.id !== selected.id),
+                };
+                setSelectedId('');
+                setLayouts(next);
+              }}
+              variant="outline"
+            >
+              <Trash2 /> Remove depth slot
+            </Button>
+          </aside>
+        )}
       </div>
       {dirty && (
         <div className="depth-mobile-save">
@@ -5773,7 +5335,7 @@ function DepthChartsView({
           <Button
             aria-label="Save depth-chart changes"
             className="module-primary"
-            disabled={depthSaving || Boolean(draggingId)}
+            disabled={depthSaving}
             onClick={() => void persistLayouts(layouts)}
           >
             Save layout
@@ -5792,8 +5354,8 @@ function DepthChartsView({
             <DialogHeader>
               <DialogTitle>Add a team position</DialogTitle>
               <DialogDescription>
-                Name the role exactly as your team uses it. You can assign an
-                athlete and move it on the board next.
+                Use your team’s position name. You can assign the starter and
+                add backups next.
               </DialogDescription>
             </DialogHeader>
             <div className="athlete-form-grid">
@@ -5853,7 +5415,9 @@ function DepthChartsView({
             >
               Download draft
             </Button>
-            <Button onClick={reloadSaved}>Discard and reload</Button>
+            <Button variant="destructive" onClick={reloadSaved}>
+              Discard and reload
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -5876,6 +5440,7 @@ function DepthChartsView({
               Keep editing
             </Button>
             <Button
+              variant="destructive"
               onClick={() => {
                 setPositionCloseConfirm(false);
                 setPositionName('');
@@ -5960,6 +5525,16 @@ function ReportsView({
       : onNavigate('Film Room');
   const openReportPlan = () =>
     onOpenDataset(reportFilm.selection, 'Gameplanning');
+  const datasetId =
+    reportLoad === 'ready'
+      ? reportFilm.selection
+      : selection || reportFilm.selection;
+  const datasetLabel = !reportFilm.assets.length
+    ? 'No saved film'
+    : datasetId === 'all'
+      ? 'All saved films'
+      : (reportFilm.assets.find((asset) => asset.id === datasetId)?.title ??
+        reportFilm.label);
   return (
     <section className="module-surface reports-surface">
       <ModuleHeader
@@ -5972,7 +5547,7 @@ function ReportsView({
           disabled={reportLoad !== 'ready' || !reportRows.length}
           onClick={() => {
             downloadText(
-              'chalktalk-' +
+              'alltwelve-' +
                 reportUnit.toLowerCase().replaceAll(' ', '-') +
                 '-report.csv',
               filmReportCsv(reportFilm, reportUnit),
@@ -6005,30 +5580,27 @@ function ReportsView({
             </button>
           ))}
         </div>
-        <NativeSelect
-          aria-label="Choose film dataset"
-          value={
-            reportLoad === 'ready'
-              ? reportFilm.selection
-              : selection || reportFilm.selection
-          }
-          onChange={(event) => {
-            setSelection(event.target.value);
+        <Select
+          disabled={!reportFilm.assets.length}
+          value={datasetId || null}
+          onValueChange={(value) => {
+            if (!value) return;
+            setSelection(value);
             setReportLoad('loading');
           }}
         >
-          {!reportFilm.assets.length && (
-            <NativeSelectOption value="">No saved film</NativeSelectOption>
-          )}
-          {reportFilm.assets.length > 0 && (
-            <NativeSelectOption value="all">All saved films</NativeSelectOption>
-          )}
-          {reportFilm.assets.map((asset) => (
-            <NativeSelectOption key={asset.id} value={asset.id}>
-              {asset.title}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
+          <SelectTrigger aria-label="Choose film dataset">
+            <SelectValue>{datasetLabel}</SelectValue>
+          </SelectTrigger>
+          <SelectContent align="start" alignItemWithTrigger={false}>
+            <SelectItem value="all">All saved films</SelectItem>
+            {reportFilm.assets.map((asset) => (
+              <SelectItem key={asset.id} value={asset.id}>
+                {asset.title}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Button
           variant="outline"
           onClick={() => {
@@ -6118,10 +5690,6 @@ function ReportsView({
               </div>
             </article>
           </div>
-          <p className="report-method">
-            Yardage counts entries such as +8, -2 or 12 yards. Other result text
-            is uncounted; positive yardage is not a success rating.
-          </p>
           <div className="reports-layout reports-focused">
             <div className="reports-main">
               <section className="analytics-card">
@@ -6171,7 +5739,7 @@ function ReportsView({
                     <SlidersHorizontal />
                     <strong>No {reportUnit.toLowerCase()} clips charted</strong>
                     <span>
-                      Upload film and save clip data before ChalkTalk calculates
+                      Upload film and save clip data before AllTwelve calculates
                       tendencies.
                     </span>
                     <Button onClick={openReportFilm} size="sm">
@@ -6187,8 +5755,7 @@ function ReportsView({
                 <section className="analytics-card insight-rail-card">
                   <div className="analytics-head">
                     <div>
-                      <p className="eyebrow">Dataset health</p>
-                      <h3>What is actually available</h3>
+                      <h3>Charting coverage</h3>
                     </div>
                     <Film />
                   </div>
@@ -6229,6 +5796,10 @@ function ReportsView({
                       </p>
                     </div>
                   </article>
+                  <p className="report-method">
+                    Yardage uses recorded gains and losses such as +8, -2, or 12
+                    yards.
+                  </p>
                   <Button
                     className="w-full"
                     disabled={!reportClips.length}
@@ -6255,6 +5826,7 @@ const initialGameplanBuckets: { name: string; plays: string[] }[] = [];
 
 type GameplanningProps = {
   initialPlanId?: string;
+  onOpenRecord: (record: SearchResult) => boolean;
   onNavigate: (view: string) => void;
   onNotify: Notify;
   onEditingChange: (editing: boolean) => void;
@@ -6277,6 +5849,7 @@ function GameplanningView(props: GameplanningProps) {
 }
 function GameplanningEditor({
   onNavigate,
+  onOpenRecord,
   onNotify,
   initialSelection = '',
   onOpenDataset,
@@ -6924,24 +6497,28 @@ function GameplanningEditor({
                           </b>
                           <small>
                             {index === 0 ? 'Primary' : 'Complement'}
+                            {linked > 0 &&
+                              ` · ${linked} linked ${linked === 1 ? 'clip' : 'clips'}`}
                           </small>
                         </span>
-                        <button
-                          onClick={() =>
-                            onNavigate(linked ? 'Film Room' : 'Playbook')
-                          }
-                          type="button"
-                        >
-                          {linked ? (
-                            <>
-                              <Film /> {linked}
-                            </>
-                          ) : (
-                            <>
-                              <BookOpen /> Open
-                            </>
-                          )}
-                        </button>
+                        {savedPlay ? (
+                          <button
+                            aria-label={`Open ${savedPlay.name}`}
+                            onClick={() =>
+                              onOpenRecord({
+                                kind: 'play',
+                                id: savedPlay.id,
+                                name: savedPlay.name,
+                                detail: '',
+                              })
+                            }
+                            type="button"
+                          >
+                            <BookOpen /> Open
+                          </button>
+                        ) : (
+                          <span />
+                        )}
                         <Button
                           aria-label={`Remove ${savedPlay?.name ?? play}`}
                           onClick={() => {
@@ -7189,7 +6766,9 @@ function CalendarView({
   onNotify: Notify;
   teamSettings: TeamSettings;
 }) {
-  const [calendarView, setCalendarView] = useState('Week');
+  const isMobile = useIsMobile();
+  const [selectedView, setCalendarView] = useState<string | null>(null);
+  const calendarView = selectedView ?? (isMobile ? 'Agenda' : 'Week');
   const [calendarEvents, setCalendarEvents] = useState<CalendarEventRecord[]>(
     [],
   );
@@ -7209,6 +6788,7 @@ function CalendarView({
   const [monthOffset, setMonthOffset] = useState(0);
   const [eventSaving, setEventSaving] = useState(false);
   const [calendarEventError, setCalendarEventError] = useState('');
+  const [showCalendarRecovery, setShowCalendarRecovery] = useState(false);
   const [calendarConflict, setCalendarConflict] = useState(false);
   const [calendarReloadOpen, setCalendarReloadOpen] = useState(false);
   const [calendarDeleteOpen, setCalendarDeleteOpen] = useState(false);
@@ -7332,6 +6912,7 @@ function CalendarView({
     const date = value('date');
     const calendarRequestId =
       eventEditor?.id ?? (calendarCreationId.current ||= crypto.randomUUID());
+    let validationError = false;
     try {
       const response = await fetch('/api/calendar-events', {
         method: eventEditor ? 'PUT' : 'POST',
@@ -7356,18 +6937,19 @@ function CalendarView({
           notes: value('notes'),
         }),
       });
-      const data = (await response.json()) as {
+      validationError = response.status === 400;
+      const data = (await response.json().catch(() => null)) as {
         event?: CalendarEventRecord;
         error?: string;
-      };
+      } | null;
       if (response.status === 409) setCalendarConflict(true);
       if (
         !response.ok ||
-        !data.event ||
+        !data?.event ||
         data.event.id !== calendarRequestId ||
         !/^[a-f0-9]{64}$/.test(data.event.version ?? '')
       )
-        throw new Error(data.error ?? 'Unable to save the event.');
+        throw new Error(data?.error ?? 'Unable to save the event.');
       setCalendarEvents((events) =>
         [
           ...events.filter((item) => item.id !== data.event!.id),
@@ -7385,12 +6967,11 @@ function CalendarView({
         `${data.event.title} ${eventEditor ? 'updated' : 'added to the calendar'}.`,
       );
     } catch (error) {
-      setCalendarEventError(
-        error instanceof Error ? error.message : 'Unable to save the event.',
-      );
-      setCalendarMessage(
-        error instanceof Error ? error.message : 'Unable to save the event.',
-      );
+      const message =
+        error instanceof Error ? error.message : 'Unable to save the event.';
+      setShowCalendarRecovery(!validationError);
+      setCalendarEventError(message);
+      setCalendarMessage(message);
     } finally {
       calendarWriteLock.current = false;
       setEventSaving(false);
@@ -7407,7 +6988,7 @@ function CalendarView({
         {
           method: 'DELETE',
           headers: {
-            'x-chalktalk-calendar-version': selectedEvent.version ?? '',
+            'x-alltwelve-calendar-version': selectedEvent.version ?? '',
           },
           signal: AbortSignal.timeout(20000),
         },
@@ -7515,7 +7096,7 @@ function CalendarView({
 
   const subscribeCalendar = () => {
     downloadText(
-      'chalktalk-calendar.ics',
+      'alltwelve-calendar.ics',
       calendarExport(calendarEvents),
       'text/calendar;charset=utf-8',
     );
@@ -7600,7 +7181,6 @@ function CalendarView({
       <div className="local-data-status">
         <span className={eventSaving ? 'sync-dot working' : 'sync-dot'} />
         <strong>{calendarMessage}</strong>
-        <small>{calendarEvents.length} events</small>
       </div>
       <div className="planning-toolbar">
         <div className="calendar-nav">
@@ -7645,7 +7225,7 @@ function CalendarView({
         {calendarView === 'Week' ? (
           <div className="week-calendar">
             <div className="week-head">
-              <span>TIME</span>
+              <span>Time</span>
               {days.map((day, index) => (
                 <div
                   className={
@@ -7759,10 +7339,10 @@ function CalendarView({
           <div className={`calendar-alternate ${calendarView.toLowerCase()}`}>
             <div className="analytics-head">
               <div>
-                <p className="eyebrow">{calendarView} view</p>
-                <h3>{periodLabel}</h3>
+                <h3>
+                  {calendarView === 'Agenda' ? 'Week agenda' : 'Month agenda'}
+                </h3>
               </div>
-              <Badge>{periodEvents.length} events</Badge>
             </div>
             {periodEvents.length ? (
               periodEvents.map((event) => (
@@ -7777,7 +7357,10 @@ function CalendarView({
                     <small>
                       {calendarDate(event.startsAt)} ·{' '}
                       {eventClock(event.startsAt).label} –{' '}
-                      {calendarDate(event.endsAt)} ·{' '}
+                      {calendarDate(event.endsAt) !==
+                      calendarDate(event.startsAt)
+                        ? `${calendarDate(event.endsAt)} · `
+                        : ''}
                       {eventClock(event.endsAt).label} ·{' '}
                       {event.location || 'Location TBD'}
                     </small>
@@ -7789,7 +7372,7 @@ function CalendarView({
               <div className="pb-empty">
                 <CalendarDays />
                 <strong>
-                  No saved events in this {calendarView.toLowerCase()}
+                  No events this {calendarView === 'Month' ? 'month' : 'week'}
                 </strong>
                 <span>Use New event to add one.</span>
               </div>
@@ -7797,35 +7380,37 @@ function CalendarView({
           </div>
         )}
         <aside className="calendar-rail">
-          <section className="analytics-card">
-            <div className="analytics-head">
-              <div>
-                <p className="eyebrow">This week</p>
-                <h3>Upcoming</h3>
+          {calendarView === 'Week' && (
+            <section className="analytics-card">
+              <div className="analytics-head">
+                <div>
+                  <p className="eyebrow">This week</p>
+                  <h3>Upcoming</h3>
+                </div>
+                <span className="calendar-date">{weekEvents.length}</span>
               </div>
-              <span className="calendar-date">{weekEvents.length}</span>
-            </div>
-            {weekEvents.length ? (
-              <div className="day-agenda">
-                {weekEvents.slice(0, 4).map((item) => (
-                  <div key={item.id}>
-                    <b>{eventClock(item.startsAt).label}</b>
-                    <i />
-                    <span>
-                      <strong>{item.title}</strong>
-                      <small>{item.location || 'Location TBD'}</small>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="pb-empty">
-                <CalendarDays />
-                <strong>No events scheduled</strong>
-                <span>Add the first real team event.</span>
-              </div>
-            )}
-          </section>
+              {weekEvents.length ? (
+                <div className="day-agenda">
+                  {weekEvents.slice(0, 4).map((item) => (
+                    <div key={item.id}>
+                      <b>{eventClock(item.startsAt).label}</b>
+                      <i />
+                      <span>
+                        <strong>{item.title}</strong>
+                        <small>{item.location || 'Location TBD'}</small>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="pb-empty">
+                  <CalendarDays />
+                  <strong>No events scheduled</strong>
+                  <span>Add the first real team event.</span>
+                </div>
+              )}
+            </section>
+          )}
           <CalendarAvailability onOpenRoster={() => onNavigate('Athletes')} />
         </aside>
       </div>
@@ -7846,48 +7431,6 @@ function CalendarView({
             onChangeCapture={() => setEventDirty(true)}
             onSubmit={createCalendarEvent}
           >
-            {calendarEventError ? (
-              <p role="alert">{calendarEventError}</p>
-            ) : null}
-            {calendarEventError ? (
-              <div className="flex flex-wrap gap-2 my-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={eventSaving}
-                  onClick={() => {
-                    const fields = calendarFormRef.current
-                      ? Object.fromEntries(
-                          new FormData(calendarFormRef.current),
-                        )
-                      : {};
-                    downloadText(
-                      'calendar-event-draft.json',
-                      JSON.stringify(
-                        {
-                          id: eventEditor?.id ?? calendarCreationId.current,
-                          version: eventEditor?.version,
-                          fields,
-                        },
-                        null,
-                        2,
-                      ),
-                      'application/json',
-                    );
-                  }}
-                >
-                  Download draft
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={eventSaving}
-                  onClick={() => setCalendarReloadOpen(true)}
-                >
-                  Load latest saved event
-                </Button>
-              </div>
-            ) : null}
             <DialogHeader>
               <DialogTitle>
                 {eventEditor ? 'Edit calendar event' : 'Add calendar event'}
@@ -8005,8 +7548,8 @@ function CalendarView({
                   type="time"
                 />
               </label>
-              <label className="full" htmlFor="calendar-event-location">
-                Location
+              <div className="col-span-full">
+                <label htmlFor="calendar-event-location">Location</label>
                 <div className="saved-location-row">
                   <Input
                     id="calendar-event-location"
@@ -8042,7 +7585,7 @@ function CalendarView({
                       ))}
                   </NativeSelect>
                 </div>
-              </label>
+              </div>
               <label className="full" htmlFor="calendar-event-notes">
                 Notes
                 <Textarea
@@ -8054,6 +7597,50 @@ function CalendarView({
                 />
               </label>
             </div>
+            {calendarEventError ? (
+              <div className="dialog-feedback">
+                <p role="alert">{calendarEventError}</p>
+                {showCalendarRecovery && (
+                  <div className="dialog-feedback-actions">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={eventSaving}
+                      onClick={() => {
+                        const fields = calendarFormRef.current
+                          ? Object.fromEntries(
+                              new FormData(calendarFormRef.current),
+                            )
+                          : {};
+                        downloadText(
+                          'calendar-event-draft.json',
+                          JSON.stringify(
+                            {
+                              id: eventEditor?.id ?? calendarCreationId.current,
+                              version: eventEditor?.version,
+                              fields,
+                            },
+                            null,
+                            2,
+                          ),
+                          'application/json',
+                        );
+                      }}
+                    >
+                      Download draft
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={eventSaving}
+                      onClick={() => setCalendarReloadOpen(true)}
+                    >
+                      Load latest saved event
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ) : null}
             <DialogFooter>
               <Button disabled={eventSaving || calendarConflict} type="submit">
                 {eventSaving
@@ -8122,6 +7709,7 @@ function CalendarView({
               Keep event
             </Button>
             <Button
+              variant="destructive"
               disabled={eventSaving}
               onClick={() => void deleteCalendarEvent()}
             >
@@ -8143,6 +7731,7 @@ function CalendarView({
               Keep editing
             </Button>
             <Button
+              variant="destructive"
               onClick={() => {
                 setEventLeaveOpen(false);
                 setEventOpen(false);
@@ -8782,15 +8371,12 @@ function PracticePlansView({
         )}
       </details>
       <div className="planning-toolbar">
-        <NativeSelect
-          aria-label="Choose practice plan"
-          onChange={(event) => {
-            if (!event.target.value)
-              practiceCreationId.current = crypto.randomUUID();
-            const plan = practicePlans.find(
-              (item) => item.id === event.target.value,
-            );
-            setSelectedPlanId(event.target.value);
+        <WorkspaceSelect
+          label="Choose practice plan"
+          onChange={(id) => {
+            if (!id) practiceCreationId.current = crypto.randomUUID();
+            const plan = practicePlans.find((item) => item.id === id);
+            setSelectedPlanId(id);
             setPracticeBlocks(plan?.blocks ?? []);
             setGenerated(plan?.generated ?? false);
             setSourceId(plan?.gameplanSource?.id ?? '');
@@ -8798,14 +8384,15 @@ function PracticePlansView({
             setPracticeConflict(false);
           }}
           value={selectedPlanId}
-        >
-          <NativeSelectOption value="">No saved plan</NativeSelectOption>
-          {practicePlans.map((plan) => (
-            <NativeSelectOption key={plan.id} value={plan.id}>
-              {plan.practiceDate} · {plan.title}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
+          disabled={practiceBusy}
+          options={[
+            { value: '', label: 'No saved plan' },
+            ...practicePlans.map((plan) => ({
+              value: plan.id,
+              label: `${plan.practiceDate} · ${plan.title}`,
+            })),
+          ]}
+        />
         <Button
           disabled={!selectedPlan}
           onClick={() => {
@@ -8847,37 +8434,46 @@ function PracticePlansView({
             {practiceBlocks.length === 1 ? 'segment' : 'segments'}
           </span>
         </div>
-        <div className="practice-load">
-          <span>
-            <b>
-              {practiceBlocks.filter((block) => block[4] === 'offence').length}
-            </b>
-            Offence
-          </span>
-          <span>
-            <b>
-              {practiceBlocks.filter((block) => block[4] === 'defence').length}
-            </b>
-            Defence
-          </span>
-          <span>
-            <b>
-              {practiceBlocks.filter((block) => block[4] === 'teams').length}
-            </b>
-            Teams
-          </span>
-          <span>
-            <b>
-              {
-                practiceBlocks.filter(
-                  (block) =>
-                    !['offence', 'defence', 'teams'].includes(block[4]),
-                ).length
-              }
-            </b>
-            Team / prep
-          </span>
-        </div>
+        <details className="practice-unit-summary">
+          <summary>Segments by unit</summary>
+          <div className="practice-load">
+            <span>
+              <b>
+                {
+                  practiceBlocks.filter((block) => block[4] === 'offence')
+                    .length
+                }
+              </b>
+              Offence
+            </span>
+            <span>
+              <b>
+                {
+                  practiceBlocks.filter((block) => block[4] === 'defence')
+                    .length
+                }
+              </b>
+              Defence
+            </span>
+            <span>
+              <b>
+                {practiceBlocks.filter((block) => block[4] === 'teams').length}
+              </b>
+              Teams
+            </span>
+            <span>
+              <b>
+                {
+                  practiceBlocks.filter(
+                    (block) =>
+                      !['offence', 'defence', 'teams'].includes(block[4]),
+                  ).length
+                }
+              </b>
+              Team / prep
+            </span>
+          </div>
+        </details>
         <Button
           disabled={!practiceBlocks.length}
           onClick={() => {
@@ -8899,10 +8495,6 @@ function PracticePlansView({
           <div className="practice-builder-head">
             <div>
               <strong>Practice timeline</strong>
-              <span>
-                {selectedPlan ? 'Saved plan' : 'Create a plan to begin'} ·{' '}
-                {practiceBlocks.length} segments
-              </span>
             </div>
             <Button
               disabled={!selectedPlan}
@@ -8936,7 +8528,7 @@ function PracticePlansView({
                 <span className="block-tone" />
                 <div className="practice-copy">
                   <strong>{block[2]}</strong>
-                  <p>{block[3] || 'No coaching focus added.'}</p>
+                  {block[3] && <p>{block[3]}</p>}
                 </div>
                 <div className="practice-links">
                   <span>
@@ -9378,6 +8970,7 @@ function PracticePlansView({
               Keep editing
             </Button>
             <Button
+              variant="destructive"
               onClick={() => {
                 setPracticeFormDirty(false);
                 setDiscardPracticeForm(false);
@@ -9412,6 +9005,7 @@ function PracticePlansView({
               Keep draft
             </Button>
             <Button
+              variant="destructive"
               onClick={() => {
                 setConfirmPracticeReload(false);
                 setPracticeFormDirty(false);
@@ -9534,10 +9128,11 @@ function SettingsView({
         description="Manage your team profile, season, account, and saved data."
       />
       <div className="settings-layout">
-        <aside className="settings-nav">
+        <nav className="settings-nav" aria-label="Settings sections">
           {tabs.map((item, index) => (
             <button
               className={activeTab === item ? 'active' : ''}
+              aria-current={activeTab === item ? 'true' : undefined}
               key={item}
               disabled={accessEditing && activeTab !== item}
               onClick={() => setActiveTab(item)}
@@ -9558,13 +9153,12 @@ function SettingsView({
               <ChevronRight />
             </button>
           ))}
-        </aside>
+        </nav>
         {activeTab === 'Team profile' ? (
           <div className="settings-card">
             <div className="settings-section-head">
               <div>
                 <h2>Team profile</h2>
-                <p>This information appears throughout ChalkTalk.</p>
               </div>
               <MediaAvatar
                 assetKey="team-logo"
@@ -9574,74 +9168,76 @@ function SettingsView({
                 revision={assetRevision}
               />
             </div>
-            <div className="asset-manager-grid">
-              {[
-                {
-                  key: 'team-logo',
-                  label: 'Team logo',
-                  fallback: initialsFor(teamSettings.teamName),
-                  className: 'large-crest home-crest',
-                },
-                {
-                  key: 'opponent-logo',
-                  label: 'Opponent logo',
-                  fallback: 'OP',
-                  className: 'large-crest away-crest',
-                },
-                {
-                  key: 'coach-profile',
-                  label: 'Coach photo',
-                  fallback: initialsFor(session.user.name),
-                  className: 'detail-avatar',
-                },
-                {
-                  key: 'player-profile',
-                  label: 'Player photo',
-                  fallback: 'PL',
-                  className: 'detail-avatar',
-                },
-              ].map((asset) => (
-                <article key={asset.key}>
-                  <MediaAvatar
-                    assetKey={asset.key}
-                    className={asset.className}
-                    fallback={asset.fallback}
-                    label={asset.label}
-                    revision={assetRevision}
-                  />
-                  <div>
-                    <strong>{asset.label}</strong>
-                    <span>Uploaded file or initials fallback</span>
+            <details className="settings-assets">
+              <summary>Logos and profile photos</summary>
+              <div className="asset-manager-grid">
+                {[
+                  {
+                    key: 'team-logo',
+                    label: 'Team logo',
+                    fallback: initialsFor(teamSettings.teamName),
+                    className: 'large-crest home-crest',
+                  },
+                  {
+                    key: 'opponent-logo',
+                    label: 'Opponent logo',
+                    fallback: 'OP',
+                    className: 'large-crest away-crest',
+                  },
+                  {
+                    key: 'coach-profile',
+                    label: 'Coach photo',
+                    fallback: initialsFor(session.user.name),
+                    className: 'detail-avatar',
+                  },
+                  {
+                    key: 'player-profile',
+                    label: 'Player photo',
+                    fallback: 'PL',
+                    className: 'detail-avatar',
+                  },
+                ].map((asset) => (
+                  <article key={asset.key}>
+                    <MediaAvatar
+                      assetKey={asset.key}
+                      className={asset.className}
+                      fallback={asset.fallback}
+                      label={asset.label}
+                      revision={assetRevision}
+                    />
                     <div>
-                      <MediaUploadControl
-                        assetKey={asset.key}
-                        label="Choose image"
-                        onNotify={onNotify}
-                        onUploaded={onAssetsChanged}
-                      />
-                      <Button
-                        onClick={async () => {
-                          try {
-                            await deleteMedia(asset.key);
-                            onAssetsChanged();
-                            onNotify(`${asset.label} removed.`, 'info');
-                          } catch {
-                            onNotify(
-                              `${asset.label} could not be removed.`,
-                              'error',
-                            );
-                          }
-                        }}
-                        size="xs"
-                        variant="ghost"
-                      >
-                        <Trash2 /> Remove
-                      </Button>
+                      <strong>{asset.label}</strong>
+                      <div>
+                        <MediaUploadControl
+                          assetKey={asset.key}
+                          label="Choose image"
+                          onNotify={onNotify}
+                          onUploaded={onAssetsChanged}
+                        />
+                        <Button
+                          onClick={async () => {
+                            try {
+                              await deleteMedia(asset.key);
+                              onAssetsChanged();
+                              onNotify(`${asset.label} removed.`, 'info');
+                            } catch {
+                              onNotify(
+                                `${asset.label} could not be removed.`,
+                                'error',
+                              );
+                            }
+                          }}
+                          size="xs"
+                          variant="ghost"
+                        >
+                          <Trash2 /> Remove
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                </article>
-              ))}
-            </div>
+                  </article>
+                ))}
+              </div>
+            </details>
             <div className="settings-form">
               <label htmlFor="team-name">
                 Team name
@@ -9861,7 +9457,7 @@ function SettingsView({
             {activeTab === 'Notifications' ? (
               <div className="settings-owner-card">
                 <p>
-                  ChalkTalk does not currently send email or push notifications.
+                  AllTwelve does not currently send email or push notifications.
                   View saved schedules and install progress in your workspace.
                 </p>
               </div>
@@ -9885,7 +9481,7 @@ function SettingsView({
                   <Button
                     onClick={() => {
                       downloadText(
-                        'chalktalk-settings.json',
+                        'alltwelve-settings.json',
                         JSON.stringify(teamSettings, null, 2),
                         'application/json',
                       );

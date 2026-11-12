@@ -1,4 +1,5 @@
 'use client';
+import { Brand } from '@/components/brand';
 import {
   useEffect,
   useRef,
@@ -27,10 +28,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from '@/components/ui/native-select';
+import { WorkspaceSelect } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
@@ -666,7 +664,7 @@ export function PlayDesigner({
         [
           JSON.stringify(
             {
-              format: 'chalktalk-designer-draft-v1',
+              format: 'alltwelve-designer-draft-v1',
               kind: formation ? 'formation' : 'play',
               savedAt: new Date().toISOString(),
               data: savePayload(),
@@ -681,7 +679,7 @@ export function PlayDesigner({
     setDraftDownload(url);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'chalktalk-designer-draft.json';
+    link.download = 'alltwelve-designer-draft.json';
     link.click();
   };
   const reloadSaved = async () => {
@@ -745,8 +743,9 @@ export function PlayDesigner({
   useEffect(() => {
     const keys = (event: KeyboardEvent) => {
       if (
+        event.defaultPrevented ||
         (event.target as Element)?.closest(
-          'input,textarea,select,[contenteditable="true"]',
+          'input,textarea,select,[contenteditable="true"],[data-slot="select-trigger"],[data-slot="select-content"]',
         )
       )
         return;
@@ -803,6 +802,7 @@ export function PlayDesigner({
   return (
     <div className="pd-designer" ref={root} aria-busy={busy}>
       <header className="pd-header">
+        <Brand />
         <Button
           aria-label="Back to library"
           disabled={busy}
@@ -849,7 +849,7 @@ export function PlayDesigner({
             Reload saved version
           </Button>
           {draftDownload ? (
-            <a href={draftDownload} download="chalktalk-designer-draft.json">
+            <a href={draftDownload} download="alltwelve-designer-draft.json">
               Save draft file
             </a>
           ) : null}
@@ -1037,19 +1037,20 @@ export function PlayDesigner({
                 />
               </label>
               <span>{spotLabel(draft.scene.fieldPosition)}</span>
-              <NativeSelect
-                aria-label="Field depth shown"
-                onChange={(event) => {
-                  setHeightYards(Number(event.target.value));
+              <WorkspaceSelect
+                label="Field depth shown"
+                onChange={(value) => {
+                  setHeightYards(Number(value));
                   setZoom(1);
                   setCameraPan({ x: 0, y: 0 });
                 }}
                 value={String(heightYards)}
-              >
-                <NativeSelectOption value="30">30 yards</NativeSelectOption>
-                <NativeSelectOption value="60">60 yards</NativeSelectOption>
-                <NativeSelectOption value="150">Full field</NativeSelectOption>
-              </NativeSelect>
+                options={[
+                  { value: '30', label: '30 yards' },
+                  { value: '60', label: '60 yards' },
+                  { value: '150', label: 'Full field' },
+                ]}
+              />
             </div>
           </details>
           {selected ? (
@@ -1298,11 +1299,11 @@ export function PlayDesigner({
                       </label>
                       <label htmlFor="pd-control-2">
                         Symbol
-                        <NativeSelect
+                        <WorkspaceSelect
                           id="pd-control-2"
-                          aria-label="Player symbol"
+                          label="Player symbol"
                           value={player.symbol ?? 'circle'}
-                          onChange={(event) => {
+                          onChange={(value) => {
                             const list =
                               kind === 'opponent'
                                 ? 'opponentPlayers'
@@ -1313,7 +1314,7 @@ export function PlayDesigner({
                                 p.id === id
                                   ? {
                                       ...p,
-                                      symbol: event.target.value as
+                                      symbol: value as
                                         | 'circle'
                                         | 'triangle'
                                         | 'square',
@@ -1322,17 +1323,12 @@ export function PlayDesigner({
                               ),
                             });
                           }}
-                        >
-                          <NativeSelectOption value="circle">
-                            Circle
-                          </NativeSelectOption>
-                          <NativeSelectOption value="triangle">
-                            Triangle
-                          </NativeSelectOption>
-                          <NativeSelectOption value="square">
-                            Square
-                          </NativeSelectOption>
-                        </NativeSelect>
+                          options={[
+                            { value: 'circle', label: 'Circle' },
+                            { value: 'triangle', label: 'Triangle' },
+                            { value: 'square', label: 'Square' },
+                          ]}
+                        />
                       </label>
                     </div>
                   ) : null}
@@ -1340,48 +1336,40 @@ export function PlayDesigner({
                     <div className="pd-property-row">
                       <label htmlFor="pd-control-3">
                         Line
-                        <NativeSelect
+                        <WorkspaceSelect
                           id="pd-control-3"
-                          aria-label="Route line style"
+                          label="Route line style"
                           value={route?.lineStyle ?? line}
-                          onChange={(event) =>
+                          onChange={(value) =>
                             changeRoute({
-                              lineStyle: event.target
-                                .value as Route['lineStyle'],
+                              lineStyle: value as Route['lineStyle'],
                             })
                           }
-                        >
-                          {['solid', 'dashed', 'dotted', 'curve'].map(
-                            (style) => (
-                              <NativeSelectOption key={style} value={style}>
-                                {style}
-                              </NativeSelectOption>
-                            ),
+                          options={['solid', 'dashed', 'dotted', 'curve'].map(
+                            (value) => ({
+                              value,
+                              label: value[0].toUpperCase() + value.slice(1),
+                            }),
                           )}
-                        </NativeSelect>
+                        />
                       </label>
                       <label htmlFor="pd-control-4">
                         Ending
-                        <NativeSelect
+                        <WorkspaceSelect
                           id="pd-control-4"
-                          aria-label="Route ending"
+                          label="Route ending"
                           value={route?.ending ?? ending}
-                          onChange={(event) =>
+                          onChange={(value) =>
                             changeRoute({
-                              ending: event.target.value as Route['ending'],
+                              ending: value as Route['ending'],
                             })
                           }
-                        >
-                          <NativeSelectOption value="arrow">
-                            Arrow
-                          </NativeSelectOption>
-                          <NativeSelectOption value="bar">
-                            Block / bar
-                          </NativeSelectOption>
-                          <NativeSelectOption value="none">
-                            None
-                          </NativeSelectOption>
-                        </NativeSelect>
+                          options={[
+                            { value: 'arrow', label: 'Arrow' },
+                            { value: 'bar', label: 'Block / bar' },
+                            { value: 'none', label: 'None' },
+                          ]}
+                        />
                       </label>
                     </div>
                   ) : null}
@@ -1394,26 +1382,21 @@ export function PlayDesigner({
                       <div className="pd-property-row">
                         <label htmlFor="pd-control-7">
                           Shape
-                          <NativeSelect
+                          <WorkspaceSelect
                             id="pd-control-7"
-                            aria-label="Coverage shape"
+                            label="Coverage shape"
                             value={zone.shape ?? 'ellipse'}
-                            onChange={(event) =>
+                            onChange={(value) =>
                               changeZone({
-                                shape: event.target.value as Zone['shape'],
+                                shape: value as Zone['shape'],
                               })
                             }
-                          >
-                            <NativeSelectOption value="ellipse">
-                              Oval / circle
-                            </NativeSelectOption>
-                            <NativeSelectOption value="rectangle">
-                              Rectangle
-                            </NativeSelectOption>
-                            <NativeSelectOption value="triangle">
-                              Triangle
-                            </NativeSelectOption>
-                          </NativeSelect>
+                            options={[
+                              { value: 'ellipse', label: 'Oval / circle' },
+                              { value: 'rectangle', label: 'Rectangle' },
+                              { value: 'triangle', label: 'Triangle' },
+                            ]}
+                          />
                         </label>
                         <label htmlFor="pd-control-8">
                           Rotation
@@ -1503,21 +1486,18 @@ export function PlayDesigner({
               <>
                 <label htmlFor="pd-control-11">
                   Owner
-                  <NativeSelect
+                  <WorkspaceSelect
                     id="pd-control-11"
-                    aria-label="Formation ownership"
+                    label="Formation ownership"
                     value={draft.scope}
-                    onChange={(event) =>
-                      edit({ scope: event.target.value as Draft['scope'] })
+                    onChange={(value) =>
+                      edit({ scope: value as Draft['scope'] })
                     }
-                  >
-                    <NativeSelectOption value="team">
-                      Our team
-                    </NativeSelectOption>
-                    <NativeSelectOption value="scout">
-                      Opponent / scout
-                    </NativeSelectOption>
-                  </NativeSelect>
+                    options={[
+                      { value: 'team', label: 'Our team' },
+                      { value: 'scout', label: 'Opponent / scout' },
+                    ]}
+                  />
                 </label>
                 {draft.scope === 'scout' ? (
                   <label htmlFor="pd-control-12">
@@ -1563,15 +1543,14 @@ export function PlayDesigner({
                 </label>
                 <label htmlFor="pd-control-15">
                   Play type
-                  <NativeSelect
+                  <WorkspaceSelect
                     id="pd-control-15"
-                    aria-label="Play type"
+                    label="Play type"
                     value={draft.family}
-                    onChange={(event) =>
-                      edit({ family: event.target.value as Draft['family'] })
+                    onChange={(value) =>
+                      edit({ family: value as Draft['family'] })
                     }
-                  >
-                    {Array.from(
+                    options={Array.from(
                       new Set([
                         draft.family,
                         ...(side === 'Defence'
@@ -1587,32 +1566,25 @@ export function PlayDesigner({
                               ]
                             : ['Unassigned', 'Run', 'Pass', 'RPO', 'Screen']),
                       ]),
-                    ).map((value) => (
-                      <NativeSelectOption key={value} value={value}>
-                        {value}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
+                    ).map((value) => ({ value, label: value }))}
+                  />
                 </label>
                 <details>
                   <summary>Our formation</summary>
-                  <NativeSelect
-                    aria-label="Apply our formation"
+                  <WorkspaceSelect
+                    label="Apply our formation"
                     value=""
-                    onChange={(event) =>
-                      setPendingFormation(event.target.value)
-                    }
-                  >
-                    <NativeSelectOption value="">
-                      Choose saved alignment…
-                    </NativeSelectOption>
-                    {ownFormations.map((f) => (
-                      <NativeSelectOption key={f.id} value={f.id}>
-                        {f.name}
-                        {f.packageName ? ` · ${f.packageName}` : ''}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
+                    onChange={setPendingFormation}
+                    options={[
+                      { value: '', label: 'Choose saved alignment…' },
+                      ...ownFormations.map((f) => ({
+                        value: f.id,
+                        label: [f.name, f.packageName]
+                          .filter(Boolean)
+                          .join(' · '),
+                      })),
+                    ]}
+                  />
                   <p>
                     Applying an alignment replaces our players and routes. Undo
                     restores the previous drawing.
@@ -1626,13 +1598,11 @@ export function PlayDesigner({
                       ? 'Hide opponent'
                       : 'Show opponent'}
                   </Button>
-                  <NativeSelect
-                    aria-label="Opponent formation"
+                  <WorkspaceSelect
+                    label="Opponent formation"
                     value={draft.scene.opponentFormationId ?? ''}
-                    onChange={(event) => {
-                      const look = formations.find(
-                        (f) => f.id === event.target.value,
-                      );
+                    onChange={(id) => {
+                      const look = formations.find((f) => f.id === id);
                       if (!look) return;
                       sceneEdit({
                         ...replaceScenePlayers(
@@ -1648,20 +1618,23 @@ export function PlayDesigner({
                         opponentFormationId: look.id,
                       });
                     }}
-                  >
-                    <NativeSelectOption value="">
-                      Choose a saved {opponentSide.toLowerCase()} look…
-                    </NativeSelectOption>
-                    {scoutLooks.map((f) => (
-                      <NativeSelectOption key={f.id} value={f.id}>
-                        {f.scope === 'scout'
-                          ? `${f.opponent} · `
-                          : 'Our team · '}
-                        {f.name}
-                        {f.packageName ? ` · ${f.packageName}` : ''}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
+                    options={[
+                      {
+                        value: '',
+                        label: `Choose a saved ${opponentSide.toLowerCase()} look…`,
+                      },
+                      ...scoutLooks.map((f) => ({
+                        value: f.id,
+                        label: [
+                          f.scope === 'scout' ? f.opponent : 'Our team',
+                          f.name,
+                          f.packageName,
+                        ]
+                          .filter(Boolean)
+                          .join(' · '),
+                      })),
+                    ]}
+                  />
                   <p>
                     Scout looks are drawn in Formations. Opponent positions can
                     be adjusted in this play without changing the source.
@@ -1787,7 +1760,11 @@ export function PlayDesigner({
             <Button disabled={busy} variant="outline" onClick={downloadDraft}>
               Download draft
             </Button>
-            <Button disabled={busy} onClick={() => void reloadSaved()}>
+            <Button
+              variant="destructive"
+              disabled={busy}
+              onClick={() => void reloadSaved()}
+            >
               {busy ? 'Reloading…' : 'Reload and discard draft'}
             </Button>
           </DialogFooter>

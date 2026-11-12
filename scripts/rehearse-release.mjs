@@ -98,24 +98,24 @@ for (const [index, archive] of archives.entries()) {
     config,
     JSON.stringify(
       {
-        name: 'chalktalk-release-rehearsal',
+        name: 'alltwelve-release-rehearsal',
         main: path.join(snapshot, 'dist/server/index.js'),
         compatibility_date: original.compatibility_date,
         compatibility_flags: original.compatibility_flags,
         no_bundle: true,
         rules: original.rules,
         assets: { directory: path.join(snapshot, 'dist/client') },
-        vars: { CHALKTALK_MODE: 'pilot' },
+        vars: { ALLTWELVE_MODE: 'pilot' },
         d1_databases: [
           {
             binding: 'DB',
-            database_name: 'chalktalk-rehearsal-local',
+            database_name: 'alltwelve-rehearsal-local',
             database_id: '00000000-0000-4000-8000-000000000001',
             migrations_dir: path.join(snapshot, 'dist/.openai/drizzle'),
           },
         ],
         r2_buckets: [
-          { binding: 'MEDIA', bucket_name: 'chalktalk-rehearsal-local' },
+          { binding: 'MEDIA', bucket_name: 'alltwelve-rehearsal-local' },
         ],
       },
       null,
@@ -534,8 +534,8 @@ async function verifySaved(label) {
         ...ownerHeaders('a'),
         origin,
         'content-type': 'image/png',
-        'x-chalktalk-upload-size': '7',
-        'x-chalktalk-filename': 'changed.png',
+        'x-alltwelve-upload-size': '7',
+        'x-alltwelve-filename': 'changed.png',
       },
       body: Buffer.from('changed'),
     });
@@ -585,15 +585,15 @@ async function verifySaved(label) {
         ...ownerHeaders('a'),
         origin,
         'content-type': 'image/png',
-        'x-chalktalk-upload-size': String(media.length),
-        'x-chalktalk-filename': 'rehearsal.png',
+        'x-alltwelve-upload-size': String(media.length),
+        'x-alltwelve-filename': 'rehearsal.png',
       },
       body: media,
     });
     assert.equal(restoredSource.status, 200);
   }
   const manifest = JSON.parse(
-    new TextDecoder().decode(zip['chalktalk-backup.json']),
+    new TextDecoder().decode(zip['alltwelve-backup.json']),
   );
   assert.equal(manifest.teamId, fixture.team);
   assert.ok(manifest.tables.plays.some((play) => play.id === fixture.play));
@@ -662,7 +662,7 @@ async function verifyStaffAccess(label, create = false) {
   for (const path of ['/api/team-access', '/api/backups', '/api/messages', '/api/sideline', '/api/media?key=coach-profile']) {
     await api(path, 'staff', undefined, 'GET', 403);
   }
-  const forged = await fetch(`${origin}/api/playbooks`, { headers: { ...ownerHeaders('staff'), 'x-chalktalk-team-id': (await api('/api/session', 'b')).team.id } });
+  const forged = await fetch(`${origin}/api/playbooks`, { headers: { ...ownerHeaders('staff'), 'x-alltwelve-team-id': (await api('/api/session', 'b')).team.id } });
   assert.equal(forged.status, 403);
   report.stages.push({ label: `${label}: staff membership, owner privacy and forged-team rejection verified`, verifiedAt: new Date().toISOString() });
 }
@@ -700,7 +700,7 @@ async function verifyPlayerAccess(label, create = false) {
 async function verifyMediaWrites(label) {
   const upload = async (key, bytes) => {
     const response = await fetch(`${origin}/api/media?key=${key}`, {
-    method: 'POST', headers: { ...ownerHeaders('a'), origin, 'content-type': 'video/mp4', 'x-chalktalk-upload-size': String(bytes.length) }, body: bytes,
+    method: 'POST', headers: { ...ownerHeaders('a'), origin, 'content-type': 'video/mp4', 'x-alltwelve-upload-size': String(bytes.length) }, body: bytes,
     signal: AbortSignal.timeout(15_000),
     });
     await response.text();
@@ -721,7 +721,7 @@ async function verifyMediaWrites(label) {
   assert.equal(read.status,206);
   assert.deepEqual(Buffer.from(await read.arrayBuffer()),bytes.subarray(1,6));
   console.log(`${label}: protected byte range verified`);
-  const erase = await fetch(`${origin}/api/film?assetId=${registered.asset.id}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin,'x-chalktalk-film-version':registered.asset.version},signal:AbortSignal.timeout(15_000)});
+  const erase = await fetch(`${origin}/api/film?assetId=${registered.asset.id}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin,'x-alltwelve-film-version':registered.asset.version},signal:AbortSignal.timeout(15_000)});
   assert.equal(erase.status,200);
   await erase.text();
   console.log(`${label}: versioned video removal finished`);
@@ -733,7 +733,7 @@ async function verifyMediaWrites(label) {
   const actual=await fetch(`${origin}/api/media?key=${raceKey}`,{headers:ownerHeaders('a'),signal:AbortSignal.timeout(15_000)});
   assert.deepEqual(Buffer.from(await actual.arrayBuffer()),candidates[winner]);
   registered=await api('/api/film','a',{action:'register',storageKey:raceKey,title:'Race winner',durationSeconds:10},'POST',201);
-  const erasedRace=await fetch(`${origin}/api/film?assetId=${registered.asset.id}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin,'x-chalktalk-film-version':registered.asset.version},signal:AbortSignal.timeout(15_000)});
+  const erasedRace=await fetch(`${origin}/api/film?assetId=${registered.asset.id}`,{method:'DELETE',headers:{...ownerHeaders('a'),origin,'x-alltwelve-film-version':registered.asset.version},signal:AbortSignal.timeout(15_000)});
   assert.equal(erasedRace.status,200);
   await erasedRace.text();
   report.stages.push({label:`${label}: immutable video bytes, concurrent upload winner and versioned film removal verified`,verifiedAt:new Date().toISOString()});
@@ -1287,8 +1287,8 @@ try {
       ...ownerHeaders('a'),
       origin,
       'content-type': 'image/png',
-      'x-chalktalk-upload-size': String(media.length),
-      'x-chalktalk-filename': 'rehearsal.png',
+      'x-alltwelve-upload-size': String(media.length),
+      'x-alltwelve-filename': 'rehearsal.png',
     },
     body: media,
   });
@@ -1329,8 +1329,8 @@ try {
         ...ownerHeaders('a'),
         origin,
         'content-type': 'video/mp4',
-        'x-chalktalk-upload-size': String(disposableVideo.length),
-        'x-chalktalk-filename': 'rehearsal.mp4',
+        'x-alltwelve-upload-size': String(disposableVideo.length),
+        'x-alltwelve-filename': 'rehearsal.mp4',
       },
       body: disposableVideo,
     },
@@ -1367,7 +1367,7 @@ try {
       headers: {
         ...ownerHeaders('a'),
         origin,
-        'x-chalktalk-film-version': videoRecord.asset.version,
+        'x-alltwelve-film-version': videoRecord.asset.version,
       },
     },
   );
@@ -1379,7 +1379,7 @@ try {
       headers: {
         ...ownerHeaders('a'),
         origin,
-        'x-chalktalk-film-version': chartedVideo.asset.version,
+        'x-alltwelve-film-version': chartedVideo.asset.version,
       },
     },
   );

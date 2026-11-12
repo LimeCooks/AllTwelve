@@ -2,7 +2,7 @@
 
 ## Objective
 
-A private, authenticated ChalkTalk workspace usable on laptop, iPhone and tablet. The owner starts with no roster, plays, formations, opponents, installs, film or schedule. Development and temporary test records must stay separate from the hosted workspace.
+A private, authenticated AllTwelve workspace usable on laptop, iPhone and tablet. The owner starts with no roster, plays, formations, opponents, installs, film or schedule. Development and temporary test records must stay separate from the hosted workspace.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ A private, authenticated ChalkTalk workspace usable on laptop, iPhone and tablet
 - D1 stores product records. `workspace_owners` maps the stable authenticated user ID to one team. Request-local database wrappers supply the team ID to every existing domain API. No browser-selected team ID or role grants server access.
 - R2 stores uploaded files under a team prefix. The same logical media key in another team must resolve to a different object.
 - `/api/session` distinguishes signed-out, first-time and returning owners. `/api/onboarding` creates the team, owner mapping and team settings atomically. It does not insert any football records.
-- Production requires authenticated identity. Only the development server can use the existing local prototype. `CHALKTALK_MODE=pilot` also disables prototype fallback in development.
+- Production requires authenticated identity. Only the development server can use the existing local prototype. `ALLTWELVE_MODE=pilot` also disables prototype fallback in development.
 - Hosted startup does not run the legacy bootstrap or cleanup code. The schema-only `drizzle/` chain is packaged by Sites. `db/migrations/` is retained as prototype history; it is not the hosted chain.
 - Git contains source only. `.wrangler/`, uploaded data, secrets and build output must never be included in the deployment source/archive.
 
@@ -34,7 +34,7 @@ Home now checks successful, complete calendar/install responses before showing c
 2. Continue auditing remaining module-specific prototype copy and incomplete controls. Staff/player invitations and account-to-athlete linking require real membership roles before external users can join.
 3. Verify every persisted module and uploaded file across two browser sessions/devices. Handle failed requests honestly; do not replace failures with apparent empty success.
 4. Verify responsive layouts and touch drawing on phone/tablet. Desktop tests are insufficient for this gate.
-5. Manual full export and offline recovery are implemented and tested separately; see [backups.md](backups.md). A separate-destination hosted recovery rehearsal now passes, including independent row comparison and reopening the saved play/install in normal ChalkTalk; see [cloud-recovery.md](cloud-recovery.md). Retention, maximum-size cloud checks and a simpler owner recovery handoff remain. Retain the local prototype unchanged; do not migrate its records into the clean pilot.
+5. Manual full export and offline recovery are implemented and tested separately; see [backups.md](backups.md). A separate-destination hosted recovery rehearsal now passes, including independent row comparison and reopening the saved play/install in normal AllTwelve; see [cloud-recovery.md](cloud-recovery.md). Retention, maximum-size cloud checks and a simpler owner recovery handoff remain. Retain the local prototype unchanged; do not migrate its records into the clean pilot.
 6. A repeatable local production-build update/rollback rehearsal now passes with isolated storage, saved domain records, uploaded bytes, backup ZIPs and owner isolation; see [releases.md](releases.md). Live hosted rollback and disaster recovery remain unverified. Development experiments must never share pilot data or publish automatically.
 7. Walk the real coaching workflows with the owner, recording and fixing defects. The first working deployment is a pilot milestone, not proof that the complete product is polished.
 

@@ -20,7 +20,7 @@ if (updating) {
   const marker = JSON.parse(
     await readFile(path.join(target, 'recovery-lab.json'), 'utf8'),
   );
-  if (marker.kind !== 'chalktalk-isolated-recovery-lab')
+  if (marker.kind !== 'alltwelve-isolated-recovery-lab')
     throw new Error('This folder is not a recovery lab.');
   const [pilot, lab] = await Promise.all([
     readFile(path.join(root, '.openai/hosting.json'), 'utf8'),
@@ -45,7 +45,7 @@ if (updating) {
   );
   await writeFile(
     path.join(target, 'recovery-lab.json'),
-    JSON.stringify({ kind: 'chalktalk-isolated-recovery-lab' }),
+    JSON.stringify({ kind: 'alltwelve-isolated-recovery-lab' }),
   );
   await writeFile(
     path.join(target, '.gitignore'),
@@ -81,7 +81,7 @@ await writeFile(
   path.join(target, 'package.json'),
   JSON.stringify(
     {
-      name: 'chalktalk-recovery-lab',
+      name: 'alltwelve-recovery-lab',
       private: true,
       type: 'module',
       scripts: { build: 'node build.mjs' },
@@ -95,7 +95,7 @@ await writeFile(
   path.join(target, 'wrangler.json'),
   JSON.stringify(
     {
-      name: 'chalktalk-recovery-lab',
+      name: 'alltwelve-recovery-lab',
       main: 'dist/server/index.js',
       compatibility_date: '2026-05-15',
       compatibility_flags: ['nodejs_compat'],

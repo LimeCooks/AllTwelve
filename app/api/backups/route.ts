@@ -188,7 +188,7 @@ export async function GET(request: Request) {
       {
         headers: {
           'content-type': 'application/zip',
-          'content-disposition': `attachment; filename="chalktalk-${snapshot.createdAt.slice(0, 10)}-part-${part}-of-${snapshot.parts}.zip"`,
+          'content-disposition': `attachment; filename="alltwelve-${snapshot.createdAt.slice(0, 10)}-part-${part}-of-${snapshot.parts}.zip"`,
           'cache-control': 'private, no-store',
           'x-content-type-options': 'nosniff',
         },

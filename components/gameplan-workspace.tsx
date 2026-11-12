@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { WorkspaceSelect } from '@/components/ui/select';
 import {
   NativeSelect,
   NativeSelectOption,
@@ -183,26 +184,31 @@ export function GameplanWorkspace({
   return (
     <>
       <section className="gameplan-library-controls">
-        <label>
+        <label htmlFor="gameplan-selection">
           Gameplan
-          <NativeSelect
-            aria-label="Choose gameplan"
+          <WorkspaceSelect
+            id="gameplan-selection"
+            label="Choose gameplan"
             value={selected}
             disabled={busy || editorEditing || Boolean(form)}
-            onChange={(event) => setSelected(event.target.value)}
-          >
-            <NativeSelectOption value="">Choose a gameplan…</NativeSelectOption>
-            {plans
-              .filter((plan) => !plan.archived || plan.id === selected)
-              .map((plan) => (
-                <NativeSelectOption key={plan.id} value={plan.id}>
-                  {plan.title}
-                  {plan.opponent ? ` · ${plan.opponent}` : ''}
-                  {plan.date ? ` · ${plan.date}` : ''}
-                  {plan.archived ? ' · Archived' : ''}
-                </NativeSelectOption>
-              ))}
-          </NativeSelect>
+            onChange={setSelected}
+            options={[
+              { value: '', label: 'Choose a gameplan…' },
+              ...plans
+                .filter((plan) => !plan.archived || plan.id === selected)
+                .map((plan) => ({
+                  value: plan.id,
+                  label: [
+                    plan.title,
+                    plan.opponent,
+                    plan.date,
+                    plan.archived && 'Archived',
+                  ]
+                    .filter(Boolean)
+                    .join(' · '),
+                })),
+            ]}
+          />
         </label>
         <Button
           disabled={busy || editorEditing}
@@ -379,9 +385,9 @@ export function GameplanWorkspace({
               ) : null}
             </div>
             {formError ? (
-              <p role="alert">
-                {formError} Your entered details remain in this form.
-              </p>
+              <div className="dialog-feedback">
+                <p role="alert">{formError}</p>
+              </div>
             ) : null}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={closeForm}>
@@ -399,8 +405,7 @@ export function GameplanWorkspace({
           <DialogHeader>
             <DialogTitle>Discard unsaved plan details?</DialogTitle>
             <DialogDescription>
-              The last saved gameplan will be retained. An uncertain earlier
-              save may already exist; reload the list to check it.
+              Unsaved plan details will be lost.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -408,6 +413,7 @@ export function GameplanWorkspace({
               Keep editing
             </Button>
             <Button
+              variant="destructive"
               onClick={() => {
                 setDiscardOpen(false);
                 setForm(null);

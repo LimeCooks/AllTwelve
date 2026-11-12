@@ -1,4 +1,5 @@
 'use client';
+import { Brand } from '@/components/brand';
 import {
   useEffect,
   useState,
@@ -157,7 +158,7 @@ export function WorkspaceGate({
     return (
       <main className="workspace-welcome">
         <section>
-          <span className="eyebrow">ChalkTalk · Private workspace</span>
+          <Brand />
           <h1>Team access is unavailable.</h1>
           <p>
             Ask your team owner for a current invitation. Your account will open
@@ -176,7 +177,7 @@ export function WorkspaceGate({
   return (
     <main className="workspace-welcome">
       <section>
-        <span className="eyebrow">ChalkTalk · Private workspace</span>
+        <Brand />
         <h1>
           {signIn
             ? 'Your team starts here.'

@@ -526,7 +526,7 @@ export async function DELETE(request: Request) {
       if (!clip) throw new WorkspaceAccessError('Clip record not found.', 404);
       await requireFilmClipVersion(
         { ...clip },
-        request.headers.get('x-chalktalk-clip-version'),
+        request.headers.get('x-alltwelve-clip-version'),
       );
       const removed = await database
         .prepare(
@@ -551,7 +551,7 @@ export async function DELETE(request: Request) {
       const owned = await markFilmForDeletion(
         database,
         assetId,
-        request.headers.get('x-chalktalk-film-version'),
+        request.headers.get('x-alltwelve-film-version'),
       );
       const storedKey =
         typeof owned.storage_key === 'string' ? owned.storage_key : null;

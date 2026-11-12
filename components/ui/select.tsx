@@ -188,7 +188,47 @@ function SelectScrollDownButton({
   );
 }
 
+function WorkspaceSelect({
+  label,
+  options,
+  value,
+  onChange,
+  disabled,
+  id,
+}: {
+  label: string;
+  options: readonly { value: string; label: string }[];
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  id?: string;
+}) {
+  return (
+    <Select
+      disabled={disabled}
+      value={value}
+      onValueChange={(next) => {
+        if (next !== null) onChange(next);
+      }}
+    >
+      <SelectTrigger aria-label={label} id={id}>
+        <SelectValue>
+          {options.find((option) => option.value === value)?.label ?? label}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent align="start" alignItemWithTrigger={false}>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export {
+  WorkspaceSelect,
   Select,
   SelectContent,
   SelectGroup,
